@@ -1,5 +1,9 @@
 # Telegram-AI-Bot-Pro
 
+[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template?template=https://github.com/huahua6688/Telegram-AI-Bot-Pro)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/huahua6688/Telegram-AI-Bot-Pro)
+[![Deploy on Zeabur](https://zeabur.com/button.svg)](https://zeabur.com/new?template=https://github.com/huahua6688/Telegram-AI-Bot-Pro)
+
 一个尽量全能的 Telegram AI Bot 项目，基于 **Node.js + Telegraf**，支持：
 
 - 多轮 AI 对话
@@ -160,6 +164,77 @@ data/bot-data.json
 ```bash
 docker compose up -d --build
 ```
+
+## 一键部署到免费平台
+
+点击上方徽章可一键部署，或按照下方各平台指引手动操作。
+
+### Railway（推荐 ⭐）
+
+Railway 支持 Docker 构建，免费层每月约 500 小时，支持持久化卷（付费层）。
+
+1. 点击 **Deploy on Railway** 徽章或登录 [railway.app](https://railway.app)。
+2. 选择 **Deploy from GitHub repo**，选择本仓库。
+3. 在 **Variables** 中填写以下必填项：
+   - `BOT_TOKEN` — Telegram Bot Token
+   - `AI_API_KEY` — AI API Key
+4. Railway 自动读取根目录 `railway.json` 和 `Dockerfile` 完成构建。
+5. 如需持久化数据，在 **Volumes** 中挂载 `/app/data`，并设置 `DATA_FILE=/app/data/bot-data.json`。
+
+### Render
+
+Render 提供免费 Background Worker（免费层重启后磁盘数据会丢失，持久化需付费 Disk）。
+
+1. 点击 **Deploy to Render** 徽章，授权后 Render 自动读取 `render.yaml`。
+2. 在环境变量面板中填写 `BOT_TOKEN` 和 `AI_API_KEY`。
+3. 如需持久化，升级服务并在 `render.yaml` 中的 `disk` 段已预配置挂载点 `/var/data`。
+
+### Fly.io
+
+Fly.io 免费层包含 3GB 持久化卷，最适合长期运行。
+
+```bash
+# 安装 flyctl
+curl -L https://fly.io/install.sh | sh
+
+# 登录
+fly auth login
+
+# 创建应用（会使用 fly.toml 配置）
+fly launch --no-deploy
+
+# 创建持久化卷
+fly volumes create bot_data --size 1 --region sin
+
+# 设置密钥（不要写在 fly.toml 中）
+fly secrets set BOT_TOKEN=你的Token AI_API_KEY=你的Key
+
+# 部署
+fly deploy
+```
+
+### Zeabur
+
+Zeabur 对中国区友好，自动识别 `Dockerfile` 和 `zbpack.json`。
+
+1. 点击 **Deploy on Zeabur** 徽章，或登录 [zeabur.com](https://zeabur.com)。
+2. 选择 **Deploy from GitHub**，选择本仓库。
+3. 在服务的 **Variables** 面板中填写 `BOT_TOKEN` 和 `AI_API_KEY`。
+4. 如需持久化，在服务中挂载 `/app/data` 卷，并设置 `DATA_FILE=/app/data/bot-data.json`。
+
+### 自动同步部署（GitHub Actions）
+
+仓库已内置 `.github/workflows/deploy.yml`，每次推送 `main` 分支时自动触发各平台 Deploy Hook。
+
+在 GitHub 仓库的 **Settings → Secrets and variables → Actions** 中添加：
+
+| Secret 名称 | 来源 |
+| --- | --- |
+| `RAILWAY_DEPLOY_HOOK` | Railway → Service → Settings → Deploy Hook |
+| `RENDER_DEPLOY_HOOK` | Render → Service → Settings → Deploy Hook |
+| `ZEABUR_DEPLOY_HOOK` | Zeabur → Service → Settings → Deploy Hook |
+
+不需要的平台留空即可，脚本会自动跳过。
 
 ## 测试
 

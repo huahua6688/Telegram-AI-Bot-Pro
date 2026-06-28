@@ -1,0 +1,43 @@
+name: Trigger Deploy Hooks
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    name: Notify platforms
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Railway deploy
+        env:
+          HOOK: ${{ secrets.RAILWAY_DEPLOY_HOOK }}
+        run: |
+          if [ -n "$HOOK" ]; then
+            echo "Triggering Railway deploy..."
+            curl -fsSL -X POST "$HOOK"
+          else
+            echo "RAILWAY_DEPLOY_HOOK not set, skipping."
+          fi
+
+      - name: Trigger Render deploy
+        env:
+          HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          if [ -n "$HOOK" ]; then
+            echo "Triggering Render deploy..."
+            curl -fsSL -X POST "$HOOK"
+          else
+            echo "RENDER_DEPLOY_HOOK not set, skipping."
+          fi
+
+      - name: Trigger Zeabur deploy
+        env:
+          HOOK: ${{ secrets.ZEABUR_DEPLOY_HOOK }}
+        run: |
+          if [ -n "$HOOK" ]; then
+            echo "Triggering Zeabur deploy..."
+            curl -fsSL -X POST "$HOOK"
+          else
+            echo "ZEABUR_DEPLOY_HOOK not set, skipping."
+          fi

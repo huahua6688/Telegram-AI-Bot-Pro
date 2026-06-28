@@ -1,0 +1,4 @@
+{
+  "build_command": "npm ci --omit=dev",
+  "start_command": "npm start"
+}

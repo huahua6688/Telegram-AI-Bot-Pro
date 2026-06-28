@@ -1,0 +1,74 @@
+services:
+  - type: worker
+    name: telegram-ai-bot-pro
+    runtime: docker
+    dockerfilePath: Dockerfile
+    dockerContext: .
+    plan: starter
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: AI_API_KEY
+        sync: false
+      - key: AI_BASE_URL
+        value: https://api.openai.com/v1
+      - key: AI_MODEL
+        value: gpt-4.1-mini
+      - key: AI_FALLBACK_MODELS
+        value: gpt-4.1-mini,gpt-4o-mini
+      - key: AI_SYSTEM_PROMPT
+        value: You are a powerful Telegram AI assistant. Answer helpfully and concisely.
+      - key: AI_TEMPERATURE
+        value: "0.6"
+      - key: AI_MAX_TOOL_STEPS
+        value: "3"
+      - key: TRANSCRIPTION_MODEL
+        value: gpt-4o-mini-transcribe
+      - key: TTS_MODEL
+        value: gpt-4o-mini-tts
+      - key: TTS_VOICE
+        value: alloy
+      - key: IMAGE_MODEL
+        value: gpt-image-1
+      - key: IMAGE_SIZE
+        value: 1024x1024
+      - key: ENABLE_TOOL_CALLS
+        value: "true"
+      - key: ENABLE_WEB_SEARCH
+        value: "true"
+      - key: ENABLE_URL_FETCH
+        value: "true"
+      - key: MAX_HISTORY_MESSAGES
+        value: "16"
+      - key: MAX_INPUT_CHARS
+        value: "12000"
+      - key: MAX_OUTPUT_CHARS
+        value: "3500"
+      - key: REQUEST_TIMEOUT_MS
+        value: "120000"
+      - key: RATE_LIMIT_WINDOW_MS
+        value: "60000"
+      - key: RATE_LIMIT_MAX_REQUESTS
+        value: "12"
+      - key: DAILY_QUOTA
+        value: "200"
+      - key: HEALTH_PORT
+        value: "3000"
+      - key: DATA_FILE
+        value: /var/data/bot-data.json
+      - key: ADMIN_USER_IDS
+        sync: false
+      - key: ALLOWED_USER_IDS
+        sync: false
+      - key: ALLOWED_CHAT_IDS
+        sync: false
+      - key: BLOCKED_USER_IDS
+        sync: false
+      - key: GROUP_TRIGGER_MODE
+        value: smart
+      - key: GROUP_TRIGGER_KEYWORD
+        value: ai
+    disk:
+      name: bot-data
+      mountPath: /var/data
+      sizeGB: 1
