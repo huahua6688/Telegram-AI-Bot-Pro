@@ -53,17 +53,17 @@ function toGeminiParts(content) {
 }
 
 function stripUnsupportedSchemaFields(schema) {
-  if (!schema || typeof schema !== 'object') return schema;
+  if (!schema || typeof schema !== 'object' || Array.isArray(schema)) return schema;
   const { additionalProperties: _ignored, ...rest } = schema;
-  if (rest.properties) {
-    rest.properties = Object.fromEntries(
-      Object.entries(rest.properties).map(([k, v]) => [k, stripUnsupportedSchemaFields(v)])
-    );
-  }
-  if (rest.items) {
-    rest.items = stripUnsupportedSchemaFields(rest.items);
-  }
-  return rest;
+  return {
+    ...rest,
+    ...(rest.properties && {
+      properties: Object.fromEntries(
+        Object.entries(rest.properties).map(([k, v]) => [k, stripUnsupportedSchemaFields(v)])
+      )
+    }),
+    ...(rest.items && { items: stripUnsupportedSchemaFields(rest.items) })
+  };
 }
 
 function mapToolDefinitions(definitions = []) {
