@@ -77,6 +77,8 @@ AI_BASE_URL=https://api.openai.com/v1
 AI_MODEL=gpt-4.1-mini
 ```
 
+如果你不用 OpenAI 官方，也可以直接改成其它 **OpenAI 兼容**服务（见下方“AI 提供商兼容配置示例”）。
+
 ### 3. 启动项目
 
 ```bash
@@ -144,6 +146,38 @@ npm run dev
 | `DAILY_QUOTA` | 每用户每日配额 |
 | `GROUP_TRIGGER_MODE` | 默认群聊触发模式 |
 | `GROUP_TRIGGER_KEYWORD` | 默认群聊触发关键词 |
+
+## AI 提供商兼容配置示例（重点）
+
+本项目目前使用 **OpenAI 兼容 API**（如 `/chat/completions`）。  
+这意味着：只要服务兼容该协议，就可直接接入。
+
+### 1) OpenAI 官方
+
+```env
+AI_BASE_URL=https://api.openai.com/v1
+AI_API_KEY=sk-...
+AI_MODEL=gpt-4.1-mini
+```
+
+### 2) OpenRouter（可用 Gemini / Claude / DeepSeek 等）
+
+```env
+AI_BASE_URL=https://openrouter.ai/api/v1
+AI_API_KEY=sk-or-...
+AI_MODEL=google/gemini-2.0-flash-001
+```
+
+### 3) 其他 OpenAI 兼容网关
+
+```env
+AI_BASE_URL=你的兼容网关地址(带 /v1)
+AI_API_KEY=你的网关Key
+AI_MODEL=该网关支持的模型ID
+```
+
+> 注意：`AI_BASE_URL`、`AI_API_KEY`、`AI_MODEL` 必须是同一个平台的一组配置，不能混用。
+> 另外请使用 `AI_API_KEY` 变量名（不是 `OPENAI_API_KEY`）。
 
 ## 数据持久化
 
@@ -215,12 +249,33 @@ fly deploy
 
 ### Zeabur
 
-Zeabur 对中国区友好，自动识别 `Dockerfile` 和 `zbpack.json`。
+Zeabur 对中国区友好，推荐直接使用 **Deploy from GitHub** 导入仓库。
 
 1. 点击 **Deploy on Zeabur** 徽章，或登录 [zeabur.com](https://zeabur.com)。
-2. 选择 **Deploy from GitHub**，选择本仓库。
-3. 在服务的 **Variables** 面板中填写 `BOT_TOKEN` 和 `AI_API_KEY`。
-4. 如需持久化，在服务中挂载 `/app/data` 卷，并设置 `DATA_FILE=/app/data/bot-data.json`。
+2. 选择 **Deploy from GitHub**，选择本仓库与分支（通常 `main`）。
+3. Build 配置建议：
+   - Build Method: `Dockerfile`
+   - Dockerfile Path: `Dockerfile`
+   - Build Context: `.`
+4. 在服务的 **Variables** 面板中填写：
+   - `BOT_TOKEN`
+   - `AI_API_KEY`
+   - `AI_BASE_URL`
+   - `AI_MODEL`
+5. 如需持久化，在服务中挂载 `/app/data` 卷，并设置 `DATA_FILE=/app/data/bot-data.json`。
+
+如果你使用 **Arbitrary Git service**：
+- 必填 `gitURL`（例如 `https://github.com/huahua6688/Telegram-AI-Bot-Pro.git`）
+- 平台不会自动检测构建方式，需手动填写 Dockerfile 相关字段
+
+### 常见报错速查
+
+- `invalid_api_key (401)`  
+  `AI_API_KEY` 无效，或与 `AI_BASE_URL` 不匹配（比如拿 A 平台 key 去请求 B 平台）。
+- `Dockerfile is required for arbitrary Git sources`  
+  你在 Arbitrary Git 模式下未配置 Dockerfile 路径与上下文。
+- `gitURL is required for arbitrary git service`  
+  你选择了 Arbitrary Git 但没填 `gitURL`。
 
 ### 自动同步部署（GitHub Actions）
 
