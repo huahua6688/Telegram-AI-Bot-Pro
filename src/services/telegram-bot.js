@@ -317,17 +317,16 @@ export class TelegramAIBot {
     const content = text.trim();
     if (!content) return null;
 
-    const lower = content.toLowerCase();
-    const labels = Object.values(this.getMenuLabels(locale));
+    const menuLabels = this.getMenuLabels(locale);
     const buttonMap = new Map([
-      [this.getMenuLabels(locale).help, { type: 'help' }],
-      [this.getMenuLabels(locale).reset, { type: 'reset' }],
-      [this.getMenuLabels(locale).models, { type: 'models' }],
-      [this.getMenuLabels(locale).persona, { type: 'persona' }],
-      [this.getMenuLabels(locale).web, { type: 'web_prompt' }],
-      [this.getMenuLabels(locale).image, { type: 'image_prompt' }],
-      [this.getMenuLabels(locale).tts, { type: 'tts_prompt' }],
-      [this.getMenuLabels(locale).language, { type: 'language' }]
+      [menuLabels.help, { type: 'help' }],
+      [menuLabels.reset, { type: 'reset' }],
+      [menuLabels.models, { type: 'models' }],
+      [menuLabels.persona, { type: 'persona' }],
+      [menuLabels.web, { type: 'web_prompt' }],
+      [menuLabels.image, { type: 'image_prompt' }],
+      [menuLabels.tts, { type: 'tts_prompt' }],
+      [menuLabels.language, { type: 'language' }]
     ]);
     if (buttonMap.has(content)) {
       return buttonMap.get(content);
@@ -598,11 +597,12 @@ export class TelegramAIBot {
   }
 
   async handleLanguage(ctx) {
-    const arg = this.normalizeLanguageInput(extractCommandArgs(ctx.message.text || ''));
+    const rawArg = extractCommandArgs(ctx.message.text || '');
+    const arg = this.normalizeLanguageInput(rawArg);
     const user = this.db.findUser(ctx.from.id);
     const locale = this.getLocale(ctx, user);
 
-    if (!extractCommandArgs(ctx.message.text || '')) {
+    if (!rawArg) {
       await ctx.reply(
         this.t(locale, 'currentLanguage', { language: LANGUAGE_NAMES[locale] || locale }),
         this.createLanguageKeyboard(locale)

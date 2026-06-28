@@ -5,10 +5,11 @@ function isAssistantToolCallMessage(message) {
 function dropTrailingToolBundle(messages) {
   while (messages.length > 0) {
     const last = messages[messages.length - 1];
-    messages.pop();
     if (isAssistantToolCallMessage(last)) {
+      messages.pop();
       break;
     }
+    messages.pop();
   }
 }
 
