@@ -154,12 +154,16 @@ export class GeminiClient {
       }
 
       if (item.role === 'tool') {
+        const toolName = toolCallNameMap.get(item.tool_call_id);
+        if (!toolName) {
+          continue;
+        }
         contents.push({
           role: 'user',
           parts: [
             {
               functionResponse: {
-                name: toolCallNameMap.get(item.tool_call_id) || 'tool',
+                name: toolName,
                 response: { content: String(item.content || '') }
               }
             }

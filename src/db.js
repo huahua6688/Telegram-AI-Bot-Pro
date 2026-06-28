@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { Low } from 'lowdb';
 import { JSONFile } from 'lowdb/node';
+import { normalizeLanguageCode } from './utils/telegram.js';
 
 const defaultData = {
   meta: {
@@ -69,6 +70,7 @@ export class BotDatabase {
         isBlocked: false,
         isAllowed: false,
         preferredModel: '',
+        preferredLanguage: normalizeLanguageCode(telegramUser.language_code, 'zh'),
         persona: 'default',
         customSystemPrompt: '',
         dailyUsageDate: '',
@@ -84,6 +86,7 @@ export class BotDatabase {
       user.firstName = telegramUser.first_name || user.firstName;
       user.lastName = telegramUser.last_name || user.lastName;
       user.isAdmin = user.isAdmin || isAdmin;
+      user.preferredLanguage ||= normalizeLanguageCode(telegramUser.language_code, 'zh');
       user.lastSeenAt = now();
       user.updatedAt = now();
     }

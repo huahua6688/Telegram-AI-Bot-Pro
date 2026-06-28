@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { splitMessage } from '../src/utils/text.js';
-import { shouldRespondToMessage } from '../src/utils/telegram.js';
+import { normalizeLanguageCode, shouldRespondToMessage } from '../src/utils/telegram.js';
 
 test('splitMessage preserves content in chunks', () => {
   const message = 'hello '.repeat(800);
@@ -42,4 +42,10 @@ test('shouldRespondToMessage supports smart group triggers', () => {
     }),
     false
   );
+});
+
+test('normalizeLanguageCode keeps supported locales and falls back otherwise', () => {
+  assert.equal(normalizeLanguageCode('zh-CN', 'en'), 'zh');
+  assert.equal(normalizeLanguageCode('en-US', 'zh'), 'en');
+  assert.equal(normalizeLanguageCode('fr-FR', 'zh'), 'zh');
 });
