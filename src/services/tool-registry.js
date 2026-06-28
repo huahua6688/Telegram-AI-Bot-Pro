@@ -1,9 +1,11 @@
 import { stripHtml, truncateText } from '../utils/text.js';
 
+const USER_AGENT = 'Telegram-AI-Bot-Pro';
+
 async function fetchUrlText(url) {
   const response = await fetch(url, {
     headers: {
-      'User-Agent': 'Telegram-AI-Bot-Pro/1.0'
+      'User-Agent': USER_AGENT
     }
   });
   if (!response.ok) {
@@ -29,7 +31,7 @@ async function searchWeb(query) {
 
   const response = await fetch(url, {
     headers: {
-      'User-Agent': 'Telegram-AI-Bot-Pro/1.0'
+      'User-Agent': USER_AGENT
     }
   });
   if (!response.ok) {
