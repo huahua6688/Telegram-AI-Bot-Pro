@@ -250,13 +250,17 @@ function createStreamingFrames(text, minLength) {
   }
 
   const frames = [];
-  const targetSteps = Math.min(8, Math.max(3, Math.ceil(text.length / 500)));
+  const targetSteps = Math.min(5, Math.max(3, Math.ceil(text.length / 700)));
   const stepSize = Math.max(60, Math.ceil(text.length / targetSteps));
 
   for (let cursor = stepSize; cursor < text.length; cursor += stepSize) {
     let frameEnd = text.lastIndexOf('\n', cursor);
     if (frameEnd < cursor - Math.floor(stepSize / 2)) {
       frameEnd = text.lastIndexOf(' ', cursor);
+    }
+
+    function delay(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
     }
     if (frameEnd <= 0) {
       frameEnd = cursor;
@@ -1109,11 +1113,46 @@ export class TelegramAIBot {
         ...extra,
         reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined
       });
+
+      let streamFailed = false;
+      let lastFrame = '';
       for (const frame of frames) {
-        await ctx.telegram.editMessageText(ctx.chat.id, sent.message_id, undefined, frame, extra);
-        if (frame !== frames[frames.length - 1]) {
-          await new Promise((resolve) => setTimeout(resolve, this.config.streamingEditIntervalMs));
+        if (frame === lastFrame) continue;
+
+        const updated = await this.tryEditStreamingMessage(ctx, sent.message_id, frame, extra);
+        if (!updated) {
+          streamFailed = true;
+          break;
         }
+
+        lastFrame = frame;
+        if (frame !== frames[frames.length - 1]) {
+          await delay(this.config.streamingEditIntervalMs);
+        }
+      }
+
+      if (streamFailed && lastFrame !== chunk) {
+        await ctx.reply(chunk, {
+          ...extra,
+          reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined
+        });
+      }
+    }
+  }
+
+  async tryEditStreamingMessage(ctx, messageId, text, extra = {}) {
+    try {
+      await ctx.telegram.editMessageText(ctx.chat.id, messageId, undefined, text, extra);
+      return true;
+    } catch (error) {
+      this.logger.warn('Streaming edit failed, retrying once', { chatId: ctx.chat?.id, error: error.message });
+      await delay(this.config.streamingEditIntervalMs * 2);
+      try {
+        await ctx.telegram.editMessageText(ctx.chat.id, messageId, undefined, text, extra);
+        return true;
+      } catch (retryError) {
+        this.logger.warn('Streaming edit fallback failed', { chatId: ctx.chat?.id, error: retryError.message });
+        return false;
       }
     }
   }
