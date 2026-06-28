@@ -12,6 +12,7 @@ export class OpenAIStyleNativeClient extends OpenAICompatibleClient {
     this.capabilities = options.capabilities || {
       chat: true,
       toolCalls: true,
+      vision: true,
       imageGeneration: false,
       speechSynthesis: false,
       speechTranscription: false

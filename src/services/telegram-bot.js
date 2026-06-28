@@ -88,6 +88,8 @@ const UI_TEXT = {
     noReply: '抱歉，这次没有拿到有效回复。',
     noTranscriptionSupport:
       '用户发送了语音消息，但当前模型提供商不支持语音转文字。请提醒用户改发文字，或切换支持语音转写的平台。',
+    noVisionSupport:
+      '用户发送了图片，但当前模型提供商不支持图片理解。请提醒用户改发文字描述，或切换到支持图片理解的平台。',
     unsupportedDocument:
       '用户上传了一个名为 {filename}、类型为 {mimeType} 的文件。请说明当前仅支持直接总结文本类文件。',
     continuePrompt: '请继续。',
@@ -168,6 +170,8 @@ const UI_TEXT = {
     noReply: 'Sorry, no valid reply was returned this time.',
     noTranscriptionSupport:
       'The user sent a voice message, but the current provider does not support speech-to-text. Tell the user to send text instead or switch providers.',
+    noVisionSupport:
+      'The user sent a photo, but the current provider does not support image understanding. Tell the user to describe the image in text instead or switch providers.',
     unsupportedDocument:
       'The user uploaded a file named {filename} with type {mimeType}. Explain that only text-like files are summarized directly right now.',
     continuePrompt: 'Please continue.',
@@ -413,6 +417,7 @@ export class TelegramAIBot {
       this.aiClient.getCapabilities?.() || {
         chat: true,
         toolCalls: true,
+        vision: true,
         imageGeneration: true,
         speechSynthesis: true,
         speechTranscription: true
@@ -997,6 +1002,20 @@ export class TelegramAIBot {
     }
 
     if (ctx.message.photo?.length) {
+      if (!this.getProviderCapabilities().vision) {
+        return {
+          message: {
+            role: 'user',
+            content: [
+              decoratedText,
+              this.t(locale, 'noVisionSupport')
+            ]
+              .filter(Boolean)
+              .join('\n\n')
+          }
+        };
+      }
+
       const photo = ctx.message.photo[ctx.message.photo.length - 1];
       const file = await readTelegramFile(ctx, photo.file_id, 'image.jpg', 'image/jpeg');
       return {

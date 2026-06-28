@@ -10,6 +10,7 @@ export class GrokClient extends OpenAIStyleNativeClient {
       capabilities: {
         chat: true,
         toolCalls: true,
+        vision: true,
         imageGeneration: false,
         speechSynthesis: false,
         speechTranscription: false
