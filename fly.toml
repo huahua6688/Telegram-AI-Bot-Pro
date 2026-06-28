@@ -1,0 +1,56 @@
+# fly.toml - Fly.io deployment configuration
+# Run `fly launch --no-deploy` to create your app, then `fly deploy` to deploy.
+# For a new volume:  fly volumes create bot_data --size 1 --region sin
+
+app = "telegram-ai-bot-pro"
+primary_region = "sin"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  HEALTH_PORT = "3000"
+  DATA_FILE = "/data/bot-data.json"
+  AI_BASE_URL = "https://api.openai.com/v1"
+  AI_MODEL = "gpt-4.1-mini"
+  AI_FALLBACK_MODELS = "gpt-4.1-mini,gpt-4o-mini"
+  AI_TEMPERATURE = "0.6"
+  AI_MAX_TOOL_STEPS = "3"
+  TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe"
+  TTS_MODEL = "gpt-4o-mini-tts"
+  TTS_VOICE = "alloy"
+  IMAGE_MODEL = "gpt-image-1"
+  IMAGE_SIZE = "1024x1024"
+  ENABLE_TOOL_CALLS = "true"
+  ENABLE_WEB_SEARCH = "true"
+  ENABLE_URL_FETCH = "true"
+  MAX_HISTORY_MESSAGES = "16"
+  MAX_INPUT_CHARS = "12000"
+  MAX_OUTPUT_CHARS = "3500"
+  REQUEST_TIMEOUT_MS = "120000"
+  RATE_LIMIT_WINDOW_MS = "60000"
+  RATE_LIMIT_MAX_REQUESTS = "12"
+  DAILY_QUOTA = "200"
+  GROUP_TRIGGER_MODE = "smart"
+  GROUP_TRIGGER_KEYWORD = "ai"
+
+# Secrets (set with `fly secrets set`):
+#   BOT_TOKEN=<your telegram bot token>
+#   AI_API_KEY=<your ai api key>
+#   ADMIN_USER_IDS=<comma-separated admin user IDs>
+
+[[mounts]]
+  source = "bot_data"
+  destination = "/data"
+
+[http_service]
+  internal_port = 3000
+  force_https = false
+  auto_stop_machines = "stop"
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  memory = "256mb"
+  cpu_kind = "shared"
+  cpus = 1
