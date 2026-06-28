@@ -244,6 +244,10 @@ function chunkItems(items, size) {
   return rows;
 }
 
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function createStreamingFrames(text, minLength) {
   if (!text || text.length < minLength) {
     return [text];
@@ -257,10 +261,6 @@ function createStreamingFrames(text, minLength) {
     let frameEnd = text.lastIndexOf('\n', cursor);
     if (frameEnd < cursor - Math.floor(stepSize / 2)) {
       frameEnd = text.lastIndexOf(' ', cursor);
-    }
-
-    function delay(ms) {
-      return new Promise((resolve) => setTimeout(resolve, ms));
     }
     if (frameEnd <= 0) {
       frameEnd = cursor;
