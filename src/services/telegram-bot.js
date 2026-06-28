@@ -76,6 +76,7 @@ const UI_TEXT = {
     keywordSet: '群聊触发关键词已设置为：{keyword}',
     adminOnly: '只有管理员可以执行此命令。',
     blockUsage: '用法：/{command} 用户ID',
+    allowUsage: '用法：/{command} 用户ID',
     blockDone: '已封禁用户：{userId}',
     unblockDone: '已解除封禁：{userId}',
     allowDone: '已放行用户：{userId}',
@@ -154,6 +155,7 @@ const UI_TEXT = {
     keywordSet: 'Group trigger keyword set to: {keyword}',
     adminOnly: 'Only admins can use this command.',
     blockUsage: 'Usage: /{command} userId',
+    allowUsage: 'Usage: /{command} userId',
     blockDone: 'Blocked user: {userId}',
     unblockDone: 'Unblocked user: {userId}',
     allowDone: 'Allowed user: {userId}',
@@ -353,15 +355,15 @@ export class TelegramAIBot {
       }
     }
 
-    if (labels.includes(content) || lower === 'web' || lower === 'image' || lower === 'tts') {
-      return null;
-    }
-
     return null;
   }
 
   normalizeLanguageInput(value = '') {
     const normalized = String(value).trim().toLowerCase();
+    const baseLanguage = normalizeLanguageCode(normalized, '');
+    if (baseLanguage) {
+      return baseLanguage;
+    }
     if (['zh', 'zh-cn', 'zh-hans', 'chinese', '中文', '简体中文', '簡體中文'].includes(normalized)) {
       return 'zh';
     }
@@ -791,7 +793,7 @@ export class TelegramAIBot {
 
     const userId = extractCommandArgs(ctx.message.text || '');
     if (!userId) {
-      await ctx.reply(this.t(locale, 'blockUsage', { command: allowed ? 'allow' : 'disallow' }));
+      await ctx.reply(this.t(locale, 'allowUsage', { command: allowed ? 'allow' : 'disallow' }));
       return;
     }
 
