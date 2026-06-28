@@ -1,0 +1,26 @@
+{
+  "name": "telegram-ai-bot-pro",
+  "version": "1.0.0",
+  "description": "A versatile Telegram AI bot with multi-model chat, memory, admin controls, tools, and multimodal helpers.",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node --test"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "ai",
+    "openai",
+    "telegraf"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "17.4.2",
+    "lowdb": "7.0.1",
+    "telegraf": "4.16.3"
+  }
+}
