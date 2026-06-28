@@ -53,7 +53,8 @@ export function loadConfig() {
     doubao: 'doubao-seed-1-6-250615'
   };
   const defaultModel = process.env.AI_MODEL || fallbackModels[0] || providerDefaultModels[aiProvider];
-  const dataFile = path.resolve(process.cwd(), process.env.DATA_FILE || './data/bot-data.json');
+  const databaseFile = path.resolve(process.cwd(), process.env.DATABASE_FILE || './data/bot-data.db');
+  const legacyDataFile = path.resolve(process.cwd(), process.env.DATA_FILE || './data/bot-data.json');
 
   return {
     botToken: process.env.BOT_TOKEN || '',
@@ -100,7 +101,8 @@ export function loadConfig() {
     rateLimitMaxRequests: parseInteger(process.env.RATE_LIMIT_MAX_REQUESTS, 12),
     dailyQuota: parseInteger(process.env.DAILY_QUOTA, 200),
     healthPort: parseInteger(process.env.HEALTH_PORT, 3000),
-    dataFile,
+    databaseFile,
+    legacyDataFile,
     adminUserIds: new Set(parseList(process.env.ADMIN_USER_IDS).map(String)),
     allowedUserIds: new Set(parseList(process.env.ALLOWED_USER_IDS).map(String)),
     allowedChatIds: new Set(parseList(process.env.ALLOWED_CHAT_IDS).map(String)),
@@ -108,6 +110,9 @@ export function loadConfig() {
     groupTriggerMode: (process.env.GROUP_TRIGGER_MODE || 'smart').toLowerCase(),
     groupTriggerKeyword: process.env.GROUP_TRIGGER_KEYWORD || 'ai',
     aiMaxToolSteps: parseInteger(process.env.AI_MAX_TOOL_STEPS, 3),
+    enableStreamingReplies: parseBoolean(process.env.ENABLE_STREAMING_REPLIES, true),
+    streamingEditIntervalMs: parseInteger(process.env.STREAMING_EDIT_INTERVAL_MS, 350),
+    streamingMinLength: parseInteger(process.env.STREAMING_MIN_LENGTH, 160),
     personaPresets
   };
 }

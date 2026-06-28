@@ -67,3 +67,14 @@ test('loadConfig supports provider-specific key fallback to AI_API_KEY', () => {
   assert.equal(config.aiProvider, 'deepseek');
   assert.equal(config.deepseekApiKey, 'shared-key');
 });
+
+test('loadConfig defaults to SQLite storage and streaming replies', () => {
+  resetEnv();
+  delete process.env.DATABASE_FILE;
+  delete process.env.DATA_FILE;
+  delete process.env.ENABLE_STREAMING_REPLIES;
+  const config = loadConfig();
+  assert.match(config.databaseFile, /bot-data\.db$/);
+  assert.match(config.legacyDataFile, /bot-data\.json$/);
+  assert.equal(config.enableStreamingReplies, true);
+});

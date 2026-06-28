@@ -43,6 +43,7 @@ export function ensureBuiltInAIProvidersRegistered() {
     capabilities: {
       chat: true,
       toolCalls: true,
+      vision: true,
       imageGeneration: true,
       speechSynthesis: true,
       speechTranscription: true
@@ -56,6 +57,7 @@ export function ensureBuiltInAIProvidersRegistered() {
     capabilities: {
       chat: true,
       toolCalls: true,
+      vision: true,
       imageGeneration: false,
       speechSynthesis: false,
       speechTranscription: false
@@ -69,6 +71,7 @@ export function ensureBuiltInAIProvidersRegistered() {
     capabilities: {
       chat: true,
       toolCalls: true,
+      vision: true,
       imageGeneration: false,
       speechSynthesis: false,
       speechTranscription: false
@@ -82,6 +85,7 @@ export function ensureBuiltInAIProvidersRegistered() {
     capabilities: {
       chat: true,
       toolCalls: true,
+      vision: true,
       imageGeneration: false,
       speechSynthesis: false,
       speechTranscription: false
@@ -95,6 +99,7 @@ export function ensureBuiltInAIProvidersRegistered() {
     capabilities: {
       chat: true,
       toolCalls: true,
+      vision: true,
       imageGeneration: false,
       speechSynthesis: false,
       speechTranscription: false
@@ -108,6 +113,7 @@ export function ensureBuiltInAIProvidersRegistered() {
     capabilities: {
       chat: true,
       toolCalls: true,
+      vision: true,
       imageGeneration: false,
       speechSynthesis: false,
       speechTranscription: false
@@ -121,6 +127,7 @@ export function ensureBuiltInAIProvidersRegistered() {
     capabilities: {
       chat: true,
       toolCalls: true,
+      vision: true,
       imageGeneration: false,
       speechSynthesis: false,
       speechTranscription: false
@@ -134,6 +141,7 @@ export function ensureBuiltInAIProvidersRegistered() {
     capabilities: {
       chat: true,
       toolCalls: true,
+      vision: true,
       imageGeneration: false,
       speechSynthesis: false,
       speechTranscription: false

@@ -2,6 +2,13 @@ export function normalizeCommand(text = '') {
   return text.trim().split(/\s+/)[0].split('@')[0].toLowerCase();
 }
 
+export function normalizeLanguageCode(value = '', fallback = 'zh') {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized.startsWith('zh')) return 'zh';
+  if (normalized.startsWith('en')) return 'en';
+  return fallback;
+}
+
 export function extractCommandArgs(text = '') {
   const parts = text.trim().split(/\s+/);
   parts.shift();

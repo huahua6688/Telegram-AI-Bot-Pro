@@ -31,6 +31,7 @@ test('createAIClient creates first-batch native provider clients via registry', 
   const capabilities = client.getCapabilities();
   assert.equal(capabilities.chat, true);
   assert.equal(capabilities.toolCalls, true);
+  assert.equal(capabilities.vision, true);
   assert.equal(capabilities.imageGeneration, false);
 });
 
