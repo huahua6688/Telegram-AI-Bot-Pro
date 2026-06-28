@@ -1,3 +1,28 @@
+function removeTagBlock(input, tagName) {
+  let output = input;
+  let lower = output.toLowerCase();
+  const startToken = `<${tagName}`;
+  const endToken = `</${tagName}`;
+
+  while (true) {
+    const startIndex = lower.indexOf(startToken);
+    if (startIndex === -1) break;
+
+    const endStartIndex = lower.indexOf(endToken, startIndex);
+    if (endStartIndex === -1) {
+      output = `${output.slice(0, startIndex)} ${output.slice(startIndex + startToken.length)}`;
+      lower = output.toLowerCase();
+      continue;
+    }
+
+    const endIndex = output.indexOf('>', endStartIndex);
+    output = `${output.slice(0, startIndex)} ${output.slice(endIndex === -1 ? output.length : endIndex + 1)}`;
+    lower = output.toLowerCase();
+  }
+
+  return output;
+}
+
 export function splitMessage(text, maxLength = 3500) {
   if (!text) return [];
   if (text.length <= maxLength) return [text];
@@ -26,9 +51,7 @@ export function splitMessage(text, maxLength = 3500) {
 }
 
 export function stripHtml(html) {
-  return html
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script\s*>/gi, ' ')
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style\s*>/gi, ' ')
+  return removeTagBlock(removeTagBlock(html, 'script'), 'style')
     .replace(/<[^>]+>/g, ' ')
     .replace(/&(nbsp|#160);/gi, ' ')
     .replace(/\s+/g, ' ')
