@@ -1,7 +1,7 @@
 import { loadConfig } from './config.js';
 import { logger } from './logger.js';
 import { BotDatabase } from './db.js';
-import { OpenAICompatibleClient } from './services/openai-compatible-client.js';
+import { createAIClient } from './services/ai-client-factory.js';
 import { ToolRegistry } from './services/tool-registry.js';
 import { TelegramAIBot } from './services/telegram-bot.js';
 import { startHealthServer } from './services/health-server.js';
@@ -12,14 +12,11 @@ async function main() {
   if (!config.botToken) {
     throw new Error('Missing BOT_TOKEN in environment.');
   }
-  if (!config.aiApiKey) {
-    throw new Error('Missing AI_API_KEY in environment.');
-  }
 
   const db = new BotDatabase(config.dataFile);
   await db.init();
 
-  const aiClient = new OpenAICompatibleClient(config, logger);
+  const aiClient = createAIClient(config, logger);
   const toolRegistry = new ToolRegistry(config, logger);
   const bot = new TelegramAIBot({ config, db, aiClient, toolRegistry, logger });
   await bot.init();
