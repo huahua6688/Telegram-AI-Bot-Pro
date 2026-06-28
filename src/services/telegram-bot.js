@@ -106,7 +106,8 @@ const UI_TEXT = {
     buttonWeb: '🌐 联网搜索',
     buttonImage: '🖼️ 生成图片',
     buttonTts: '🔊 语音朗读',
-    buttonLanguage: '🌍 语言'
+    buttonLanguage: '🌍 语言',
+    streamingPlaceholder: '正在生成回复...'
   },
   en: {
     helpTitle: 'Available features:',
@@ -185,7 +186,8 @@ const UI_TEXT = {
     buttonWeb: '🌐 Web Search',
     buttonImage: '🖼️ Image',
     buttonTts: '🔊 TTS',
-    buttonLanguage: '🌍 Language'
+    buttonLanguage: '🌍 Language',
+    streamingPlaceholder: 'Composing reply...'
   }
 };
 
@@ -1103,7 +1105,7 @@ export class TelegramAIBot {
         continue;
       }
 
-      const sent = await ctx.reply('…', {
+      const sent = await ctx.reply(this.t(this.getLocale(ctx), 'streamingPlaceholder'), {
         ...extra,
         reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined
       });
