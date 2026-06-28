@@ -1,24 +1,30 @@
-import { OpenAICompatibleClient } from './openai-compatible-client.js';
-import { AnthropicClient } from './anthropic-client.js';
-import { GeminiClient } from './gemini-client.js';
-
-function requireConfigValue(value, name) {
-  if (!value) {
-    throw new Error(`Missing ${name} in environment.`);
-  }
-}
+import {
+  ensureBuiltInAIProvidersRegistered,
+  getAIProviderDefinition,
+  listAIProviderDefinitions
+} from './ai-provider-registry.js';
 
 export function createAIClient(config, logger) {
-  if (config.aiProvider === 'anthropic') {
-    requireConfigValue(config.anthropicApiKey, 'ANTHROPIC_API_KEY (or AI_API_KEY)');
-    return new AnthropicClient(config, logger);
+  ensureBuiltInAIProvidersRegistered();
+  const definition = getAIProviderDefinition(config.aiProvider);
+  if (!definition) {
+    const supportedProviders = listAIProviderDefinitions()
+      .map((item) => item.id)
+      .sort()
+      .join(', ');
+    throw new Error(`Unsupported AI_PROVIDER: ${config.aiProvider}. Supported: ${supportedProviders}`);
   }
 
-  if (config.aiProvider === 'gemini') {
-    requireConfigValue(config.geminiApiKey, 'GEMINI_API_KEY (or AI_API_KEY)');
-    return new GeminiClient(config, logger);
+  if (definition.validateConfig) {
+    definition.validateConfig(config);
   }
 
-  requireConfigValue(config.aiApiKey, 'AI_API_KEY');
-  return new OpenAICompatibleClient(config, logger);
+  const client = definition.createClient(config, logger);
+  if (typeof client.getProviderName !== 'function') {
+    client.getProviderName = () => definition.id;
+  }
+  if (typeof client.getCapabilities !== 'function') {
+    client.getCapabilities = () => definition.capabilities || {};
+  }
+  return client;
 }

@@ -39,3 +39,31 @@ test('loadConfig resolves gemini provider aliases and keys', () => {
   assert.equal(config.aiProvider, 'gemini');
   assert.equal(config.geminiApiKey, 'gemini-key');
 });
+
+test('loadConfig resolves first-batch native provider aliases', () => {
+  resetEnv();
+  process.env.AI_PROVIDER = 'xai';
+  let config = loadConfig();
+  assert.equal(config.aiProvider, 'grok');
+
+  process.env.AI_PROVIDER = 'tongyi';
+  config = loadConfig();
+  assert.equal(config.aiProvider, 'qwen');
+
+  process.env.AI_PROVIDER = 'chatglm';
+  config = loadConfig();
+  assert.equal(config.aiProvider, 'glm');
+
+  process.env.AI_PROVIDER = 'ark';
+  config = loadConfig();
+  assert.equal(config.aiProvider, 'doubao');
+});
+
+test('loadConfig supports provider-specific key fallback to AI_API_KEY', () => {
+  resetEnv();
+  process.env.AI_PROVIDER = 'deepseek';
+  process.env.AI_API_KEY = 'shared-key';
+  const config = loadConfig();
+  assert.equal(config.aiProvider, 'deepseek');
+  assert.equal(config.deepseekApiKey, 'shared-key');
+});

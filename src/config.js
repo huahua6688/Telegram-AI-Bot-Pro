@@ -14,6 +14,11 @@ function normalizeProvider(value = '') {
   if (provider === 'openai' || provider === 'openai-compatible') return 'openai-compatible';
   if (provider === 'anthropic' || provider === 'claude') return 'anthropic';
   if (provider === 'google' || provider === 'gemini') return 'gemini';
+  if (provider === 'qwen' || provider === 'tongyi' || provider === 'dashscope') return 'qwen';
+  if (provider === 'grok' || provider === 'xai') return 'grok';
+  if (provider === 'deepseek') return 'deepseek';
+  if (provider === 'glm' || provider === 'zhipu' || provider === 'chatglm') return 'glm';
+  if (provider === 'doubao' || provider === 'ark' || provider === 'volcengine') return 'doubao';
   return 'openai-compatible';
 }
 
@@ -40,7 +45,12 @@ export function loadConfig() {
   const providerDefaultModels = {
     'openai-compatible': 'gpt-4.1-mini',
     anthropic: 'claude-3-5-sonnet-latest',
-    gemini: 'gemini-2.0-flash'
+    gemini: 'gemini-2.0-flash',
+    qwen: 'qwen-plus',
+    grok: 'grok-3-mini-beta',
+    deepseek: 'deepseek-chat',
+    glm: 'glm-4-flash',
+    doubao: 'doubao-seed-1-6-250615'
   };
   const defaultModel = process.env.AI_MODEL || fallbackModels[0] || providerDefaultModels[aiProvider];
   const dataFile = path.resolve(process.cwd(), process.env.DATA_FILE || './data/bot-data.json');
@@ -55,6 +65,21 @@ export function loadConfig() {
     anthropicApiVersion: process.env.ANTHROPIC_API_VERSION || '2023-06-01',
     geminiApiKey: process.env.GEMINI_API_KEY || process.env.AI_API_KEY || '',
     geminiBaseUrl: (process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, ''),
+    qwenApiKey: process.env.QWEN_API_KEY || process.env.AI_API_KEY || '',
+    qwenBaseUrl: (process.env.QWEN_BASE_URL || 'https://dashscope.aliyuncs.com/compatible-mode/v1').replace(/\/$/, ''),
+    qwenApiVersion: process.env.QWEN_API_VERSION || '',
+    grokApiKey: process.env.GROK_API_KEY || process.env.AI_API_KEY || '',
+    grokBaseUrl: (process.env.GROK_BASE_URL || 'https://api.x.ai/v1').replace(/\/$/, ''),
+    grokApiVersion: process.env.GROK_API_VERSION || '',
+    deepseekApiKey: process.env.DEEPSEEK_API_KEY || process.env.AI_API_KEY || '',
+    deepseekBaseUrl: (process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1').replace(/\/$/, ''),
+    deepseekApiVersion: process.env.DEEPSEEK_API_VERSION || '',
+    glmApiKey: process.env.GLM_API_KEY || process.env.AI_API_KEY || '',
+    glmBaseUrl: (process.env.GLM_BASE_URL || 'https://open.bigmodel.cn/api/paas/v4').replace(/\/$/, ''),
+    glmApiVersion: process.env.GLM_API_VERSION || '',
+    doubaoApiKey: process.env.DOUBAO_API_KEY || process.env.AI_API_KEY || '',
+    doubaoBaseUrl: (process.env.DOUBAO_BASE_URL || 'https://ark.cn-beijing.volces.com/api/v3').replace(/\/$/, ''),
+    doubaoApiVersion: process.env.DOUBAO_API_VERSION || '',
     defaultModel,
     availableModels: Array.from(new Set([defaultModel, ...fallbackModels].filter(Boolean))),
     systemPrompt: process.env.AI_SYSTEM_PROMPT || personaPresets.default,

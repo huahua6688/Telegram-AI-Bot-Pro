@@ -60,6 +60,22 @@ export class TelegramAIBot {
     this.botUsername = '';
   }
 
+  getProviderCapabilities() {
+    return (
+      this.aiClient.getCapabilities?.() || {
+        chat: true,
+        toolCalls: true,
+        imageGeneration: true,
+        speechSynthesis: true,
+        speechTranscription: true
+      }
+    );
+  }
+
+  getProviderName() {
+    return this.aiClient.getProviderName?.() || this.config.aiProvider || 'unknown';
+  }
+
   async init() {
     this.bot.catch((error, ctx) => {
       this.logger.error('Telegram handler error', { chatId: ctx.chat?.id, error });
@@ -258,6 +274,12 @@ export class TelegramAIBot {
       return;
     }
 
+    const capabilities = this.getProviderCapabilities();
+    if (!capabilities.imageGeneration) {
+      await ctx.reply(`当前提供商 ${this.getProviderName()} 不支持图片生成。请切换到支持图片能力的平台。`);
+      return;
+    }
+
     try {
       await ctx.sendChatAction('upload_photo');
       const response = await this.aiClient.generateImage({ prompt });
@@ -282,6 +304,12 @@ export class TelegramAIBot {
     const text = extractCommandArgs(ctx.message.text || '');
     if (!text) {
       await ctx.reply('用法：/tts 你想转换成语音的文本');
+      return;
+    }
+
+    const capabilities = this.getProviderCapabilities();
+    if (!capabilities.speechSynthesis) {
+      await ctx.reply(`当前提供商 ${this.getProviderName()} 不支持文字转语音。请切换到支持语音能力的平台。`);
       return;
     }
 
@@ -436,7 +464,10 @@ export class TelegramAIBot {
       const result = await this.aiClient.completeWithTools({
         model,
         messages,
-        tools: this.config.enableToolCalls ? this.toolRegistry.getDefinitions() : [],
+        tools:
+          this.config.enableToolCalls && this.getProviderCapabilities().toolCalls
+            ? this.toolRegistry.getDefinitions()
+            : [],
         toolRunner: async (toolCall) => {
           const output = await this.toolRegistry.execute(toolCall);
           await this.db.incrementStats('toolCalls');
@@ -481,6 +512,20 @@ export class TelegramAIBot {
     }
 
     if (ctx.message.voice || ctx.message.audio) {
+      if (!this.getProviderCapabilities().speechTranscription) {
+        return {
+          message: {
+            role: 'user',
+            content: [
+              decoratedText,
+              '用户发送了语音消息，但当前模型提供商不支持语音转文字。请提醒用户改发文字，或切换支持语音转写的平台。'
+            ]
+              .filter(Boolean)
+              .join('\n\n')
+          }
+        };
+      }
+
       const voice = ctx.message.voice || ctx.message.audio;
       const file = await readTelegramFile(
         ctx,
