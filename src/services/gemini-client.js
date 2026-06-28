@@ -52,6 +52,20 @@ function toGeminiParts(content) {
   return parts.length > 0 ? parts : [{ text: '' }];
 }
 
+function stripUnsupportedSchemaFields(schema) {
+  if (!schema || typeof schema !== 'object') return schema;
+  const { additionalProperties: _ignored, ...rest } = schema;
+  if (rest.properties) {
+    rest.properties = Object.fromEntries(
+      Object.entries(rest.properties).map(([k, v]) => [k, stripUnsupportedSchemaFields(v)])
+    );
+  }
+  if (rest.items) {
+    rest.items = stripUnsupportedSchemaFields(rest.items);
+  }
+  return rest;
+}
+
 function mapToolDefinitions(definitions = []) {
   if (definitions.length === 0) return undefined;
   return [
@@ -59,7 +73,9 @@ function mapToolDefinitions(definitions = []) {
       functionDeclarations: definitions.map((tool) => ({
         name: tool.function.name,
         description: tool.function.description || '',
-        parameters: tool.function.parameters || { type: 'object', properties: {} }
+        parameters: stripUnsupportedSchemaFields(
+          tool.function.parameters || { type: 'object', properties: {} }
+        )
       }))
     }
   ];
