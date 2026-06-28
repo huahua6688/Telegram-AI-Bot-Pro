@@ -2,6 +2,7 @@ import { loadConfig } from './config.js';
 import { logger } from './logger.js';
 import { BotDatabase } from './db.js';
 import { createAIClient } from './services/ai-client-factory.js';
+import { PluginManager } from './services/plugin-manager.js';
 import { ToolRegistry } from './services/tool-registry.js';
 import { TelegramAIBot } from './services/telegram-bot.js';
 import { startHealthServer } from './services/health-server.js';
@@ -13,12 +14,14 @@ async function main() {
     throw new Error('Missing BOT_TOKEN in environment.');
   }
 
-  const db = new BotDatabase(config.dataFile);
+  const db = new BotDatabase(config.databaseFile, config.legacyDataFile);
   await db.init();
 
   const aiClient = createAIClient(config, logger);
   const toolRegistry = new ToolRegistry(config, logger);
-  const bot = new TelegramAIBot({ config, db, aiClient, toolRegistry, logger });
+  const pluginManager = new PluginManager({ config, logger });
+  await pluginManager.init();
+  const bot = new TelegramAIBot({ config, db, aiClient, toolRegistry, pluginManager, logger });
   await bot.init();
 
   const healthServer = startHealthServer({ port: config.healthPort, db, config, logger });

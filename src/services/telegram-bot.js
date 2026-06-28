@@ -242,12 +242,42 @@ function chunkItems(items, size) {
   return rows;
 }
 
+function createStreamingFrames(text, minLength) {
+  if (!text || text.length < minLength) {
+    return [text];
+  }
+
+  const frames = [];
+  const targetSteps = Math.min(8, Math.max(3, Math.ceil(text.length / 500)));
+  const stepSize = Math.max(60, Math.ceil(text.length / targetSteps));
+
+  for (let cursor = stepSize; cursor < text.length; cursor += stepSize) {
+    let frameEnd = text.lastIndexOf('\n', cursor);
+    if (frameEnd < cursor - Math.floor(stepSize / 2)) {
+      frameEnd = text.lastIndexOf(' ', cursor);
+    }
+    if (frameEnd <= 0) {
+      frameEnd = cursor;
+    }
+    const frame = text.slice(0, frameEnd).trim();
+    if (frame && frame !== frames[frames.length - 1]) {
+      frames.push(frame);
+    }
+  }
+
+  if (text !== frames[frames.length - 1]) {
+    frames.push(text);
+  }
+  return frames;
+}
+
 export class TelegramAIBot {
-  constructor({ config, db, aiClient, toolRegistry, logger }) {
+  constructor({ config, db, aiClient, toolRegistry, pluginManager, logger }) {
     this.config = config;
     this.db = db;
     this.aiClient = aiClient;
     this.toolRegistry = toolRegistry;
+    this.pluginManager = pluginManager;
     this.logger = logger;
     this.rateLimits = new Map();
     this.bot = new Telegraf(config.botToken);
@@ -424,9 +454,7 @@ export class TelegramAIBot {
       { command: 'language', description: 'View or set the bot UI language' },
       { command: 'menu', description: 'Show common action buttons' },
       { command: 'persona', description: 'View or set persona' },
-      { command: 'web', description: 'Search the web' },
-      { command: 'image', description: 'Generate an image' },
-      { command: 'tts', description: 'Convert text to speech' },
+      ...this.pluginManager.getCommands(),
       { command: 'stats', description: 'Show usage statistics' }
     ]);
   }
@@ -440,9 +468,6 @@ export class TelegramAIBot {
     this.bot.command('menu', (ctx) => this.handleMenu(ctx));
     this.bot.command('language', (ctx) => this.handleLanguage(ctx));
     this.bot.command('persona', (ctx) => this.handlePersona(ctx));
-    this.bot.command('web', (ctx) => this.handleWeb(ctx));
-    this.bot.command('image', (ctx) => this.handleImage(ctx));
-    this.bot.command('tts', (ctx) => this.handleTts(ctx));
     this.bot.command('stats', (ctx) => this.handleStats(ctx));
     this.bot.command('chatmode', (ctx) => this.handleChatMode(ctx));
     this.bot.command('keyword', (ctx) => this.handleKeyword(ctx));
@@ -450,6 +475,9 @@ export class TelegramAIBot {
     this.bot.command('unblock', (ctx) => this.handleBlock(ctx, false));
     this.bot.command('allow', (ctx) => this.handleAllow(ctx, true));
     this.bot.command('disallow', (ctx) => this.handleAllow(ctx, false));
+    for (const command of this.pluginManager.getCommands()) {
+      this.bot.command(command.name, (ctx) => this.handlePluginCommand(ctx, command.name));
+    }
     this.bot.action(/^set_model:(.+)$/, (ctx) => this.handleModelCallback(ctx));
     this.bot.action(/^set_persona:(.+)$/, (ctx) => this.handlePersonaCallback(ctx));
     this.bot.action(/^set_language:(.+)$/, (ctx) => this.handleLanguageCallback(ctx));
@@ -622,8 +650,15 @@ export class TelegramAIBot {
     );
   }
 
-  async handleWeb(ctx) {
-    const query = extractCommandArgs(ctx.message.text || '');
+  async handlePluginCommand(ctx, commandName) {
+    await this.pluginManager.runCommand(commandName, {
+      bot: this,
+      ctx,
+      locale: this.getLocale(ctx)
+    });
+  }
+
+  async runWebSearch(ctx, query = extractCommandArgs(ctx.message.text || '')) {
     const locale = this.getLocale(ctx);
     if (!query) {
       await ctx.reply(this.t(locale, 'webUsage'));
@@ -645,8 +680,7 @@ export class TelegramAIBot {
     }
   }
 
-  async handleImage(ctx) {
-    const prompt = extractCommandArgs(ctx.message.text || '');
+  async runImageGeneration(ctx, prompt = extractCommandArgs(ctx.message.text || '')) {
     const locale = this.getLocale(ctx);
     if (!prompt) {
       await ctx.reply(this.t(locale, 'imageUsage'));
@@ -679,8 +713,7 @@ export class TelegramAIBot {
     }
   }
 
-  async handleTts(ctx) {
-    const text = extractCommandArgs(ctx.message.text || '');
+  async runTextToSpeech(ctx, text = extractCommandArgs(ctx.message.text || '')) {
     const locale = this.getLocale(ctx);
     if (!text) {
       await ctx.reply(this.t(locale, 'ttsUsage'));
@@ -859,21 +892,6 @@ export class TelegramAIBot {
       if (naturalAction.type === 'models') return this.handleModels(ctx);
       if (naturalAction.type === 'persona') return this.handlePersona(ctx);
       if (naturalAction.type === 'language') return this.handleLanguage(ctx);
-      if (naturalAction.type === 'web_prompt') return ctx.reply(this.t(locale, 'webUsage'));
-      if (naturalAction.type === 'image_prompt') return ctx.reply(this.t(locale, 'imageUsage'));
-      if (naturalAction.type === 'tts_prompt') return ctx.reply(this.t(locale, 'ttsUsage'));
-      if (naturalAction.type === 'web') {
-        ctx.message.text = `/web ${naturalAction.value}`;
-        return this.handleWeb(ctx);
-      }
-      if (naturalAction.type === 'image') {
-        ctx.message.text = `/image ${naturalAction.value}`;
-        return this.handleImage(ctx);
-      }
-      if (naturalAction.type === 'tts') {
-        ctx.message.text = `/tts ${naturalAction.value}`;
-        return this.handleTts(ctx);
-      }
       if (naturalAction.type === 'model') {
         ctx.message.text = `/model ${naturalAction.value}`;
         return this.handleModel(ctx);
@@ -885,6 +903,9 @@ export class TelegramAIBot {
       if (naturalAction.type === 'language_set') {
         ctx.message.text = `/language ${naturalAction.value}`;
         return this.handleLanguage(ctx);
+      }
+      if (await this.pluginManager.runNaturalAction(naturalAction, { bot: this, ctx, locale })) {
+        return;
       }
     }
 
@@ -953,7 +974,7 @@ export class TelegramAIBot {
         )
       );
 
-      await sendTextReply(ctx, result.text || this.t(locale, 'noReply'), this.config.maxOutputChars);
+      await this.sendAssistantReply(ctx, result.text || this.t(locale, 'noReply'));
     } catch (error) {
       this.logger.error('Failed to handle message', error);
       await ctx.reply(this.t(locale, 'messageFailed', { error: error.message }));
@@ -1066,5 +1087,32 @@ export class TelegramAIBot {
   async stop(reason) {
     this.logger.info(`Stopping Telegram bot: ${reason}`);
     await this.bot.stop(reason);
+  }
+
+  async sendAssistantReply(ctx, text, extra = {}) {
+    const chunks = splitMessage(text, this.config.maxOutputChars);
+    for (const chunk of chunks) {
+      if (!this.config.enableStreamingReplies) {
+        await sendTextReply(ctx, chunk, this.config.maxOutputChars, extra);
+        continue;
+      }
+
+      const frames = createStreamingFrames(chunk, this.config.streamingMinLength);
+      if (frames.length <= 1) {
+        await sendTextReply(ctx, chunk, this.config.maxOutputChars, extra);
+        continue;
+      }
+
+      const sent = await ctx.reply('…', {
+        ...extra,
+        reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined
+      });
+      for (const frame of frames) {
+        await ctx.telegram.editMessageText(ctx.chat.id, sent.message_id, undefined, frame, extra);
+        if (frame !== frames[frames.length - 1]) {
+          await new Promise((resolve) => setTimeout(resolve, this.config.streamingEditIntervalMs));
+        }
+      }
+    }
   }
 }
