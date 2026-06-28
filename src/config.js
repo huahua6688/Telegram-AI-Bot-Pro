@@ -9,6 +9,14 @@ const personaPresets = {
   writer: 'You are a writing assistant. Improve clarity, structure, tone, and creativity while preserving intent.'
 };
 
+function normalizeProvider(value = '') {
+  const provider = String(value).trim().toLowerCase();
+  if (provider === 'openai' || provider === 'openai-compatible') return 'openai-compatible';
+  if (provider === 'anthropic' || provider === 'claude') return 'anthropic';
+  if (provider === 'google' || provider === 'gemini') return 'gemini';
+  return 'openai-compatible';
+}
+
 function parseBoolean(value, defaultValue = false) {
   if (value === undefined) return defaultValue;
   return ['1', 'true', 'yes', 'on'].includes(String(value).trim().toLowerCase());
@@ -27,14 +35,26 @@ function parseList(value) {
 }
 
 export function loadConfig() {
+  const aiProvider = normalizeProvider(process.env.AI_PROVIDER || 'openai-compatible');
   const fallbackModels = parseList(process.env.AI_FALLBACK_MODELS);
-  const defaultModel = process.env.AI_MODEL || fallbackModels[0] || 'gpt-4.1-mini';
+  const providerDefaultModels = {
+    'openai-compatible': 'gpt-4.1-mini',
+    anthropic: 'claude-3-5-sonnet-latest',
+    gemini: 'gemini-2.0-flash'
+  };
+  const defaultModel = process.env.AI_MODEL || fallbackModels[0] || providerDefaultModels[aiProvider];
   const dataFile = path.resolve(process.cwd(), process.env.DATA_FILE || './data/bot-data.json');
 
   return {
     botToken: process.env.BOT_TOKEN || '',
+    aiProvider,
     aiApiKey: process.env.AI_API_KEY || '',
     aiBaseUrl: (process.env.AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, ''),
+    anthropicApiKey: process.env.ANTHROPIC_API_KEY || process.env.AI_API_KEY || '',
+    anthropicBaseUrl: (process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/$/, ''),
+    anthropicApiVersion: process.env.ANTHROPIC_API_VERSION || '2023-06-01',
+    geminiApiKey: process.env.GEMINI_API_KEY || process.env.AI_API_KEY || '',
+    geminiBaseUrl: (process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, ''),
     defaultModel,
     availableModels: Array.from(new Set([defaultModel, ...fallbackModels].filter(Boolean))),
     systemPrompt: process.env.AI_SYSTEM_PROMPT || personaPresets.default,
