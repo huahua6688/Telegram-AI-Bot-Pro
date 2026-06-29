@@ -9,9 +9,10 @@ import { DoubaoClient } from './doubao-client.js';
 
 const providerRegistry = new Map();
 
-function requireConfigValue(value, name) {
+function requireConfigValue(value, name, providerId = '') {
   if (!value) {
-    throw new Error(`Missing ${name} in environment.`);
+    const providerHint = providerId ? ` (AI_PROVIDER=${providerId})` : '';
+    throw new Error(`Missing ${name} in environment${providerHint}.`);
   }
 }
 
@@ -48,7 +49,19 @@ export function ensureBuiltInAIProvidersRegistered() {
       speechSynthesis: true,
       speechTranscription: true
     },
-    validateConfig: (config) => requireConfigValue(config.aiApiKey, 'AI_API_KEY'),
+    validateConfig: (config) => {
+      if (!config.aiApiKey) {
+        const otherProviders = listAIProviderDefinitions()
+          .map((p) => p.id)
+          .filter((id) => id !== 'openai-compatible')
+          .sort()
+          .join(', ');
+        throw new Error(
+          'Missing AI_API_KEY in environment (AI_PROVIDER=openai-compatible). ' +
+          `Set AI_API_KEY, or set AI_PROVIDER to one of: ${otherProviders}`
+        );
+      }
+    },
     createClient: (config, logger) => new OpenAICompatibleClient(config, logger)
   });
 
@@ -62,7 +75,7 @@ export function ensureBuiltInAIProvidersRegistered() {
       speechSynthesis: false,
       speechTranscription: false
     },
-    validateConfig: (config) => requireConfigValue(config.anthropicApiKey, 'ANTHROPIC_API_KEY (or AI_API_KEY)'),
+    validateConfig: (config) => requireConfigValue(config.anthropicApiKey, 'ANTHROPIC_API_KEY (or AI_API_KEY)', 'anthropic'),
     createClient: (config, logger) => new AnthropicClient(config, logger)
   });
 
@@ -76,7 +89,7 @@ export function ensureBuiltInAIProvidersRegistered() {
       speechSynthesis: false,
       speechTranscription: false
     },
-    validateConfig: (config) => requireConfigValue(config.geminiApiKey, 'GEMINI_API_KEY (or AI_API_KEY)'),
+    validateConfig: (config) => requireConfigValue(config.geminiApiKey, 'GEMINI_API_KEY (or AI_API_KEY)', 'gemini'),
     createClient: (config, logger) => new GeminiClient(config, logger)
   });
 
@@ -90,7 +103,7 @@ export function ensureBuiltInAIProvidersRegistered() {
       speechSynthesis: false,
       speechTranscription: false
     },
-    validateConfig: (config) => requireConfigValue(config.qwenApiKey, 'QWEN_API_KEY (or AI_API_KEY)'),
+    validateConfig: (config) => requireConfigValue(config.qwenApiKey, 'QWEN_API_KEY (or AI_API_KEY)', 'qwen'),
     createClient: (config, logger) => new QwenClient(config, logger)
   });
 
@@ -104,7 +117,7 @@ export function ensureBuiltInAIProvidersRegistered() {
       speechSynthesis: false,
       speechTranscription: false
     },
-    validateConfig: (config) => requireConfigValue(config.grokApiKey, 'GROK_API_KEY (or AI_API_KEY)'),
+    validateConfig: (config) => requireConfigValue(config.grokApiKey, 'GROK_API_KEY (or AI_API_KEY)', 'grok'),
     createClient: (config, logger) => new GrokClient(config, logger)
   });
 
@@ -118,7 +131,7 @@ export function ensureBuiltInAIProvidersRegistered() {
       speechSynthesis: false,
       speechTranscription: false
     },
-    validateConfig: (config) => requireConfigValue(config.deepseekApiKey, 'DEEPSEEK_API_KEY (or AI_API_KEY)'),
+    validateConfig: (config) => requireConfigValue(config.deepseekApiKey, 'DEEPSEEK_API_KEY (or AI_API_KEY)', 'deepseek'),
     createClient: (config, logger) => new DeepSeekClient(config, logger)
   });
 
@@ -132,7 +145,7 @@ export function ensureBuiltInAIProvidersRegistered() {
       speechSynthesis: false,
       speechTranscription: false
     },
-    validateConfig: (config) => requireConfigValue(config.glmApiKey, 'GLM_API_KEY (or AI_API_KEY)'),
+    validateConfig: (config) => requireConfigValue(config.glmApiKey, 'GLM_API_KEY (or AI_API_KEY)', 'glm'),
     createClient: (config, logger) => new GLMClient(config, logger)
   });
 
@@ -146,7 +159,7 @@ export function ensureBuiltInAIProvidersRegistered() {
       speechSynthesis: false,
       speechTranscription: false
     },
-    validateConfig: (config) => requireConfigValue(config.doubaoApiKey, 'DOUBAO_API_KEY (or AI_API_KEY)'),
+    validateConfig: (config) => requireConfigValue(config.doubaoApiKey, 'DOUBAO_API_KEY (or AI_API_KEY)', 'doubao'),
     createClient: (config, logger) => new DoubaoClient(config, logger)
   });
 }
