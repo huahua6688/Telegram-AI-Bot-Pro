@@ -51,7 +51,7 @@ export class PluginManager {
 
   getCommands() {
     return [...this.commands.values()].map(({ command }) => ({
-      name: command.name,
+      command: command.name,
       description: command.description || ''
     }));
   }
