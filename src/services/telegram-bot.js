@@ -487,7 +487,7 @@ export class TelegramAIBot {
     this.bot.command('allow', (ctx) => this.handleAllow(ctx, true));
     this.bot.command('disallow', (ctx) => this.handleAllow(ctx, false));
     for (const command of this.pluginManager.getCommands()) {
-      this.bot.command(command.name, (ctx) => this.handlePluginCommand(ctx, command.name));
+      this.bot.command(command.command, (ctx) => this.handlePluginCommand(ctx, command.command));
     }
     this.bot.action(/^set_model:(.+)$/, (ctx) => this.handleModelCallback(ctx));
     this.bot.action(/^set_persona:(.+)$/, (ctx) => this.handlePersonaCallback(ctx));
