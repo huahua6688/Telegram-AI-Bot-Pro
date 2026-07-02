@@ -25,7 +25,7 @@ function openAICompatiblePlugin() {
       imageGeneration: true,
       speechSynthesis: true,
       speechTranscription: true,
-      nativeAudio: true
+      nativeAudio: false
     },
     validateConfig: (config) => {
       if (!config.aiApiKey) {
