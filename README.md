@@ -145,43 +145,52 @@ npm run dev
 
 ## 主要环境变量
 
-| 变量 | 说明 |
-| --- | --- |
-| `BOT_TOKEN` | Telegram Bot Token |
-| `AI_PROVIDER` | 提供商类型：`openai-compatible` / `anthropic` / `gemini` / `gemini-live` / `qwen` / `grok` / `deepseek` / `glm` / `doubao` |
-| `AI_API_KEY` | AI 提供商 API Key |
-| `AI_BASE_URL` | OpenAI 兼容接口地址（`openai-compatible` 时使用） |
-| `ANTHROPIC_API_KEY` | Anthropic API Key（可选，不填则复用 `AI_API_KEY`） |
-| `ANTHROPIC_BASE_URL` | Anthropic API 地址 |
-| `ANTHROPIC_API_VERSION` | Anthropic API 版本头 |
-| `GEMINI_API_KEY` | Gemini API Key（可选，不填则复用 `AI_API_KEY`） |
-| `GEMINI_BASE_URL` | Gemini API 地址 |
-| `GEMINI_LIVE_API_KEY` / `GEMINI_LIVE_BASE_URL` | Gemini Live API Key / 地址 |
-| `GEMINI_LIVE_TRANSCRIPTION_MODEL` / `GEMINI_LIVE_TTS_MODEL` | Gemini Live 语音转写 / 语音生成模型 |
-| `QWEN_API_KEY` / `QWEN_BASE_URL` | 通义千问 API Key / 地址 |
-| `GROK_API_KEY` / `GROK_BASE_URL` | Grok API Key / 地址 |
-| `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` | DeepSeek API Key / 地址 |
-| `GLM_API_KEY` / `GLM_BASE_URL` | 智谱 GLM API Key / 地址 |
-| `DOUBAO_API_KEY` / `DOUBAO_BASE_URL` | 豆包 API Key / 地址 |
-| `AI_MODEL` | 默认模型 |
-| `AI_FALLBACK_MODELS` | 可选模型列表，逗号分隔 |
-| `DOCUMENT_MAX_BYTES` / `DOCUMENT_MAX_CHARS` / `DOCUMENT_CHUNK_CHARS` | 文档解析大小与分片限制 |
-| `AI_SYSTEM_PROMPT` | 默认系统提示词 |
-| `ENABLE_TOOL_CALLS` | 是否启用工具调用 |
-| `ENABLE_WEB_SEARCH` | 是否启用联网搜索 |
-| `ENABLE_URL_FETCH` | 是否允许抓取 URL |
-| `TOOL_ALLOWED_*` / `TOOL_BLOCKED_*` | 工具调用用户/群组白名单与黑名单 |
-| `TOOL_MAX_CALLS_PER_MESSAGE` | 单次请求工具调用上限 |
-| `TOOL_USER_WINDOW_MS` / `TOOL_USER_MAX_CALLS` | 工具调用频率限制 |
-| `NETWORK_TOOL_SCOPE` / `NETWORK_TOOL_ALLOWED_*` | 联网工具权限分层控制 |
-| `ENABLE_LIVE_AUDIO` / `ENABLE_LIVE_TRANSLATE` | Live Audio/Translate 编排开关 |
-| `DATABASE_FILE` | SQLite 数据库文件 |
-| `DATA_FILE` | 旧版 JSON 数据文件（首次启动可自动迁移） |
-| `RATE_LIMIT_*` | 速率限制配置 |
-| `DAILY_QUOTA` | 每用户每日配额 |
-| `ADMIN_API_ENABLED` / `ADMIN_API_PORT` / `ADMIN_API_PREFIX` / `ADMIN_API_TOKEN` | 管理后台 API 开关、端口、路径前缀与访问令牌 |
-| `GROUP_TRIGGER_MODE` | 默认群聊触发模式 |
-| `GROUP_TRIGGER_KEYWORD` | 默认群聊触发关键词 |
+| 变量 | 说明 | 示例 |
+| --- | --- | --- |
+| `BOT_TOKEN` | Telegram Bot Token | `123456789:AAF...` |
+| `AI_PROVIDER` | 提供商类型：`openai-compatible` / `anthropic` / `gemini` / `gemini-live` / `qwen` / `grok` / `deepseek` / `glm` / `doubao` | `openai-compatible` |
+| `AI_API_KEY` | AI 提供商 API Key | `sk-...` |
+| `AI_BASE_URL` | OpenAI 兼容接口地址（`openai-compatible` 时使用） | `https://api.openai.com/v1` |
+| `ANTHROPIC_API_KEY` | Anthropic API Key（可选，不填则复用 `AI_API_KEY`） | `sk-ant-...` |
+| `ANTHROPIC_BASE_URL` | Anthropic API 地址 | `https://api.anthropic.com` |
+| `ANTHROPIC_API_VERSION` | Anthropic API 版本头 | `2023-06-01` |
+| `GEMINI_API_KEY` | Gemini API Key（可选，不填则复用 `AI_API_KEY`） | `AIza...` |
+| `GEMINI_BASE_URL` | Gemini API 地址 | `https://generativelanguage.googleapis.com/v1beta` |
+| `GEMINI_LIVE_API_KEY` / `GEMINI_LIVE_BASE_URL` | Gemini Live API Key / 地址 | `AIza...` / `https://generativelanguage.googleapis.com/v1beta` |
+| `GEMINI_LIVE_TRANSCRIPTION_MODEL` / `GEMINI_LIVE_TTS_MODEL` | Gemini Live 语音转写 / 语音生成模型 | `gemini-2.5-flash-preview-native-audio-dialog` |
+| `QWEN_API_KEY` / `QWEN_BASE_URL` | 通义千问 API Key / 地址 | `sk-...` / `https://dashscope.aliyuncs.com/compatible-mode/v1` |
+| `GROK_API_KEY` / `GROK_BASE_URL` | Grok API Key / 地址 | `xai-...` / `https://api.x.ai/v1` |
+| `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` | DeepSeek API Key / 地址 | `sk-...` / `https://api.deepseek.com/v1` |
+| `GLM_API_KEY` / `GLM_BASE_URL` | 智谱 GLM API Key / 地址 | `your_glm_key` / `https://open.bigmodel.cn/api/paas/v4` |
+| `DOUBAO_API_KEY` / `DOUBAO_BASE_URL` | 豆包 API Key / 地址 | `your_doubao_key` / `https://ark.cn-beijing.volces.com/api/v3` |
+| `AI_MODEL` | 默认模型 | `gpt-4.1-mini` |
+| `AI_FALLBACK_MODELS` | 可选模型列表，逗号分隔 | `gpt-4.1-mini,gpt-4o-mini` |
+| `DOCUMENT_MAX_BYTES` / `DOCUMENT_MAX_CHARS` / `DOCUMENT_CHUNK_CHARS` | 文档解析大小与分片限制 | `6291456` / `12000` / `1800` |
+| `AI_SYSTEM_PROMPT` | 默认系统提示词 | `You are a powerful Telegram AI assistant.` |
+| `ENABLE_TOOL_CALLS` | 是否启用工具调用 | `true` |
+| `ENABLE_WEB_SEARCH` | 是否启用联网搜索 | `true` |
+| `ENABLE_URL_FETCH` | 是否允许抓取 URL | `true` |
+| `TOOL_ALLOWED_*` / `TOOL_BLOCKED_*` | 工具调用用户/群组白名单与黑名单 | `TOOL_ALLOWED_USER_IDS=123456,789012` |
+| `TOOL_MAX_CALLS_PER_MESSAGE` | 单次请求工具调用上限 | `4` |
+| `TOOL_USER_WINDOW_MS` / `TOOL_USER_MAX_CALLS` | 工具调用频率限制 | `60000` / `20` |
+| `NETWORK_TOOL_SCOPE` / `NETWORK_TOOL_ALLOWED_*` | 联网工具权限分层控制 | `all` |
+| `ENABLE_LIVE_AUDIO` / `ENABLE_LIVE_TRANSLATE` | Live Audio/Translate 编排开关 | `true` / `true` |
+| `ENABLE_STREAMING_REPLIES` | 是否启用流式输出 | `true` |
+| `STREAMING_EDIT_INTERVAL_MS` | 流式编辑间隔（毫秒） | `350` |
+| `MAX_HISTORY_MESSAGES` | 单会话最大历史消息条数 | `16` |
+| `MAX_INPUT_CHARS` / `MAX_OUTPUT_CHARS` | 输入/输出字符上限 | `12000` / `3500` |
+| `REQUEST_TIMEOUT_MS` | 请求超时（毫秒） | `120000` |
+| `DATABASE_FILE` | SQLite 数据库文件 | `./data/bot-data.db` |
+| `DATA_FILE` | 旧版 JSON 数据文件（首次启动可自动迁移） | `./data/bot-data.json` |
+| `RATE_LIMIT_WINDOW_MS` / `RATE_LIMIT_MAX_REQUESTS` | 速率限制窗口与最大请求数 | `60000` / `12` |
+| `DAILY_QUOTA` | 每用户每日配额 | `200` |
+| `HEALTH_PORT` | 健康检查端口 | `3000` |
+| `ADMIN_API_ENABLED` / `ADMIN_API_PORT` / `ADMIN_API_PREFIX` / `ADMIN_API_TOKEN` | 管理后台 API 开关、端口、路径前缀与访问令牌 | `true` / `3001` / `/admin/api/v1` / `your_secret_token` |
+| `ADMIN_USER_IDS` | 管理员用户 ID，逗号分隔 | `123456789,987654321` |
+| `ALLOWED_USER_IDS` / `ALLOWED_CHAT_IDS` | 允许使用的用户/群组 ID 白名单 | `123456789` / `-100987654321` |
+| `BLOCKED_USER_IDS` | 封禁用户 ID 黑名单 | `111222333` |
+| `GROUP_TRIGGER_MODE` | 默认群聊触发模式 | `smart` |
+| `GROUP_TRIGGER_KEYWORD` | 默认群聊触发关键词 | `ai` |
 
 ## AI 提供商配置示例（重点）
 
