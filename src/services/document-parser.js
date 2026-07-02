@@ -95,6 +95,19 @@ export class DocumentParser {
     this.logger = logger;
   }
 
+  async parse({ buffer, filename = '', mimeType = '' }) {
+    const sizeBytes = buffer?.length || 0;
+    if (sizeBytes > this.config.documentMaxBytes) {
+      return {
+        ok: false,
+        error: {
+          code: 'DOCUMENT_TOO_LARGE',
+          message: `File is too large (${sizeBytes} bytes > ${this.config.documentMaxBytes} bytes).`
+        },
+        meta: { filename, mimeType, sizeBytes }
+      };
+    }
+
     const { kind, extension } = resolveKind({ filename, mimeType });
     if (!kind) {
       return {
