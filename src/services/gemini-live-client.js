@@ -21,7 +21,10 @@ export class GeminiLiveClient extends GeminiClient {
       vision: true,
       imageGeneration: false,
       speechSynthesis: true,
-      speechTranscription: true
+      speechTranscription: true,
+      liveAudio: true,
+      liveTranslate: false,
+      nativeAudio: true
     };
   }
 

@@ -9,6 +9,7 @@ const capabilityDefaults = {
   speechTranscription: false,
   liveAudio: false,
   liveTranslate: false,
+  // Native end-to-end audio I/O in provider APIs.
   nativeAudio: false
 };
 
