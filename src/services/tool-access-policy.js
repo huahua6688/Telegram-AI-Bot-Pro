@@ -1,9 +1,10 @@
 const NETWORK_TOOLS = new Set(['web_search', 'fetch_url']);
 
 export class ToolAccessPolicy {
-  constructor(config, logger) {
+  constructor(config, logger, accessControl = null) {
     this.config = config;
     this.logger = logger;
+    this.accessControl = accessControl;
     this.userHits = new Map();
   }
 
@@ -39,6 +40,17 @@ export class ToolAccessPolicy {
   authorize(toolName, context = {}) {
     const userId = String(context.userId || '');
     const chatId = String(context.chatId || '');
+
+    if (this.accessControl) {
+      const baseDecision = this.accessControl.canAccessBot({ userId, chatId });
+      if (!baseDecision.allowed) {
+        return {
+          allowed: false,
+          code: baseDecision.code || 'ACCESS_DENIED',
+          message: baseDecision.reason || 'Access denied by policy.'
+        };
+      }
+    }
 
     if (!this.config.enableToolCalls) {
       return { allowed: false, code: 'TOOL_CALLS_DISABLED', message: 'Tool calls are globally disabled.' };
@@ -96,7 +108,17 @@ export class ToolAccessPolicy {
       this.logger.info('Tool policy allow', payload);
     } else {
       this.logger.warn('Tool policy deny', { ...payload, reason: decision.message });
+      if (this.accessControl?.db?.logAudit) {
+        this.accessControl.db.logAudit({
+          actorId: String(context.userId || ''),
+          actorType: 'telegram_user',
+          action: 'tool.policy_deny',
+          targetType: 'tool',
+          targetId: String(toolName || ''),
+          result: 'deny',
+          details: { ...payload, reason: decision.message }
+        });
+      }
     }
   }
 }
-

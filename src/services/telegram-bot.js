@@ -311,13 +311,14 @@ function createStreamingFrames(text, minLength) {
 }
 
 export class TelegramAIBot {
-  constructor({ config, db, aiClient, toolRegistry, pluginManager, logger }) {
+  constructor({ config, db, aiClient, toolRegistry, pluginManager, logger, accessControl = null }) {
     this.config = config;
     this.db = db;
     this.aiClient = aiClient;
     this.toolRegistry = toolRegistry;
     this.pluginManager = pluginManager;
     this.logger = logger;
+    this.accessControl = accessControl;
     this.rateLimits = new Map();
     this.assistantActionStates = new Map();
     this.assistantActionStatesByMessage = new Map();
@@ -651,14 +652,32 @@ export class TelegramAIBot {
   }
 
   isAdmin(ctx) {
-    return this.config.adminUserIds.has(String(ctx.from?.id));
+    const userId = String(ctx.from?.id || '');
+    if (this.accessControl) {
+      return this.accessControl.isAdmin(userId);
+    }
+    return this.config.adminUserIds.has(userId);
   }
 
   isAllowed(ctx) {
     const userId = String(ctx.from?.id || '');
     const chatId = String(ctx.chat?.id || '');
+    if (this.accessControl) {
+      const decision = this.accessControl.canAccessBot({ userId, chatId });
+      if (!decision.allowed) {
+        this.db.logAudit({
+          actorId: userId,
+          actorType: 'telegram_user',
+          action: 'telegram.access_deny',
+          targetType: 'chat',
+          targetId: chatId,
+          result: 'deny',
+          details: decision
+        });
+      }
+      return decision.allowed;
+    }
     const user = this.db.findUser(userId);
-
     if (this.config.blockedUserIds.has(userId) || user?.isBlocked) return false;
     if (this.config.allowedChatIds.size > 0 && !this.config.allowedChatIds.has(chatId)) return false;
     if (this.config.allowedUserIds.size > 0) {

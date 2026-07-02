@@ -54,6 +54,7 @@
 
 ### 管理与运维
 - 用户 allow / block 控制
+- 后台管理 API（默认前缀 `/admin/api/v1`，基于 `ADMIN_API_TOKEN` 鉴权）
 - 环境变量驱动配置
 - 健康检查接口 `GET /`
 - Docker / docker-compose 部署
@@ -174,6 +175,7 @@ npm run dev
 | `DATA_FILE` | 旧版 JSON 数据文件（首次启动可自动迁移） |
 | `RATE_LIMIT_*` | 速率限制配置 |
 | `DAILY_QUOTA` | 每用户每日配额 |
+| `ADMIN_API_ENABLED` / `ADMIN_API_PORT` / `ADMIN_API_PREFIX` / `ADMIN_API_TOKEN` | 管理后台 API 开关、端口、路径前缀与访问令牌 |
 | `GROUP_TRIGGER_MODE` | 默认群聊触发模式 |
 | `GROUP_TRIGGER_KEYWORD` | 默认群聊触发关键词 |
 

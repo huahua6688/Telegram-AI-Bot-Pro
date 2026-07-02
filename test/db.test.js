@@ -68,7 +68,49 @@ test('BotDatabase imports legacy JSON data into SQLite', async (t) => {
   assert.equal(db.findChat('200')?.triggerMode, 'mention');
   assert.deepEqual(db.getConversation('200:100:main'), [{ role: 'user', content: 'hello' }]);
   assert.equal(db.getStats().aiCalls, 4);
-  assert.equal(db.getMeta('schemaVersion'), '2');
+  assert.equal(db.getMeta('schemaVersion'), '3');
+});
+
+test('BotDatabase provides RBAC, feature flags, policy rules and audit logs', async (t) => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-ai-bot-pro-db-'));
+  t.after(() => fs.rm(tempDir, { recursive: true, force: true }));
+
+  const db = new BotDatabase(path.join(tempDir, 'bot-data.db'));
+  await db.init();
+  await db.upsertUser({ id: 77, username: 'rbac-user', first_name: 'Rbac', language_code: 'en' });
+
+  db.setUserRoles(77, ['operator']);
+  const roles = db.listUserRoleNames(77);
+  assert.deepEqual(roles, ['operator']);
+  assert.equal(db.listUserPermissions(77).includes('users:read'), true);
+
+  db.upsertFeatureFlag({ flagKey: 'admin.export.audit', scopeType: 'global', enabled: false, updatedBy: 'system' });
+  db.upsertFeatureFlag({ flagKey: 'admin.export.audit', scopeType: 'user', scopeId: '77', enabled: true, updatedBy: 'system' });
+  assert.equal(db.resolveFeatureFlag('admin.export.audit', { userId: '77' }), true);
+
+  const blockRule = db.upsertPolicyRule({
+    effect: 'block',
+    subjectType: 'user',
+    subjectId: '77',
+    note: 'manual block',
+    createdBy: 'admin'
+  });
+  assert.equal(blockRule.effect, 'block');
+  assert.equal(
+    db.matchPolicyRule({ effect: 'block', userId: '77', chatId: '', roleNames: [] }),
+    true
+  );
+
+  db.logAudit({
+    actorId: 'admin',
+    actorType: 'admin_api',
+    action: 'users.update',
+    targetType: 'user',
+    targetId: '77',
+    details: { isBlocked: true }
+  });
+  const logs = db.listAuditLogs({ actorId: 'admin' });
+  assert.equal(logs.length > 0, true);
 });
 
 test('BotDatabase persists updates, quota counters, and favorites', async (t) => {

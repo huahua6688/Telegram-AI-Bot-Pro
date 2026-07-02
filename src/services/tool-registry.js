@@ -61,10 +61,10 @@ async function searchWeb(query) {
 }
 
 export class ToolRegistry {
-  constructor(config, logger) {
+  constructor(config, logger, accessControl) {
     this.config = config;
     this.logger = logger;
-    this.policy = new ToolAccessPolicy(config, logger);
+    this.policy = new ToolAccessPolicy(config, logger, accessControl);
   }
 
   getDefinitions() {

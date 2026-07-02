@@ -8,6 +8,8 @@ import { createToolRegistry } from '../adapters/tools/tool-registry-adapter.js';
 import { createPluginManager } from '../adapters/plugins/plugin-manager-adapter.js';
 import { createTelegramBot } from '../adapters/telegram/telegram-bot-adapter.js';
 import { startHealthServer } from '../services/health-server.js';
+import { startAdminApiServer } from '../services/admin-api-server.js';
+import { AccessControlService } from '../services/access-control-service.js';
 import { createStructuredLogger } from '../core/observability/structured-logger.js';
 
 export async function createApplication() {
@@ -19,8 +21,9 @@ export async function createApplication() {
     const runtimeConfig = configCenter.raw;
 
     const db = await createDatabase(runtimeConfig);
+    const accessControl = new AccessControlService({ config: runtimeConfig, db, logger });
     const aiClient = createAIProviderClient(runtimeConfig, logger);
-    const toolRegistry = createToolRegistry(runtimeConfig, logger);
+    const toolRegistry = createToolRegistry(runtimeConfig, logger, accessControl);
     const pluginManager = await createPluginManager(runtimeConfig, logger);
 
     const bot = createTelegramBot({
@@ -29,7 +32,8 @@ export async function createApplication() {
       aiClient,
       toolRegistry,
       pluginManager,
-      logger
+      logger,
+      accessControl
     });
 
     await bot.init();
@@ -40,17 +44,26 @@ export async function createApplication() {
       config: runtimeConfig,
       logger
     });
+    const adminServer = startAdminApiServer({
+      port: runtimeConfig.adminApiPort,
+      db,
+      config: runtimeConfig,
+      logger,
+      accessControl
+    });
 
     return {
       configCenter,
       logger,
       bot,
       healthServer,
+      adminServer,
       async start() {
         await bot.launch();
       },
       async stop(signal) {
         healthServer.close();
+        adminServer?.close();
         await bot.stop(signal);
       }
     };

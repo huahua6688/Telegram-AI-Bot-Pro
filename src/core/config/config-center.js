@@ -57,7 +57,10 @@ function toProfile(rawConfig) {
   return {
     platform: {
       botToken: rawConfig.botToken,
-      healthPort: rawConfig.healthPort
+      healthPort: rawConfig.healthPort,
+      adminApiEnabled: rawConfig.adminApiEnabled,
+      adminApiPort: rawConfig.adminApiPort,
+      adminApiPrefix: rawConfig.adminApiPrefix
     },
     provider,
     features: {

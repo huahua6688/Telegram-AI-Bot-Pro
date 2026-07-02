@@ -99,3 +99,16 @@ test('loadConfig parses tool policy and document parsing options', () => {
   assert.equal(config.networkToolScope, 'admin');
   assert.equal(config.documentMaxBytes, 2048);
 });
+
+test('loadConfig parses admin API options', () => {
+  resetEnv();
+  process.env.ADMIN_API_ENABLED = 'true';
+  process.env.ADMIN_API_PORT = '3900';
+  process.env.ADMIN_API_PREFIX = '/admin/api/v2';
+  process.env.ADMIN_API_TOKEN = 'token-123';
+  const config = loadConfig();
+  assert.equal(config.adminApiEnabled, true);
+  assert.equal(config.adminApiPort, 3900);
+  assert.equal(config.adminApiPrefix, '/admin/api/v2');
+  assert.equal(config.adminApiToken, 'token-123');
+});

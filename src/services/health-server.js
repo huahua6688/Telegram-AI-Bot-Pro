@@ -1,7 +1,12 @@
 import http from 'node:http';
 
 export function startHealthServer({ port, db, config, logger }) {
-  const server = http.createServer((_req, res) => {
+  const server = http.createServer((req, res) => {
+    if ((req.url || '/') !== '/') {
+      res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+      res.end(JSON.stringify({ error: 'NOT_FOUND' }));
+      return;
+    }
     const stats = db.getStats();
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(

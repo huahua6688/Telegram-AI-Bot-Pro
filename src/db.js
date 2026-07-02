@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { normalizeLanguageCode } from './utils/telegram.js';
 
-const CURRENT_SCHEMA_VERSION = 2;
+const CURRENT_SCHEMA_VERSION = 3;
 
 const defaultData = {
   meta: {
@@ -229,6 +229,9 @@ export class BotDatabase {
       if (version === 2) {
         this.applySchemaV2();
       }
+      if (version === 3) {
+        this.applySchemaV3();
+      }
       this.setMeta('schemaVersion', String(version));
     }
   }
@@ -368,6 +371,103 @@ export class BotDatabase {
     this.ensureFavoritesV2Columns();
     this.backfillFavoritesTargets();
     this.migrateConversationsToStructuredHistory();
+  }
+
+  applySchemaV3() {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS roles (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        description TEXT NOT NULL DEFAULT '',
+        is_system INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS permissions (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL UNIQUE,
+        description TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS role_permissions (
+        role_id TEXT NOT NULL,
+        permission_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY(role_id, permission_id),
+        FOREIGN KEY(role_id) REFERENCES roles(id) ON DELETE CASCADE,
+        FOREIGN KEY(permission_id) REFERENCES permissions(id) ON DELETE CASCADE
+      );
+      CREATE TABLE IF NOT EXISTS user_roles (
+        user_id TEXT NOT NULL,
+        role_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(user_id, role_id),
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+        FOREIGN KEY(role_id) REFERENCES roles(id) ON DELETE CASCADE
+      );
+      CREATE TABLE IF NOT EXISTS feature_flags (
+        id TEXT PRIMARY KEY,
+        flag_key TEXT NOT NULL,
+        scope_type TEXT NOT NULL DEFAULT 'global',
+        scope_id TEXT NOT NULL DEFAULT '',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        updated_by TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS policy_rules (
+        id TEXT PRIMARY KEY,
+        effect TEXT NOT NULL,
+        subject_type TEXT NOT NULL,
+        subject_id TEXT NOT NULL,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        note TEXT NOT NULL DEFAULT '',
+        created_by TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS admin_audit_logs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        actor_id TEXT NOT NULL DEFAULT '',
+        actor_type TEXT NOT NULL DEFAULT 'system',
+        action TEXT NOT NULL,
+        target_type TEXT NOT NULL DEFAULT '',
+        target_id TEXT NOT NULL DEFAULT '',
+        result TEXT NOT NULL DEFAULT 'ok',
+        request_id TEXT NOT NULL DEFAULT '',
+        ip TEXT NOT NULL DEFAULT '',
+        user_agent TEXT NOT NULL DEFAULT '',
+        details_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS provider_configs (
+        provider_id TEXT PRIMARY KEY,
+        enabled INTEGER NOT NULL DEFAULT 1,
+        is_default INTEGER NOT NULL DEFAULT 0,
+        capabilities_json TEXT NOT NULL DEFAULT '[]',
+        meta_json TEXT NOT NULL DEFAULT '{}',
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS model_configs (
+        model_id TEXT PRIMARY KEY,
+        provider_id TEXT NOT NULL DEFAULT '',
+        enabled INTEGER NOT NULL DEFAULT 1,
+        is_default INTEGER NOT NULL DEFAULT 0,
+        meta_json TEXT NOT NULL DEFAULT '{}',
+        updated_at TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_user_roles_user ON user_roles(user_id, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_feature_flags_lookup ON feature_flags(flag_key, scope_type, scope_id, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_policy_rules_lookup ON policy_rules(effect, subject_type, subject_id, enabled);
+      CREATE INDEX IF NOT EXISTS idx_admin_audit_time ON admin_audit_logs(created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_admin_audit_actor ON admin_audit_logs(actor_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_sessions_status_updated ON sessions(status, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_users_usage ON users(daily_usage_date, daily_usage_count DESC);
+      CREATE INDEX IF NOT EXISTS idx_message_versions_model ON message_versions(model, created_at DESC);
+    `);
+    this.seedAccessControlDefaults();
   }
 
   ensureFavoritesV2Columns() {
@@ -1279,6 +1379,547 @@ export class BotDatabase {
     return rows.map((row) => this.getPromptById(row.id));
   }
 
+  seedAccessControlDefaults() {
+    const timestamp = now();
+    const roles = [
+      { id: 'role_super_admin', name: 'super_admin', description: 'Full platform control' },
+      { id: 'role_admin', name: 'admin', description: 'Admin operations' },
+      { id: 'role_operator', name: 'operator', description: 'Operational controls' },
+      { id: 'role_viewer', name: 'viewer', description: 'Read only' }
+    ];
+    const permissions = [
+      { id: 'perm_users_read', name: 'users:read' },
+      { id: 'perm_users_write', name: 'users:write' },
+      { id: 'perm_sessions_read', name: 'sessions:read' },
+      { id: 'perm_sessions_write', name: 'sessions:write' },
+      { id: 'perm_quota_read', name: 'quota:read' },
+      { id: 'perm_quota_write', name: 'quota:write' },
+      { id: 'perm_providers_read', name: 'providers:read' },
+      { id: 'perm_providers_write', name: 'providers:write' },
+      { id: 'perm_audit_read', name: 'audit:read' },
+      { id: 'perm_flags_read', name: 'flags:read' },
+      { id: 'perm_flags_write', name: 'flags:write' },
+      { id: 'perm_policy_read', name: 'policy:read' },
+      { id: 'perm_policy_write', name: 'policy:write' }
+    ];
+
+    const rolePermissions = {
+      super_admin: permissions.map((item) => item.name),
+      admin: [
+        'users:read',
+        'users:write',
+        'sessions:read',
+        'sessions:write',
+        'quota:read',
+        'quota:write',
+        'providers:read',
+        'providers:write',
+        'audit:read',
+        'flags:read',
+        'flags:write',
+        'policy:read',
+        'policy:write'
+      ],
+      operator: ['users:read', 'sessions:read', 'quota:read', 'providers:read', 'audit:read', 'flags:read', 'policy:read'],
+      viewer: ['users:read', 'sessions:read', 'quota:read', 'providers:read', 'audit:read', 'flags:read', 'policy:read']
+    };
+
+    const insertRole = this.db.prepare(
+      `INSERT INTO roles(id, name, description, is_system, created_at, updated_at)
+       VALUES (?, ?, ?, 1, ?, ?)
+       ON CONFLICT(name) DO UPDATE SET description = excluded.description, updated_at = excluded.updated_at`
+    );
+    const insertPermission = this.db.prepare(
+      `INSERT INTO permissions(id, name, description, created_at)
+       VALUES (?, ?, '', ?)
+       ON CONFLICT(name) DO NOTHING`
+    );
+    const insertRolePermission = this.db.prepare(
+      `INSERT OR IGNORE INTO role_permissions(role_id, permission_id, created_at)
+       VALUES (?, ?, ?)`
+    );
+
+    for (const role of roles) {
+      insertRole.run(role.id, role.name, role.description, timestamp, timestamp);
+    }
+    for (const permission of permissions) {
+      insertPermission.run(permission.id, permission.name, timestamp);
+    }
+
+    for (const [roleName, names] of Object.entries(rolePermissions)) {
+      const role = this.db.prepare('SELECT id FROM roles WHERE name = ?').get(roleName);
+      if (!role) continue;
+      for (const permissionName of names) {
+        const permission = this.db.prepare('SELECT id FROM permissions WHERE name = ?').get(permissionName);
+        if (!permission) continue;
+        insertRolePermission.run(role.id, permission.id, timestamp);
+      }
+    }
+  }
+
+  listUsers({ q = '', limit = 50, offset = 0 } = {}) {
+    const keyword = String(q || '').trim();
+    const hasKeyword = Boolean(keyword);
+    const rows = this.db
+      .prepare(
+        `SELECT *
+         FROM users
+         ${hasKeyword ? 'WHERE id LIKE ? OR username LIKE ? OR first_name LIKE ? OR last_name LIKE ?' : ''}
+         ORDER BY last_seen_at DESC, updated_at DESC
+         LIMIT ? OFFSET ?`
+      )
+      .all(
+        ...(hasKeyword ? Array(4).fill(`%${keyword}%`) : []),
+        Math.max(1, Number(limit) || 50),
+        Math.max(0, Number(offset) || 0)
+      );
+    return rows.map(rowToUser);
+  }
+
+  countUsers({ q = '' } = {}) {
+    const keyword = String(q || '').trim();
+    const hasKeyword = Boolean(keyword);
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM users
+         ${hasKeyword ? 'WHERE id LIKE ? OR username LIKE ? OR first_name LIKE ? OR last_name LIKE ?' : ''}`
+      )
+      .get(...(hasKeyword ? Array(4).fill(`%${keyword}%`) : []));
+    return Number(row?.count || 0);
+  }
+
+  listUserRoleNames(userId) {
+    const rows = this.db
+      .prepare(
+        `SELECT r.name
+         FROM user_roles ur
+         JOIN roles r ON r.id = ur.role_id
+         WHERE ur.user_id = ?
+         ORDER BY r.name ASC`
+      )
+      .all(String(userId));
+    return rows.map((row) => row.name);
+  }
+
+  setUserRoles(userId, roleNames = []) {
+    const timestamp = now();
+    const id = String(userId);
+    this.db.prepare('DELETE FROM user_roles WHERE user_id = ?').run(id);
+    const insert = this.db.prepare(
+      `INSERT INTO user_roles(user_id, role_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(user_id, role_id) DO UPDATE SET updated_at = excluded.updated_at`
+    );
+    for (const roleName of roleNames) {
+      const role = this.db.prepare('SELECT id FROM roles WHERE name = ?').get(String(roleName));
+      if (!role) continue;
+      insert.run(id, role.id, timestamp, timestamp);
+    }
+    this.setMeta('updatedAt', now());
+    return this.listUserRoleNames(id);
+  }
+
+  listRoles() {
+    return this.db.prepare('SELECT id, name, description, is_system, created_at, updated_at FROM roles ORDER BY name ASC').all();
+  }
+
+  listPermissions() {
+    return this.db.prepare('SELECT id, name, description, created_at FROM permissions ORDER BY name ASC').all();
+  }
+
+  listUserPermissions(userId) {
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT p.name
+         FROM user_roles ur
+         JOIN role_permissions rp ON rp.role_id = ur.role_id
+         JOIN permissions p ON p.id = rp.permission_id
+         WHERE ur.user_id = ?`
+      )
+      .all(String(userId));
+    return rows.map((row) => row.name);
+  }
+
+  upsertFeatureFlag({ flagKey, scopeType = 'global', scopeId = '', enabled = true, payload = {}, updatedBy = '' }) {
+    const timestamp = now();
+    const existing = this.db
+      .prepare('SELECT id FROM feature_flags WHERE flag_key = ? AND scope_type = ? AND scope_id = ? LIMIT 1')
+      .get(String(flagKey), String(scopeType), String(scopeId));
+    const id = existing?.id || randomUUID();
+    this.db
+      .prepare(
+        `INSERT INTO feature_flags(id, flag_key, scope_type, scope_id, enabled, payload_json, updated_by, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           enabled = excluded.enabled,
+           payload_json = excluded.payload_json,
+           updated_by = excluded.updated_by,
+           updated_at = excluded.updated_at`
+      )
+      .run(
+        id,
+        String(flagKey),
+        String(scopeType),
+        String(scopeId),
+        enabled ? 1 : 0,
+        JSON.stringify(payload || {}),
+        String(updatedBy || ''),
+        timestamp,
+        timestamp
+      );
+    this.setMeta('updatedAt', now());
+    return this.listFeatureFlags({ flagKey, scopeType, scopeId, limit: 1 })[0] || null;
+  }
+
+  listFeatureFlags({ flagKey = '', scopeType = '', scopeId = '', limit = 200 } = {}) {
+    const filters = [];
+    const params = [];
+    if (flagKey) {
+      filters.push('flag_key = ?');
+      params.push(String(flagKey));
+    }
+    if (scopeType) {
+      filters.push('scope_type = ?');
+      params.push(String(scopeType));
+    }
+    if (scopeId) {
+      filters.push('scope_id = ?');
+      params.push(String(scopeId));
+    }
+    const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM feature_flags
+         ${whereClause}
+         ORDER BY updated_at DESC
+         LIMIT ?`
+      )
+      .all(...params, Math.max(1, Number(limit) || 200));
+    return rows.map((row) => ({
+      id: row.id,
+      flagKey: row.flag_key,
+      scopeType: row.scope_type,
+      scopeId: row.scope_id,
+      enabled: toBoolean(row.enabled),
+      payload: (() => {
+        try {
+          return JSON.parse(row.payload_json || '{}');
+        } catch {
+          return {};
+        }
+      })(),
+      updatedBy: row.updated_by,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    }));
+  }
+
+  resolveFeatureFlag(flagKey, { userId = '', chatId = '', roleNames = [] } = {}) {
+    const key = String(flagKey || '');
+    if (!key) return false;
+    const rows = this.listFeatureFlags({ flagKey: key, limit: 500 });
+    const roleSet = new Set((roleNames || []).map(String));
+
+    const find = (scopeType, scopeId = '') =>
+      rows.find((item) => item.scopeType === scopeType && String(item.scopeId || '') === String(scopeId || ''));
+
+    return (
+      find('user', userId)?.enabled ??
+      find('chat', chatId)?.enabled ??
+      rows.find((item) => item.scopeType === 'role' && roleSet.has(String(item.scopeId || '')))?.enabled ??
+      find('global', '')?.enabled ??
+      false
+    );
+  }
+
+  upsertPolicyRule({ id = '', effect = 'allow', subjectType = 'user', subjectId = '', enabled = true, note = '', createdBy = '' }) {
+    const timestamp = now();
+    const resolvedId = String(id || randomUUID());
+    this.db
+      .prepare(
+        `INSERT INTO policy_rules(id, effect, subject_type, subject_id, enabled, note, created_by, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           effect = excluded.effect,
+           subject_type = excluded.subject_type,
+           subject_id = excluded.subject_id,
+           enabled = excluded.enabled,
+           note = excluded.note,
+           created_by = excluded.created_by,
+           updated_at = excluded.updated_at`
+      )
+      .run(
+        resolvedId,
+        String(effect || 'allow'),
+        String(subjectType || 'user'),
+        String(subjectId || ''),
+        enabled ? 1 : 0,
+        String(note || ''),
+        String(createdBy || ''),
+        timestamp,
+        timestamp
+      );
+    this.setMeta('updatedAt', now());
+    return this.getPolicyRuleById(resolvedId);
+  }
+
+  getPolicyRuleById(id) {
+    const row = this.db.prepare('SELECT * FROM policy_rules WHERE id = ?').get(String(id));
+    if (!row) return null;
+    return {
+      id: row.id,
+      effect: row.effect,
+      subjectType: row.subject_type,
+      subjectId: row.subject_id,
+      enabled: toBoolean(row.enabled),
+      note: row.note,
+      createdBy: row.created_by,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
+  }
+
+  listPolicyRules({ effect = '', subjectType = '', subjectId = '', limit = 200 } = {}) {
+    const filters = ['enabled = 1'];
+    const params = [];
+    if (effect) {
+      filters.push('effect = ?');
+      params.push(String(effect));
+    }
+    if (subjectType) {
+      filters.push('subject_type = ?');
+      params.push(String(subjectType));
+    }
+    if (subjectId) {
+      filters.push('subject_id = ?');
+      params.push(String(subjectId));
+    }
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM policy_rules
+         WHERE ${filters.join(' AND ')}
+         ORDER BY updated_at DESC
+         LIMIT ?`
+      )
+      .all(...params, Math.max(1, Number(limit) || 200));
+    return rows.map((row) => ({
+      id: row.id,
+      effect: row.effect,
+      subjectType: row.subject_type,
+      subjectId: row.subject_id,
+      enabled: toBoolean(row.enabled),
+      note: row.note,
+      createdBy: row.created_by,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    }));
+  }
+
+  matchPolicyRule({ effect = 'allow', userId = '', chatId = '', roleNames = [] } = {}) {
+    const roleSet = new Set((roleNames || []).map(String));
+    const rows = this.listPolicyRules({ effect, limit: 1000 });
+    return rows.some((rule) => {
+      if (rule.subjectType === 'user' && String(rule.subjectId) === String(userId || '')) return true;
+      if (rule.subjectType === 'chat' && String(rule.subjectId) === String(chatId || '')) return true;
+      if (rule.subjectType === 'role' && roleSet.has(String(rule.subjectId))) return true;
+      return false;
+    });
+  }
+
+  logAudit({
+    actorId = '',
+    actorType = 'system',
+    action = '',
+    targetType = '',
+    targetId = '',
+    result = 'ok',
+    requestId = '',
+    ip = '',
+    userAgent = '',
+    details = {}
+  }) {
+    this.db
+      .prepare(
+        `INSERT INTO admin_audit_logs(
+          actor_id, actor_type, action, target_type, target_id, result, request_id, ip, user_agent, details_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        String(actorId || ''),
+        String(actorType || 'system'),
+        String(action || ''),
+        String(targetType || ''),
+        String(targetId || ''),
+        String(result || 'ok'),
+        String(requestId || ''),
+        String(ip || ''),
+        String(userAgent || ''),
+        JSON.stringify(details || {}),
+        now()
+      );
+    this.setMeta('updatedAt', now());
+  }
+
+  listAuditLogs({ actorId = '', action = '', targetType = '', keyword = '', from = '', to = '', limit = 100, offset = 0 } = {}) {
+    const filters = [];
+    const params = [];
+    if (actorId) {
+      filters.push('actor_id = ?');
+      params.push(String(actorId));
+    }
+    if (action) {
+      filters.push('action = ?');
+      params.push(String(action));
+    }
+    if (targetType) {
+      filters.push('target_type = ?');
+      params.push(String(targetType));
+    }
+    if (from) {
+      filters.push('created_at >= ?');
+      params.push(String(from));
+    }
+    if (to) {
+      filters.push('created_at <= ?');
+      params.push(String(to));
+    }
+    if (keyword) {
+      filters.push('(details_json LIKE ? OR target_id LIKE ? OR actor_id LIKE ?)');
+      params.push(`%${keyword}%`, `%${keyword}%`, `%${keyword}%`);
+    }
+    const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM admin_audit_logs
+         ${whereClause}
+         ORDER BY created_at DESC, id DESC
+         LIMIT ? OFFSET ?`
+      )
+      .all(...params, Math.max(1, Number(limit) || 100), Math.max(0, Number(offset) || 0));
+    return rows.map((row) => ({
+      id: row.id,
+      actorId: row.actor_id,
+      actorType: row.actor_type,
+      action: row.action,
+      targetType: row.target_type,
+      targetId: row.target_id,
+      result: row.result,
+      requestId: row.request_id,
+      ip: row.ip,
+      userAgent: row.user_agent,
+      details: (() => {
+        try {
+          return JSON.parse(row.details_json || '{}');
+        } catch {
+          return {};
+        }
+      })(),
+      createdAt: row.created_at
+    }));
+  }
+
+  upsertProviderConfig({ providerId, enabled = true, isDefault = false, capabilities = [], meta = {} }) {
+    const id = String(providerId || '');
+    if (!id) return null;
+    const timestamp = now();
+    if (isDefault) {
+      this.db.prepare('UPDATE provider_configs SET is_default = 0, updated_at = ?').run(timestamp);
+    }
+    this.db
+      .prepare(
+        `INSERT INTO provider_configs(provider_id, enabled, is_default, capabilities_json, meta_json, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(provider_id) DO UPDATE SET
+           enabled = excluded.enabled,
+           is_default = excluded.is_default,
+           capabilities_json = excluded.capabilities_json,
+           meta_json = excluded.meta_json,
+           updated_at = excluded.updated_at`
+      )
+      .run(id, enabled ? 1 : 0, isDefault ? 1 : 0, JSON.stringify(capabilities || []), JSON.stringify(meta || {}), timestamp);
+    this.setMeta('updatedAt', now());
+    return this.listProviderConfigs().find((item) => item.providerId === id) || null;
+  }
+
+  listProviderConfigs() {
+    const rows = this.db.prepare('SELECT * FROM provider_configs ORDER BY provider_id ASC').all();
+    return rows.map((row) => ({
+      providerId: row.provider_id,
+      enabled: toBoolean(row.enabled),
+      isDefault: toBoolean(row.is_default),
+      capabilities: (() => {
+        try {
+          return JSON.parse(row.capabilities_json || '[]');
+        } catch {
+          return [];
+        }
+      })(),
+      meta: (() => {
+        try {
+          return JSON.parse(row.meta_json || '{}');
+        } catch {
+          return {};
+        }
+      })(),
+      updatedAt: row.updated_at
+    }));
+  }
+
+  upsertModelConfig({ modelId, providerId = '', enabled = true, isDefault = false, meta = {} }) {
+    const id = String(modelId || '');
+    if (!id) return null;
+    const timestamp = now();
+    if (isDefault) {
+      this.db.prepare('UPDATE model_configs SET is_default = 0, updated_at = ?').run(timestamp);
+    }
+    this.db
+      .prepare(
+        `INSERT INTO model_configs(model_id, provider_id, enabled, is_default, meta_json, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(model_id) DO UPDATE SET
+           provider_id = excluded.provider_id,
+           enabled = excluded.enabled,
+           is_default = excluded.is_default,
+           meta_json = excluded.meta_json,
+           updated_at = excluded.updated_at`
+      )
+      .run(id, String(providerId || ''), enabled ? 1 : 0, isDefault ? 1 : 0, JSON.stringify(meta || {}), timestamp);
+    this.setMeta('updatedAt', now());
+    return this.listModelConfigs().find((item) => item.modelId === id) || null;
+  }
+
+  listModelConfigs() {
+    const rows = this.db.prepare('SELECT * FROM model_configs ORDER BY model_id ASC').all();
+    return rows.map((row) => ({
+      modelId: row.model_id,
+      providerId: row.provider_id,
+      enabled: toBoolean(row.enabled),
+      isDefault: toBoolean(row.is_default),
+      meta: (() => {
+        try {
+          return JSON.parse(row.meta_json || '{}');
+        } catch {
+          return {};
+        }
+      })(),
+      updatedAt: row.updated_at
+    }));
+  }
+
+  listAdminSessions({ userId = '', chatId = '', status = '', limit = 50, offset = 0 } = {}) {
+    return this.listSessions({ userId, chatId, status, limit, offset });
+  }
+
+  getSessionMessageSummary(sessionId, { limit = 20 } = {}) {
+    return this.getConversationEntries(sessionId, { limit, order: 'desc' }).map((entry) => ({
+      role: entry.role,
+      model: entry.model,
+      content: typeof entry.content === 'string' ? entry.content : JSON.stringify(entry.content),
+      createdAt: entry.createdAt
+    }));
+  }
+
   async incrementStats(key, by = 1) {
     const columns = {
       messagesHandled: 'messages_handled',
@@ -1336,6 +1977,47 @@ export class BotDatabase {
     return {
       allowed: true,
       remaining: quota > 0 ? Math.max(0, quota - dailyUsageCount - 1) : Infinity
+    };
+  }
+
+  setUserDailyUsage(userId, count = 0, date = new Date().toISOString().slice(0, 10)) {
+    this.db
+      .prepare('UPDATE users SET daily_usage_date = ?, daily_usage_count = ?, updated_at = ? WHERE id = ?')
+      .run(String(date), Math.max(0, Number(count) || 0), now(), String(userId));
+    this.setMeta('updatedAt', now());
+    return this.findUser(userId);
+  }
+
+  resetDailyUsageForAll(date = new Date().toISOString().slice(0, 10)) {
+    this.db
+      .prepare('UPDATE users SET daily_usage_date = ?, daily_usage_count = 0, updated_at = ?')
+      .run(String(date), now());
+    this.setMeta('updatedAt', now());
+  }
+
+  getOperationsMetrics() {
+    const stats = this.getStats();
+    const activeUsersRow = this.db
+      .prepare("SELECT COUNT(*) AS count FROM users WHERE last_seen_at >= datetime('now', '-7 day')")
+      .get();
+    const quotaRow = this.db
+      .prepare('SELECT COALESCE(SUM(daily_usage_count), 0) AS total FROM users')
+      .get();
+    const modelRows = this.db
+      .prepare(
+        `SELECT model, COUNT(*) AS count
+         FROM message_versions
+         WHERE is_current = 1 AND model != ''
+         GROUP BY model
+         ORDER BY count DESC
+         LIMIT 20`
+      )
+      .all();
+    return {
+      stats,
+      activeUsers7d: Number(activeUsersRow?.count || 0),
+      quotaConsumedToday: Number(quotaRow?.total || 0),
+      modelDistribution: modelRows.map((row) => ({ model: row.model, count: Number(row.count || 0) }))
     };
   }
 }
