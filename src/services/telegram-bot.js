@@ -518,10 +518,7 @@ export class TelegramAIBot {
 
   createAssistantActionState(payload) {
     const token = randomUUID().replace(/-/g, '').slice(0, 16);
-    const state = { ...payload, token, createdAt: Date.now() };
-    this.assistantActionStates.set(token, state);
-    this.assistantActionStatesByMessage.set(`${payload.chatId}:${payload.messageId}`, token);
-    if (this.assistantActionStates.size > 200) {
+    while (this.assistantActionStates.size >= 200) {
       const oldest = this.assistantActionStates.keys().next().value;
       const oldestState = this.assistantActionStates.get(oldest);
       if (oldestState) {
@@ -529,6 +526,9 @@ export class TelegramAIBot {
       }
       this.assistantActionStates.delete(oldest);
     }
+    const state = { ...payload, token, createdAt: Date.now() };
+    this.assistantActionStates.set(token, state);
+    this.assistantActionStatesByMessage.set(`${payload.chatId}:${payload.messageId}`, token);
     return state;
   }
 
@@ -564,13 +564,14 @@ export class TelegramAIBot {
     const messageId = ctx.callbackQuery?.message?.message_id;
     if (!messageId) return false;
     const editableText = splitMessage(String(text || ''), this.config.maxOutputChars)[0] || this.t(this.getLocale(ctx), 'noReply');
+    const keyboardOptions = keyboard?.reply_markup ? { reply_markup: keyboard.reply_markup } : keyboard || undefined;
     try {
       await ctx.telegram.editMessageText(
         ctx.chat.id,
         messageId,
         undefined,
         editableText,
-        keyboard
+        keyboardOptions
       );
       return true;
     } catch (error) {
