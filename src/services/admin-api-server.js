@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { URL } from 'node:url';
+import { timingSafeEqual } from 'node:crypto';
 import { withRequestContext } from '../core/observability/request-context.js';
 import { listAIProviderDefinitions } from './ai-provider-registry.js';
 
@@ -36,8 +37,19 @@ function paginate(urlObj) {
 
 function parseAuthorizationToken(req) {
   const header = req.headers.authorization || '';
-  const match = header.match(/^Bearer\s+(.+)$/i);
-  return match ? match[1].trim() : '';
+  if (typeof header !== 'string') return '';
+  const lower = header.toLowerCase();
+  if (!lower.startsWith('bearer ')) return '';
+  return header.slice(7).trim();
+}
+
+function tokenEquals(provided = '', expected = '') {
+  const maxLength = Math.max(String(provided || '').length, String(expected || '').length, 64);
+  const left = Buffer.alloc(maxLength);
+  const right = Buffer.alloc(maxLength);
+  left.write(String(provided || ''), 0, 'utf8');
+  right.write(String(expected || ''), 0, 'utf8');
+  return timingSafeEqual(left, right) && String(provided || '').length === String(expected || '').length;
 }
 
 function splitPath(pathname, prefix) {
@@ -64,7 +76,7 @@ export function startAdminApiServer({ config, db, logger, accessControl, port = 
         return json(res, 404, { error: 'NOT_FOUND' });
       }
 
-      if (parseAuthorizationToken(req) !== token) {
+      if (!tokenEquals(parseAuthorizationToken(req), token)) {
         db.logAudit({
           actorType: 'admin_api',
           action: 'auth.failed',
@@ -240,8 +252,9 @@ export function startAdminApiServer({ config, db, logger, accessControl, port = 
         if (path[0] === 'providers' && req.method === 'GET' && path.length === 1) {
           if (permissionDenied('providers:read')) return denyForbidden('providers:read');
           const providerConfigs = db.listProviderConfigs();
+          const providerConfigMap = new Map(providerConfigs.map((item) => [item.providerId, item]));
           const providers = listAIProviderDefinitions().map((item) => {
-            const dynamic = providerConfigs.find((configItem) => configItem.providerId === item.id);
+            const dynamic = providerConfigMap.get(item.id);
             return {
               id: item.id,
               displayName: item.displayName,
@@ -453,4 +466,3 @@ export function startAdminApiServer({ config, db, logger, accessControl, port = 
   });
   return server;
 }
-

@@ -42,7 +42,6 @@ test('ToolAccessPolicy enforces network allowlist and admin-only tools', () => {
   const allowedAdmin = policy.authorize('fetch_url', { userId: '42', chatId: '1', isAdmin: true });
   assert.equal(allowedAdmin.allowed, true);
 });
-
 test('ToolAccessPolicy enforces per-user rate limits', () => {
   const policy = new ToolAccessPolicy(createConfig(), createLogger());
   const context = { userId: '42', chatId: '1', isAdmin: true };
@@ -52,4 +51,3 @@ test('ToolAccessPolicy enforces per-user rate limits', () => {
   assert.equal(limited.allowed, false);
   assert.equal(limited.code, 'TOOL_RATE_LIMITED');
 });
-

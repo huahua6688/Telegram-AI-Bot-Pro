@@ -26,7 +26,6 @@ test('AccessControlService applies block > allow > default and admin role checks
     db,
     logger: { info() {}, warn() {}, error() {}, debug() {} }
   });
-
   db.setUserRoles(100, ['admin']);
   assert.equal(access.isAdmin('100'), true);
 
@@ -39,4 +38,3 @@ test('AccessControlService applies block > allow > default and admin role checks
   assert.equal(decision.allowed, false);
   assert.equal(decision.code, 'ACCESS_BLOCKED');
 });
-

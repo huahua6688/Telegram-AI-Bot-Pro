@@ -1027,10 +1027,7 @@ export class BotDatabase {
       .all(String(sessionId));
     const existingBySequence = new Map(existingRows.map((row) => [row.sequence, row]));
 
-    const beginManagedTransaction = true;
-    if (beginManagedTransaction) {
-      this.db.exec('BEGIN');
-    }
+    this.db.exec('BEGIN');
 
     try {
       for (let index = 0; index < safeMessages.length; index += 1) {
@@ -1124,13 +1121,9 @@ export class BotDatabase {
         )
         .run(String(sessionId), JSON.stringify(safeMessages), String(sessionId), createdTimestamp, timestamp);
 
-      if (beginManagedTransaction) {
-        this.db.exec('COMMIT');
-      }
+      this.db.exec('COMMIT');
     } catch (error) {
-      if (beginManagedTransaction) {
-        this.db.exec('ROLLBACK');
-      }
+      this.db.exec('ROLLBACK');
       throw error;
     }
 
