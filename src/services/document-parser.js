@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { PDFParse } from 'pdf-parse';
+import * as pdfParse from 'pdf-parse';
 import mammoth from 'mammoth';
 import readXlsxFile from 'read-excel-file/node';
 import { truncateText } from '../utils/text.js';
