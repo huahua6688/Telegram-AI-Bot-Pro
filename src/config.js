@@ -14,6 +14,7 @@ function normalizeProvider(value = '') {
   if (provider === 'openai' || provider === 'openai-compatible') return 'openai-compatible';
   if (provider === 'anthropic' || provider === 'claude') return 'anthropic';
   if (provider === 'google' || provider === 'gemini') return 'gemini';
+  if (provider === 'gemini-live' || provider === 'gemini_live' || provider === 'google-live') return 'gemini-live';
   if (provider === 'qwen' || provider === 'tongyi' || provider === 'dashscope') return 'qwen';
   if (provider === 'grok' || provider === 'xai') return 'grok';
   if (provider === 'deepseek') return 'deepseek';
@@ -46,6 +47,7 @@ export function loadConfig() {
     'openai-compatible': 'gpt-4.1-mini',
     anthropic: 'claude-3-5-sonnet-latest',
     gemini: 'gemini-2.0-flash',
+    'gemini-live': 'gemini-2.5-flash-preview-native-audio-dialog',
     qwen: 'qwen-plus',
     grok: 'grok-3-mini-beta',
     deepseek: 'deepseek-chat',
@@ -66,6 +68,8 @@ export function loadConfig() {
     anthropicApiVersion: process.env.ANTHROPIC_API_VERSION || '2023-06-01',
     geminiApiKey: process.env.GEMINI_API_KEY || process.env.AI_API_KEY || '',
     geminiBaseUrl: (process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, ''),
+    geminiLiveApiKey: process.env.GEMINI_LIVE_API_KEY || process.env.GEMINI_API_KEY || process.env.AI_API_KEY || '',
+    geminiLiveBaseUrl: (process.env.GEMINI_LIVE_BASE_URL || process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, ''),
     qwenApiKey: process.env.QWEN_API_KEY || process.env.AI_API_KEY || '',
     qwenBaseUrl: (process.env.QWEN_BASE_URL || 'https://dashscope.aliyuncs.com/compatible-mode/v1').replace(/\/$/, ''),
     qwenApiVersion: process.env.QWEN_API_VERSION || '',
@@ -87,6 +91,8 @@ export function loadConfig() {
     temperature: Number.parseFloat(process.env.AI_TEMPERATURE || '0.6') || 0.6,
     transcriptionModel: process.env.TRANSCRIPTION_MODEL || 'gpt-4o-mini-transcribe',
     ttsModel: process.env.TTS_MODEL || 'gpt-4o-mini-tts',
+    geminiLiveTranscriptionModel: process.env.GEMINI_LIVE_TRANSCRIPTION_MODEL || process.env.TRANSCRIPTION_MODEL || defaultModel,
+    geminiLiveTtsModel: process.env.GEMINI_LIVE_TTS_MODEL || process.env.TTS_MODEL || defaultModel,
     ttsVoice: process.env.TTS_VOICE || 'alloy',
     imageModel: process.env.IMAGE_MODEL || 'gpt-image-1',
     imageSize: process.env.IMAGE_SIZE || '1024x1024',

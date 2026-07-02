@@ -40,6 +40,15 @@ test('loadConfig resolves gemini provider aliases and keys', () => {
   assert.equal(config.geminiApiKey, 'gemini-key');
 });
 
+test('loadConfig resolves gemini-live aliases and keys', () => {
+  resetEnv();
+  process.env.AI_PROVIDER = 'google-live';
+  process.env.GEMINI_API_KEY = 'gemini-shared-key';
+  const config = loadConfig();
+  assert.equal(config.aiProvider, 'gemini-live');
+  assert.equal(config.geminiLiveApiKey, 'gemini-shared-key');
+});
+
 test('loadConfig resolves first-batch native provider aliases', () => {
   resetEnv();
   process.env.AI_PROVIDER = 'xai';

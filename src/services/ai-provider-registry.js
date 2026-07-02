@@ -1,6 +1,7 @@
 import { OpenAICompatibleClient } from './openai-compatible-client.js';
 import { AnthropicClient } from './anthropic-client.js';
 import { GeminiClient } from './gemini-client.js';
+import { GeminiLiveClient } from './gemini-live-client.js';
 import { QwenClient } from './qwen-client.js';
 import { GrokClient } from './grok-client.js';
 import { DeepSeekClient } from './deepseek-client.js';
@@ -91,6 +92,20 @@ export function ensureBuiltInAIProvidersRegistered() {
     },
     validateConfig: (config) => requireConfigValue(config.geminiApiKey, 'GEMINI_API_KEY (or AI_API_KEY)', 'gemini'),
     createClient: (config, logger) => new GeminiClient(config, logger)
+  });
+
+  registerAIProvider({
+    id: 'gemini-live',
+    capabilities: {
+      chat: true,
+      toolCalls: false,
+      vision: true,
+      imageGeneration: false,
+      speechSynthesis: true,
+      speechTranscription: true
+    },
+    validateConfig: (config) => requireConfigValue(config.geminiLiveApiKey, 'GEMINI_LIVE_API_KEY (or GEMINI_API_KEY / AI_API_KEY)', 'gemini-live'),
+    createClient: (config, logger) => new GeminiLiveClient(config, logger)
   });
 
   registerAIProvider({
