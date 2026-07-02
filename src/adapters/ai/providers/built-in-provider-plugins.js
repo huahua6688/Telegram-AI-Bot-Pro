@@ -23,6 +23,7 @@ function openAICompatiblePlugin() {
       toolCalls: true,
       vision: true,
       imageGeneration: true,
+      imageEditing: true,
       speechSynthesis: true,
       speechTranscription: true,
       nativeAudio: false

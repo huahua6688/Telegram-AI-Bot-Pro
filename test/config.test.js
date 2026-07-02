@@ -87,3 +87,15 @@ test('loadConfig defaults to SQLite storage and streaming replies', () => {
   assert.match(config.legacyDataFile, /bot-data\.json$/);
   assert.equal(config.enableStreamingReplies, true);
 });
+
+test('loadConfig parses tool policy and document parsing options', () => {
+  resetEnv();
+  process.env.TOOL_ALLOWED_NAMES = 'get_time,web_search';
+  process.env.NETWORK_TOOL_SCOPE = 'admin';
+  process.env.DOCUMENT_MAX_BYTES = '2048';
+  const config = loadConfig();
+  assert.equal(config.toolAllowedNames.has('get_time'), true);
+  assert.equal(config.toolAllowedNames.has('web_search'), true);
+  assert.equal(config.networkToolScope, 'admin');
+  assert.equal(config.documentMaxBytes, 2048);
+});

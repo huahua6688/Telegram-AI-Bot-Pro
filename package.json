@@ -23,6 +23,9 @@
   },
   "dependencies": {
     "dotenv": "17.4.2",
+    "mammoth": "^1.12.0",
+    "pdf-parse": "^2.4.5",
+    "read-excel-file": "^9.2.0",
     "telegraf": "4.16.3"
   }
 }

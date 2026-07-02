@@ -151,4 +151,18 @@ export class OpenAICompatibleClient {
       })
     });
   }
+
+  async editImage({ prompt, imageBuffer, mimeType = 'image/png' }) {
+    const form = new FormData();
+    form.append('model', this.config.imageModel);
+    form.append('prompt', String(prompt || ''));
+    form.append('image', new Blob([imageBuffer], { type: mimeType }), 'image.png');
+    form.append('size', this.config.imageSize);
+
+    return this.request('/images/edits', {
+      method: 'POST',
+      body: form,
+      headers: {}
+    });
+  }
 }

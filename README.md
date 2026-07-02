@@ -15,7 +15,7 @@
 - 图片理解
 - 语音转文字
 - 文本转语音
-- 图片生成
+- 图片生成/编辑
 - 联网搜索
 - URL 内容抓取
 - 管理员控制（allow / block）
@@ -39,8 +39,8 @@
 - 图片输入分析
 - 语音转文字后继续对话
 - 文本转语音 `/tts`
-- 图片生成 `/image`
-- 文本文件读取与总结
+- 图片生成/编辑 `/image`
+- 文本文件读取与总结（TXT/MD/JSON/CSV/XML/PDF/DOCX/XLSX）
 - SQLite 持久化存储（兼容旧 JSON 数据自动迁移）
 
 ### 智能增强能力
@@ -160,10 +160,16 @@ npm run dev
 | `DOUBAO_API_KEY` / `DOUBAO_BASE_URL` | 豆包 API Key / 地址 |
 | `AI_MODEL` | 默认模型 |
 | `AI_FALLBACK_MODELS` | 可选模型列表，逗号分隔 |
+| `DOCUMENT_MAX_BYTES` / `DOCUMENT_MAX_CHARS` / `DOCUMENT_CHUNK_CHARS` | 文档解析大小与分片限制 |
 | `AI_SYSTEM_PROMPT` | 默认系统提示词 |
 | `ENABLE_TOOL_CALLS` | 是否启用工具调用 |
 | `ENABLE_WEB_SEARCH` | 是否启用联网搜索 |
 | `ENABLE_URL_FETCH` | 是否允许抓取 URL |
+| `TOOL_ALLOWED_*` / `TOOL_BLOCKED_*` | 工具调用用户/群组白名单与黑名单 |
+| `TOOL_MAX_CALLS_PER_MESSAGE` | 单次请求工具调用上限 |
+| `TOOL_USER_WINDOW_MS` / `TOOL_USER_MAX_CALLS` | 工具调用频率限制 |
+| `NETWORK_TOOL_SCOPE` / `NETWORK_TOOL_ALLOWED_*` | 联网工具权限分层控制 |
+| `ENABLE_LIVE_AUDIO` / `ENABLE_LIVE_TRANSLATE` | Live Audio/Translate 编排开关 |
 | `DATABASE_FILE` | SQLite 数据库文件 |
 | `DATA_FILE` | 旧版 JSON 数据文件（首次启动可自动迁移） |
 | `RATE_LIMIT_*` | 速率限制配置 |
@@ -276,17 +282,17 @@ AI_MODEL=doubao-seed-1-6-250615
 
 ## 能力矩阵与降级策略
 
-| Provider | 文本对话 | 工具调用 | 图片理解 | 图片生成 | 语音转文字 | 文字转语音 |
-| --- | --- | --- | --- | --- | --- | --- |
-| openai-compatible | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| anthropic | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
-| gemini | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
-| gemini-live | ✅ | ❌ | ✅ | ❌ | ✅ | ✅ |
-| qwen | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
-| grok | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
-| deepseek | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
-| glm | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
-| doubao | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Provider | 文本对话 | 工具调用 | 图片理解 | 图片生成 | 图片编辑 | 语音转文字 | 文字转语音 | Live Audio |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| openai-compatible | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| anthropic | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| gemini | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| gemini-live | ✅ | ❌ | ✅ | ❌ | ❌ | ✅ | ✅ | ✅ |
+| qwen | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| grok | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| deepseek | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| glm | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| doubao | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
 降级策略：
 - 不支持的 `/image`、`/tts` 会直接提示切换支持该能力的平台。
@@ -441,4 +447,4 @@ npm test
 
 - 图片理解支持多平台；`/tts`、语音转文字、`/image` 当前仅在 `openai-compatible` 提供商可用。
 - URL 抓取和联网搜索依赖运行环境的外网访问能力。
-- 当前文本文件解析优先支持 txt / md / json / csv / xml 等文本类文件。
+- 当前文件解析已内置 txt / md / json / csv / xml / pdf / docx / xlsx 路由，超限会自动拒绝并提示拆分。

@@ -7,17 +7,11 @@ import {
   normalizeLanguageCode,
   shouldRespondToMessage
 } from '../utils/telegram.js';
-import { extractUrls, splitMessage, toDataUri, truncateText } from '../utils/text.js';
+import { extractUrls, splitMessage, truncateText } from '../utils/text.js';
 import { personaPresets } from '../config.js';
-
-const SUPPORTED_TEXT_FILE_TYPES = new Set([
-  'text/plain',
-  'text/markdown',
-  'application/json',
-  'text/csv',
-  'application/xml',
-  'text/xml'
-]);
+import { DocumentParser } from './document-parser.js';
+import { MultimodalActionService } from './multimodal-action-service.js';
+import { AudioOrchestrator } from './audio-orchestrator.js';
 
 const LANGUAGE_NAMES = {
   zh: '中文',
@@ -40,7 +34,7 @@ const UI_TEXT = {
     featureLanguage: '- 语言切换：在“⋯ 更多”中切换',
     featureButtons: '- 可直接点击下方按钮，也支持自然语言如“搜索 xxx”“生成图片 xxx”',
     featureWeb: '- 联网搜索：发送“搜索 xxx”',
-    featureImage: '- 图片生成：发送“生成图片 xxx”',
+    featureImage: '- 图片能力：发送“生成图片 xxx”或“图片编辑 xxx”（需附图）',
     featureTts: '- 语音朗读：发送“朗读 xxx”',
     featurePhoto: '- 直接发送图片：自动识别图片内容',
     featureVoice: '- 直接发送语音：自动转文字并继续对话',
@@ -63,6 +57,8 @@ const UI_TEXT = {
     searchFailed: '搜索失败：{error}',
     imageUsage: '用法：/image 你的图片描述',
     imageUnsupported: '当前提供商 {provider} 不支持图片生成。请切换到支持图片能力的平台。',
+    imageEditNeedPhoto: '图片编辑需要你同时发送一张图片，并附上编辑要求。',
+    imageEditUnsupported: '当前提供商 {provider} 不支持图片编辑。请切换到支持图片编辑的平台。',
     imageEmpty: '图片接口返回了空结果。',
     imageFailed: '图片生成失败：{error}',
     ttsUsage: '用法：/tts 你想转换成语音的文本',
@@ -93,6 +89,8 @@ const UI_TEXT = {
       '用户发送了图片，但当前模型提供商不支持图片理解。请提醒用户改发文字描述，或切换到支持图片理解的平台。',
     unsupportedDocument:
       '用户上传了一个名为 {filename}、类型为 {mimeType} 的文件。请说明当前仅支持直接总结文本类文件。',
+    documentTooLarge: '文件 {filename} 过大，当前超出可处理上限，请拆分后重试。',
+    documentParseFailed: '文件 {filename} 解析失败：{error}',
     continuePrompt: '请继续。',
     menu: '常用功能按钮已显示在下方。',
     currentLanguage: '当前语言：{language}',
@@ -135,7 +133,7 @@ const UI_TEXT = {
     featureLanguage: '- Language switch: open from "⋯ More"',
     featureButtons: '- You can tap the buttons below, or use natural requests like "search ..." or "generate an image ..."',
     featureWeb: '- Web search: send "search ..."',
-    featureImage: '- Image generation: send "generate image ..."',
+    featureImage: '- Image actions: send "generate image ..." or "edit image ..." with a photo',
     featureTts: '- Text to speech: send "read aloud ..."',
     featurePhoto: '- Send a photo directly: auto image understanding',
     featureVoice: '- Send voice directly: auto transcription and continue chatting',
@@ -158,6 +156,8 @@ const UI_TEXT = {
     searchFailed: 'Search failed: {error}',
     imageUsage: 'Usage: /image your prompt',
     imageUnsupported: 'The current provider {provider} does not support image generation. Please switch to a provider that does.',
+    imageEditNeedPhoto: 'Image editing requires sending a photo together with your edit prompt.',
+    imageEditUnsupported: 'The current provider {provider} does not support image editing. Please switch to a provider that does.',
     imageEmpty: 'The image API returned an empty result.',
     imageFailed: 'Image generation failed: {error}',
     ttsUsage: 'Usage: /tts the text you want to speak',
@@ -188,6 +188,8 @@ const UI_TEXT = {
       'The user sent a photo, but the current provider does not support image understanding. Tell the user to describe the image in text instead or switch providers.',
     unsupportedDocument:
       'The user uploaded a file named {filename} with type {mimeType}. Explain that only text-like files are summarized directly right now.',
+    documentTooLarge: 'The file {filename} is too large to parse directly. Ask the user to split it.',
+    documentParseFailed: 'Failed to parse file {filename}: {error}',
     continuePrompt: 'Please continue.',
     menu: 'Common action buttons are shown below.',
     currentLanguage: 'Current language: {language}',
@@ -321,6 +323,22 @@ export class TelegramAIBot {
     this.assistantActionStatesByMessage = new Map();
     this.bot = new Telegraf(config.botToken);
     this.botUsername = '';
+    this.documentParser = new DocumentParser(config, logger);
+    this.multimodalActions = new MultimodalActionService({
+      aiClient,
+      db,
+      logger,
+      getProviderCapabilities: () => this.getProviderCapabilities(),
+      getProviderName: () => this.getProviderName()
+    });
+    this.audioOrchestrator = new AudioOrchestrator({
+      config,
+      aiClient,
+      db,
+      logger,
+      getProviderCapabilities: () => this.getProviderCapabilities(),
+      getProviderName: () => this.getProviderName()
+    });
   }
 
   getLocale(ctx, user = this.db.findUser(ctx.from?.id)) {
@@ -468,6 +486,7 @@ export class TelegramAIBot {
     const actionPatterns = [
       { type: 'web', regex: /^(?:web|search|搜索|联网搜索|上网搜)\s+(.+)$/i },
       { type: 'image', regex: /^(?:image|draw|paint|生成图片|生成圖像|画|畫)\s+(.+)$/i },
+      { type: 'image_edit', regex: /^(?:edit image|图片编辑|圖片編輯|改图|改圖)\s+(.+)$/i },
       { type: 'tts', regex: /^(?:tts|speak|read aloud|语音朗读|朗读|转语音|轉語音)\s+(.+)$/i },
       { type: 'model', regex: /^(?:set model|use model|切换模型|切換模型|模型切换|模型切換)\s+(.+)$/i },
       { type: 'persona_set', regex: /^(?:set persona|use persona|切换人格|切換人格|人格切换|人格切換)\s+(.+)$/i },
@@ -506,8 +525,11 @@ export class TelegramAIBot {
         toolCalls: true,
         vision: true,
         imageGeneration: true,
+        imageEditing: false,
         speechSynthesis: true,
-        speechTranscription: true
+        speechTranscription: true,
+        liveAudio: false,
+        liveTranslate: false
       }
     );
   }
@@ -818,7 +840,22 @@ export class TelegramAIBot {
           name: 'web_search',
           arguments: JSON.stringify({ query })
         }
+      }, {
+        source: 'telegram_command',
+        userId: ctx.from?.id,
+        chatId: ctx.chat?.id,
+        isAdmin: this.isAdmin(ctx),
+        toolUsage: { count: 0 }
       });
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed?.error) {
+          await ctx.reply(this.t(locale, 'searchFailed', { error: parsed.message || parsed.error }));
+          return;
+        }
+      } catch {
+        // No-op, keep raw text path.
+      }
       await this.db.incrementStats('toolCalls');
       await sendTextReply(ctx, this.t(locale, 'webResult', { result: raw }), this.config.maxOutputChars);
     } catch (error) {
@@ -826,31 +863,67 @@ export class TelegramAIBot {
     }
   }
 
-  async runImageGeneration(ctx, prompt = extractCommandArgs(ctx.message.text || '')) {
+  async runImageGeneration(ctx, prompt = extractCommandArgs(ctx.message.text || ''), mode = 'generate') {
     const locale = this.getLocale(ctx);
     if (!prompt) {
       await ctx.reply(this.t(locale, 'imageUsage'));
       return;
     }
 
-    const capabilities = this.getProviderCapabilities();
-    if (!capabilities.imageGeneration) {
-      await ctx.reply(this.t(locale, 'imageUnsupported', { provider: this.getProviderName() }));
+    try {
+      await ctx.sendChatAction('upload_photo');
+      const result = await this.multimodalActions.runImageAction({
+        mode,
+        prompt
+      });
+      if (!result.ok) {
+        const textKey = mode === 'edit' ? 'imageEditUnsupported' : 'imageUnsupported';
+        await ctx.reply(this.t(locale, textKey, { provider: this.getProviderName() }));
+        return;
+      }
+      const item = this.multimodalActions.pickImageResultItem(result.response);
+      if (item?.type === 'url') {
+        await ctx.replyWithPhoto(item.value, { caption: prompt });
+        return;
+      }
+      if (item?.type === 'base64') {
+        await ctx.replyWithPhoto({ source: Buffer.from(item.value, 'base64') }, { caption: prompt });
+        return;
+      }
+      await ctx.reply(this.t(locale, 'imageEmpty'));
+    } catch (error) {
+      await ctx.reply(this.t(locale, 'imageFailed', { error: error.message }));
+    }
+  }
+
+  async runImageEdit(ctx, prompt = extractCommandArgs(ctx.message.text || '')) {
+    const locale = this.getLocale(ctx);
+    const photo = ctx.message?.photo?.[ctx.message.photo.length - 1];
+    if (!photo) {
+      await ctx.reply(this.t(locale, 'imageEditNeedPhoto'));
       return;
     }
 
+    const file = await readTelegramFile(ctx, photo.file_id, 'image.jpg', 'image/jpeg');
     try {
       await ctx.sendChatAction('upload_photo');
-      const response = await this.aiClient.generateImage({ prompt });
-      await this.db.incrementStats('aiCalls');
-      await this.db.incrementStats('imageGenerations');
-      const item = response.data?.[0];
-      if (item?.url) {
-        await ctx.replyWithPhoto(item.url, { caption: prompt });
+      const result = await this.multimodalActions.runImageAction({
+        mode: 'edit',
+        prompt,
+        imageBuffer: file.buffer,
+        mimeType: file.mimeType
+      });
+      if (!result.ok) {
+        await ctx.reply(this.t(locale, 'imageEditUnsupported', { provider: this.getProviderName() }));
         return;
       }
-      if (item?.b64_json) {
-        await ctx.replyWithPhoto({ source: Buffer.from(item.b64_json, 'base64') }, { caption: prompt });
+      const item = this.multimodalActions.pickImageResultItem(result.response);
+      if (item?.type === 'url') {
+        await ctx.replyWithPhoto(item.value, { caption: prompt });
+        return;
+      }
+      if (item?.type === 'base64') {
+        await ctx.replyWithPhoto({ source: Buffer.from(item.value, 'base64') }, { caption: prompt });
         return;
       }
       await ctx.reply(this.t(locale, 'imageEmpty'));
@@ -874,10 +947,13 @@ export class TelegramAIBot {
 
     try {
       await ctx.sendChatAction('record_voice');
-      const audio = await this.aiClient.generateSpeech({ input: truncateText(text, 4000) });
+      const result = await this.audioOrchestrator.textToSpeech({ input: text });
+      if (!result.ok) {
+        await ctx.reply(this.t(locale, 'ttsFailed', { error: result.error || 'unknown error' }));
+        return;
+      }
       await this.db.incrementStats('aiCalls');
-      await this.db.incrementStats('ttsGenerations');
-      await ctx.replyWithAudio({ source: audio, filename: 'speech.mp3' });
+      await ctx.replyWithAudio({ source: result.audio, filename: 'speech.mp3' });
     } catch (error) {
       await ctx.reply(this.t(locale, 'ttsFailed', { error: error.message }));
     }
@@ -1150,7 +1226,13 @@ export class TelegramAIBot {
           ? this.toolRegistry.getDefinitions()
           : [],
       toolRunner: async (toolCall) => {
-        const output = await this.toolRegistry.execute(toolCall);
+        const output = await this.toolRegistry.execute(toolCall, {
+          source: 'assistant_regenerate',
+          userId: state.userId,
+          chatId: state.chatId,
+          isAdmin: this.config.adminUserIds.has(String(state.userId)),
+          toolUsage: state.toolUsage || (state.toolUsage = { count: 0 })
+        });
         await this.db.incrementStats('toolCalls');
         return output;
       }
@@ -1290,6 +1372,7 @@ export class TelegramAIBot {
       };
 
       const messages = [systemMessage, ...history, prepared.message];
+      const toolUsage = { count: 0 };
       const result = await this.aiClient.completeWithTools({
         model,
         messages,
@@ -1298,7 +1381,13 @@ export class TelegramAIBot {
             ? this.toolRegistry.getDefinitions()
             : [],
         toolRunner: async (toolCall) => {
-          const output = await this.toolRegistry.execute(toolCall);
+          const output = await this.toolRegistry.execute(toolCall, {
+            source: 'assistant_chat',
+            userId: ctx.from?.id,
+            chatId: ctx.chat?.id,
+            isAdmin: this.isAdmin(ctx),
+            toolUsage
+          });
           await this.db.incrementStats('toolCalls');
           return output;
         }
@@ -1356,7 +1445,14 @@ export class TelegramAIBot {
     }
 
     if (ctx.message.photo?.length) {
-      if (!this.getProviderCapabilities().vision) {
+      const photo = ctx.message.photo[ctx.message.photo.length - 1];
+      const file = await readTelegramFile(ctx, photo.file_id, 'image.jpg', 'image/jpeg');
+      const prepared = this.multimodalActions.createImageUnderstandingMessage({
+        locale,
+        text: decoratedText,
+        file
+      });
+      if (!prepared.ok) {
         return {
           message: {
             role: 'user',
@@ -1369,35 +1465,12 @@ export class TelegramAIBot {
           }
         };
       }
-
-      const photo = ctx.message.photo[ctx.message.photo.length - 1];
-      const file = await readTelegramFile(ctx, photo.file_id, 'image.jpg', 'image/jpeg');
       return {
-        message: {
-          role: 'user',
-          content: [
-            { type: 'text', text: decoratedText || (locale === 'en' ? 'Please analyze this image.' : '请分析这张图片。') },
-            { type: 'image_url', image_url: { url: toDataUri(file.buffer, file.mimeType) } }
-          ]
-        }
+        message: prepared.message
       };
     }
 
     if (ctx.message.voice || ctx.message.audio) {
-      if (!this.getProviderCapabilities().speechTranscription) {
-        return {
-          message: {
-            role: 'user',
-            content: [
-              decoratedText,
-              this.t(locale, 'noTranscriptionSupport')
-            ]
-              .filter(Boolean)
-              .join('\n\n')
-          }
-        };
-      }
-
       const voice = ctx.message.voice || ctx.message.audio;
       const file = await readTelegramFile(
         ctx,
@@ -1405,43 +1478,61 @@ export class TelegramAIBot {
         voice.file_name || 'audio.ogg',
         voice.mime_type || 'audio/ogg'
       );
-      const transcript = await this.aiClient.transcribeAudio({
-        buffer: file.buffer,
-        filename: file.filename,
-        mimeType: file.mimeType,
+      const audioResult = await this.audioOrchestrator.transcribeIncomingAudio({
+        file,
+        locale,
+        userText: decoratedText,
         prompt: 'Transcribe the user audio accurately.'
       });
-      await this.db.incrementStats('voiceTranscriptions');
-      const prompt = [decoratedText, `Voice transcript:\n${transcript}`].filter(Boolean).join('\n\n');
+      if (!audioResult.ok) {
+        return {
+          message: {
+            role: 'user',
+            content: [decoratedText, this.t(locale, 'noTranscriptionSupport')].filter(Boolean).join('\n\n')
+          }
+        };
+      }
       return {
         message: {
           role: 'user',
-          content: prompt || transcript
+          content: audioResult.text
         }
       };
     }
 
     if (ctx.message.document) {
       const document = ctx.message.document;
-      if (!SUPPORTED_TEXT_FILE_TYPES.has(document.mime_type)) {
-        return {
-          message: {
-            role: 'user',
-            content: `${decoratedText}\n\n${this.t(locale, 'unsupportedDocument', {
-              filename: document.file_name || 'document',
-              mimeType: document.mime_type
-            })}`.trim()
-          }
-        };
-      }
-
       const file = await readTelegramFile(
         ctx,
         document.file_id,
         document.file_name || 'document.txt',
-        document.mime_type || 'text/plain'
+        document.mime_type || 'application/octet-stream'
       );
-      const extracted = truncateText(file.buffer.toString('utf8'), this.config.maxInputChars);
+      const parsed = await this.documentParser.parse({
+        buffer: file.buffer,
+        filename: file.filename,
+        mimeType: file.mimeType
+      });
+
+      if (!parsed.ok) {
+        const key =
+          parsed.error?.code === 'DOCUMENT_TOO_LARGE'
+            ? 'documentTooLarge'
+            : parsed.error?.code === 'DOCUMENT_PARSE_FAILED'
+              ? 'documentParseFailed'
+              : 'unsupportedDocument';
+        return {
+          message: {
+            role: 'user',
+            content: `${decoratedText}\n\n${this.t(locale, key, {
+              filename: document.file_name || 'document',
+              mimeType: document.mime_type,
+              error: parsed.error?.message || ''
+            })}`.trim()
+          }
+        };
+      }
+      const extracted = truncateText(parsed.text, this.config.maxInputChars);
       return {
         message: {
           role: 'user',
