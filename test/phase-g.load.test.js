@@ -29,5 +29,5 @@ test('load: database handles message burst within baseline threshold', async (t)
   const duration = performance.now() - start;
 
   assert.equal(db.getConversation('1:1:main').length, 2);
-  assert.equal(duration < thresholdMs, true, `load baseline exceeded: ${duration.toFixed(2)}ms >= ${thresholdMs}ms`);
+  assert.equal(duration < thresholdMs, true, `load baseline exceeded: ${duration.toFixed(2)}ms > ${thresholdMs}ms`);
 });
