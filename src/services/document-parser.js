@@ -2,7 +2,6 @@ import path from 'node:path';
 import * as pdfParse from 'pdf-parse';
 
 console.log('pdf-parse exports:', Object.keys(pdfParse));
-throw new Error('STOP_AFTER_PDF_PARSE_CHECK');
 import mammoth from 'mammoth';
 import readXlsxFile from 'read-excel-file/node';
 import { truncateText } from '../utils/text.js';
