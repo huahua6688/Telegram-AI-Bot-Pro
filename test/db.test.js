@@ -187,7 +187,7 @@ test('BotDatabase supports multi-session lifecycle and prompts', async (t) => {
 
   assert.equal(promptV1.version, 1);
   assert.equal(promptV2.version, 2);
-  assert.equal(db.listPrompts({ ownerUserId: '9', scope: 'session' }).length >= 2, true);
+  assert.ok(db.listPrompts({ ownerUserId: '9', scope: 'session' }).length >= 2);
 });
 
 test('BotDatabase migration from legacy conversations to structured history is idempotent', async (t) => {
@@ -203,10 +203,24 @@ test('BotDatabase migration from legacy conversations to structured history is i
   ]);
 
   db.migrateConversationsToStructuredHistory();
+  const messageCountBefore = db.db.prepare('SELECT COUNT(*) AS count FROM messages WHERE session_id = ?').get('888:7:main').count;
+  const versionCountBefore = db.db
+    .prepare(
+      `SELECT COUNT(*) AS count\n       FROM message_versions mv\n       JOIN messages m ON m.id = mv.message_id\n       WHERE m.session_id = ?`
+    )
+    .get('888:7:main').count;
   db.migrateConversationsToStructuredHistory();
 
   const entries = db.getConversationEntries('888:7:main');
   assert.equal(entries.length, 2);
   const assistant = db.getLatestAssistantMessageReference('888:7:main');
   assert.equal(assistant.version, 1);
+  const messageCountAfter = db.db.prepare('SELECT COUNT(*) AS count FROM messages WHERE session_id = ?').get('888:7:main').count;
+  const versionCountAfter = db.db
+    .prepare(
+      `SELECT COUNT(*) AS count\n       FROM message_versions mv\n       JOIN messages m ON m.id = mv.message_id\n       WHERE m.session_id = ?`
+    )
+    .get('888:7:main').count;
+  assert.equal(messageCountAfter, messageCountBefore);
+  assert.equal(versionCountAfter, versionCountBefore);
 });

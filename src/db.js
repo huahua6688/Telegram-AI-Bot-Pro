@@ -927,7 +927,7 @@ export class BotDatabase {
       .all(String(sessionId));
     const existingBySequence = new Map(existingRows.map((row) => [row.sequence, row]));
 
-    const beginManagedTransaction = this.db.isTransaction ? !this.db.isTransaction : true;
+    const beginManagedTransaction = true;
     if (beginManagedTransaction) {
       this.db.exec('BEGIN');
     }

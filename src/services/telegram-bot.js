@@ -1132,6 +1132,14 @@ export class TelegramAIBot {
   }
 
   async regenerateAssistantReply(state) {
+    if (!state?.systemMessage || !state?.preparedMessage || !state?.sessionId) {
+      this.logger.warn('Skip regenerate: incomplete state payload', {
+        hasSystemMessage: Boolean(state?.systemMessage),
+        hasPreparedMessage: Boolean(state?.preparedMessage),
+        hasSessionId: Boolean(state?.sessionId)
+      });
+      return null;
+    }
     const user = this.db.findUser(state.userId);
     const model = user?.preferredModel || state.model || this.config.defaultModel;
     const result = await this.aiClient.completeWithTools({
