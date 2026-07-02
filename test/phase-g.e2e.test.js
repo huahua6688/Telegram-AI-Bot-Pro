@@ -79,7 +79,7 @@ test('e2e: provider switch + persistence + admin api flow', async (t) => {
   assert.equal(sessionsBody.items.length >= 1, true);
 
   const sessionId = sessionsBody.items[0].id;
-  const sessionDetailRes = await fetch(`http://127.0.0.1:${adminPort}/admin/api/v1/sessions/${encodeURIComponent(sessionId)}?limit=10`, { headers });
+  const sessionDetailRes = await fetch(`http://127.0.0.1:${adminPort}/admin/api/v1/sessions/${sessionId}?limit=10`, { headers });
   assert.equal(sessionDetailRes.status, 200);
   const detailBody = await sessionDetailRes.json();
   assert.equal(detailBody.messages.length >= 1, true);
