@@ -1,4 +1,5 @@
 import { stripHtml, truncateText } from '../utils/text.js';
+import { ToolAccessPolicy } from './tool-access-policy.js';
 
 const USER_AGENT = 'Telegram-AI-Bot-Pro';
 
@@ -60,9 +61,10 @@ async function searchWeb(query) {
 }
 
 export class ToolRegistry {
-  constructor(config, logger) {
+  constructor(config, logger, accessControl) {
     this.config = config;
     this.logger = logger;
+    this.policy = new ToolAccessPolicy(config, logger, accessControl);
   }
 
   getDefinitions() {
@@ -126,16 +128,56 @@ export class ToolRegistry {
     return tools;
   }
 
-  async execute(toolCall) {
+  validateArgs(name, args) {
+    if (name === 'fetch_url') {
+      return typeof args.url === 'string' && /^https?:\/\//i.test(args.url);
+    }
+    if (name === 'web_search') {
+      return typeof args.query === 'string' && args.query.trim().length > 0;
+    }
+    return true;
+  }
+
+  async execute(toolCall, context = {}) {
     const name = toolCall.function.name;
     const args = JSON.parse(toolCall.function.arguments || '{}');
+    const usage = context.toolUsage || { count: 0 };
+
+    const decision = this.policy.authorize(name, context);
+    this.policy.audit(decision, name, context);
+    if (!decision.allowed) {
+      return JSON.stringify({ error: decision.code, message: decision.message });
+    }
+
+    if (usage.count >= this.config.toolMaxCallsPerMessage) {
+      const limitDecision = {
+        allowed: false,
+        code: 'TOOL_CALL_LIMIT_REACHED',
+        message: `Tool call limit (${this.config.toolMaxCallsPerMessage}) reached for this request.`
+      };
+      this.policy.audit(limitDecision, name, context);
+      return JSON.stringify({ error: limitDecision.code, message: limitDecision.message });
+    }
+
+    if (!this.validateArgs(name, args)) {
+      const invalidDecision = {
+        allowed: false,
+        code: 'TOOL_ARGS_INVALID',
+        message: `Invalid arguments for ${name}.`
+      };
+      this.policy.audit(invalidDecision, name, context);
+      return JSON.stringify({ error: invalidDecision.code, message: invalidDecision.message });
+    }
 
     switch (name) {
       case 'get_time':
+        usage.count += 1;
         return JSON.stringify({ utc: new Date().toISOString() });
       case 'fetch_url':
+        usage.count += 1;
         return fetchUrlText(args.url);
       case 'web_search':
+        usage.count += 1;
         return searchWeb(args.query);
       default:
         throw new Error(`Unsupported tool: ${name}`);

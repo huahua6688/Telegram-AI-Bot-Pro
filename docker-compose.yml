@@ -3,8 +3,13 @@ services:
     build: .
     env_file:
       - .env
+    environment:
+      HEALTH_PORT: 3000
+      ADMIN_API_PORT: 3001
+      DATABASE_FILE: /app/data/bot-data.db
     ports:
       - "3000:3000"
+      - "3001:3001"
     volumes:
       - ./data:/app/data
     restart: unless-stopped

@@ -1,44 +1,22 @@
-import { loadConfig } from './config.js';
+import { bootstrap } from './app/bootstrap.js';
+import { AppError } from './core/errors/app-error.js';
+import { ErrorCodes } from './core/errors/error-codes.js';
 import { logger } from './logger.js';
-import { BotDatabase } from './db.js';
-import { createAIClient } from './services/ai-client-factory.js';
-import { PluginManager } from './services/plugin-manager.js';
-import { ToolRegistry } from './services/tool-registry.js';
-import { TelegramAIBot } from './services/telegram-bot.js';
-import { startHealthServer } from './services/health-server.js';
+import { withRequestContext } from './core/observability/request-context.js';
 
-async function main() {
-  const config = loadConfig();
-
-  if (!config.botToken) {
-    throw new Error('Missing BOT_TOKEN in environment.');
+withRequestContext({ requestId: 'startup' }, async () => {
+  try {
+    await bootstrap();
+  } catch (error) {
+    const wrapped = AppError.wrap(error, {
+      code: ErrorCodes.STARTUP_FAILED,
+      message: 'Fatal startup error'
+    });
+    logger.error(wrapped.message, {
+      code: wrapped.code,
+      details: wrapped.details,
+      cause: wrapped.cause
+    });
+    process.exit(1);
   }
-
-  const db = new BotDatabase(config.databaseFile, config.legacyDataFile);
-  await db.init();
-
-  const aiClient = createAIClient(config, logger);
-  const toolRegistry = new ToolRegistry(config, logger);
-  const pluginManager = new PluginManager({ config, logger });
-  await pluginManager.init();
-  const bot = new TelegramAIBot({ config, db, aiClient, toolRegistry, pluginManager, logger });
-  await bot.init();
-
-  const healthServer = startHealthServer({ port: config.healthPort, db, config, logger });
-  await bot.launch();
-
-  const shutdown = async (signal) => {
-    logger.info(`Received ${signal}`);
-    healthServer.close();
-    await bot.stop(signal);
-    process.exit(0);
-  };
-
-  process.once('SIGINT', () => void shutdown('SIGINT'));
-  process.once('SIGTERM', () => void shutdown('SIGTERM'));
-}
-
-main().catch((error) => {
-  logger.error('Fatal startup error', error);
-  process.exit(1);
 });

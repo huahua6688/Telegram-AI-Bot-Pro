@@ -1,0 +1,20 @@
+services:
+  telegram-ai-bot-pro:
+    build: .
+    env_file:
+      - .env
+    environment:
+      HEALTH_PORT: 3000
+      ADMIN_API_PORT: 3001
+      DATABASE_FILE: /app/data/bot-data.db
+    ports:
+      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:3001:3001"
+    volumes:
+      - ./data:/app/data
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

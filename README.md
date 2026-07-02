@@ -15,7 +15,7 @@
 - 图片理解
 - 语音转文字
 - 文本转语音
-- 图片生成
+- 图片生成/编辑
 - 联网搜索
 - URL 内容抓取
 - 管理员控制（allow / block）
@@ -39,8 +39,8 @@
 - 图片输入分析
 - 语音转文字后继续对话
 - 文本转语音 `/tts`
-- 图片生成 `/image`
-- 文本文件读取与总结
+- 图片生成/编辑 `/image`
+- 文本文件读取与总结（TXT/MD/JSON/CSV/XML/PDF/DOCX/XLSX）
 - SQLite 持久化存储（兼容旧 JSON 数据自动迁移）
 
 ### 智能增强能力
@@ -54,11 +54,16 @@
 
 ### 管理与运维
 - 用户 allow / block 控制
+- 后台管理 API（默认前缀 `/admin/api/v1`，基于 `ADMIN_API_TOKEN` 鉴权）
 - 环境变量驱动配置
 - 健康检查接口 `GET /`
 - Docker / docker-compose 部署
 
 ## 快速开始
+
+### 0. 运行环境
+
+- Node.js `>=22.5.0`
 
 ### 1. 安装依赖
 
@@ -143,7 +148,7 @@ npm run dev
 | 变量 | 说明 |
 | --- | --- |
 | `BOT_TOKEN` | Telegram Bot Token |
-| `AI_PROVIDER` | 提供商类型：`openai-compatible` / `anthropic` / `gemini` / `qwen` / `grok` / `deepseek` / `glm` / `doubao` |
+| `AI_PROVIDER` | 提供商类型：`openai-compatible` / `anthropic` / `gemini` / `gemini-live` / `qwen` / `grok` / `deepseek` / `glm` / `doubao` |
 | `AI_API_KEY` | AI 提供商 API Key |
 | `AI_BASE_URL` | OpenAI 兼容接口地址（`openai-compatible` 时使用） |
 | `ANTHROPIC_API_KEY` | Anthropic API Key（可选，不填则复用 `AI_API_KEY`） |
@@ -151,6 +156,8 @@ npm run dev
 | `ANTHROPIC_API_VERSION` | Anthropic API 版本头 |
 | `GEMINI_API_KEY` | Gemini API Key（可选，不填则复用 `AI_API_KEY`） |
 | `GEMINI_BASE_URL` | Gemini API 地址 |
+| `GEMINI_LIVE_API_KEY` / `GEMINI_LIVE_BASE_URL` | Gemini Live API Key / 地址 |
+| `GEMINI_LIVE_TRANSCRIPTION_MODEL` / `GEMINI_LIVE_TTS_MODEL` | Gemini Live 语音转写 / 语音生成模型 |
 | `QWEN_API_KEY` / `QWEN_BASE_URL` | 通义千问 API Key / 地址 |
 | `GROK_API_KEY` / `GROK_BASE_URL` | Grok API Key / 地址 |
 | `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` | DeepSeek API Key / 地址 |
@@ -158,14 +165,21 @@ npm run dev
 | `DOUBAO_API_KEY` / `DOUBAO_BASE_URL` | 豆包 API Key / 地址 |
 | `AI_MODEL` | 默认模型 |
 | `AI_FALLBACK_MODELS` | 可选模型列表，逗号分隔 |
+| `DOCUMENT_MAX_BYTES` / `DOCUMENT_MAX_CHARS` / `DOCUMENT_CHUNK_CHARS` | 文档解析大小与分片限制 |
 | `AI_SYSTEM_PROMPT` | 默认系统提示词 |
 | `ENABLE_TOOL_CALLS` | 是否启用工具调用 |
 | `ENABLE_WEB_SEARCH` | 是否启用联网搜索 |
 | `ENABLE_URL_FETCH` | 是否允许抓取 URL |
+| `TOOL_ALLOWED_*` / `TOOL_BLOCKED_*` | 工具调用用户/群组白名单与黑名单 |
+| `TOOL_MAX_CALLS_PER_MESSAGE` | 单次请求工具调用上限 |
+| `TOOL_USER_WINDOW_MS` / `TOOL_USER_MAX_CALLS` | 工具调用频率限制 |
+| `NETWORK_TOOL_SCOPE` / `NETWORK_TOOL_ALLOWED_*` | 联网工具权限分层控制 |
+| `ENABLE_LIVE_AUDIO` / `ENABLE_LIVE_TRANSLATE` | Live Audio/Translate 编排开关 |
 | `DATABASE_FILE` | SQLite 数据库文件 |
 | `DATA_FILE` | 旧版 JSON 数据文件（首次启动可自动迁移） |
 | `RATE_LIMIT_*` | 速率限制配置 |
 | `DAILY_QUOTA` | 每用户每日配额 |
+| `ADMIN_API_ENABLED` / `ADMIN_API_PORT` / `ADMIN_API_PREFIX` / `ADMIN_API_TOKEN` | 管理后台 API 开关、端口、路径前缀与访问令牌 |
 | `GROUP_TRIGGER_MODE` | 默认群聊触发模式 |
 | `GROUP_TRIGGER_KEYWORD` | 默认群聊触发关键词 |
 
@@ -175,6 +189,7 @@ npm run dev
 - `openai-compatible`（OpenAI / OpenRouter / 其他兼容网关）
 - `anthropic`（Claude 官方 API）
 - `gemini`（Google Gemini 官方 API）
+- `gemini-live`（Google Gemini Live 原生音频 API）
 - `qwen`（通义千问）
 - `grok`（xAI Grok）
 - `deepseek`（DeepSeek）
@@ -225,7 +240,18 @@ QWEN_API_KEY=sk-...
 AI_MODEL=qwen-plus
 ```
 
-### 6) Grok（xAI）官方
+### 6) Gemini Live 官方（原生音频对话/转写/TTS）
+
+```env
+AI_PROVIDER=gemini-live
+GEMINI_LIVE_API_KEY=AIza...
+AI_MODEL=gemini-2.5-flash-preview-native-audio-dialog
+# 可选：语音专用模型，不填默认复用 AI_MODEL
+GEMINI_LIVE_TRANSCRIPTION_MODEL=gemini-2.5-flash-preview-native-audio-dialog
+GEMINI_LIVE_TTS_MODEL=gemini-2.5-flash-preview-native-audio-dialog
+```
+
+### 7) Grok（xAI）官方
 
 ```env
 AI_PROVIDER=grok
@@ -233,7 +259,7 @@ GROK_API_KEY=xai-...
 AI_MODEL=grok-3-mini-beta
 ```
 
-### 7) DeepSeek 官方
+### 8) DeepSeek 官方
 
 ```env
 AI_PROVIDER=deepseek
@@ -241,7 +267,7 @@ DEEPSEEK_API_KEY=sk-...
 AI_MODEL=deepseek-chat
 ```
 
-### 8) 智谱 GLM 官方
+### 9) 智谱 GLM 官方
 
 ```env
 AI_PROVIDER=glm
@@ -249,7 +275,7 @@ GLM_API_KEY=...
 AI_MODEL=glm-4-flash
 ```
 
-### 9) 豆包（火山引擎 Ark）官方
+### 10) 豆包（火山引擎 Ark）官方
 
 ```env
 AI_PROVIDER=doubao
@@ -262,16 +288,17 @@ AI_MODEL=doubao-seed-1-6-250615
 
 ## 能力矩阵与降级策略
 
-| Provider | 文本对话 | 工具调用 | 图片理解 | 图片生成 | 语音转文字 | 文字转语音 |
-| --- | --- | --- | --- | --- | --- | --- |
-| openai-compatible | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| anthropic | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
-| gemini | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
-| qwen | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
-| grok | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
-| deepseek | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
-| glm | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
-| doubao | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| Provider | 文本对话 | 工具调用 | 图片理解 | 图片生成 | 图片编辑 | 语音转文字 | 文字转语音 | Live Audio |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| openai-compatible | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
+| anthropic | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| gemini | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| gemini-live | ✅ | ❌ | ✅ | ❌ | ❌ | ✅ | ✅ | ✅ |
+| qwen | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| grok | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| deepseek | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| glm | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| doubao | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
 
 降级策略：
 - 不支持的 `/image`、`/tts` 会直接提示切换支持该能力的平台。
@@ -297,124 +324,130 @@ data/bot-data.db
 - 如果存在旧 JSON 数据，首次启动会自动导入到 SQLite
 - 导入后主存储以 `DATABASE_FILE` 为准
 
-## Docker 部署
+## 部署与上线（Phase G 基线）
+
+### 平台无关主流程（先做这个）
+
+1. 准备环境变量最小集：
+   - `BOT_TOKEN`
+   - `AI_PROVIDER`
+   - `AI_MODEL`
+   - 平台密钥（`AI_API_KEY` 或对应原生平台专用 key）
+2. 准备持久化路径：
+   - 容器内统一使用 `DATABASE_FILE`（推荐：`/app/data/bot-data.db` 或 `/var/data/bot-data.db`）
+3. 启动前检查：
+   - 健康端口 `HEALTH_PORT=3000`
+   - 管理端口 `ADMIN_API_PORT=3001`
+   - 管理 API 令牌 `ADMIN_API_TOKEN` 已设置
+4. 发布前执行：
+   - PR 快速集：`npm run test:quick && npm run test:smoke`
+   - 主干全量集：`npm run test:full`
+   - 发布候选集：`npm run test:release`
+5. 通过 `docs/release/phase-g-go-no-go.md` 做 Go/No-Go 决策。
+
+### 两档部署模板
+
+#### A) 最小可用（开发/验收）
 
 ```bash
 docker compose up -d --build
 ```
 
-## 一键部署到免费平台
+- 使用 `docker-compose.yml`
+- 默认挂载 `./data -> /app/data`
+- 默认暴露 `3000`（健康）和 `3001`（管理 API）
 
-点击上方徽章可一键部署，或按照下方各平台指引手动操作。
+#### B) 生产推荐（长期运行）
 
-### 部署变量（先看这个）
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+```
 
-- **程序启动必填（最小集）**
-  - `BOT_TOKEN`
-  - AI 平台密钥（以下至少一个）：`AI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / `QWEN_API_KEY` / `GROK_API_KEY` / `DEEPSEEK_API_KEY` / `GLM_API_KEY` / `DOUBAO_API_KEY`
-- **强烈建议同时填写（避免平台默认值导致配置歧义）**
-  - `AI_PROVIDER`
-  - `AI_MODEL`
-- **按需可选**
-  - `AI_BASE_URL`（仅 `openai-compatible` 或代理网关场景常用）
-  - `DATABASE_FILE`（需要持久化挂载时设置）
+- 使用 `docker-compose.prod.yml`
+- 端口仅绑定到 `127.0.0.1`
+- 启用日志滚动与 `restart: always`
 
-### Railway（推荐 ⭐）
+## 平台差异附录
 
-Railway 支持 Docker 构建，免费层每月约 500 小时，支持持久化卷（付费层）。
+### Railway
 
-1. 点击 **Deploy on Railway** 徽章或登录 [railway.app](https://railway.app)。
-2. 选择 **Deploy from GitHub repo**，选择本仓库。
-3. 在 **Variables** 中填写以下必填项：
-   - `BOT_TOKEN` — Telegram Bot Token
-   - `AI_PROVIDER` — `openai-compatible` / `anthropic` / `gemini` / `qwen` / `grok` / `deepseek` / `glm` / `doubao`
-   - `AI_MODEL` — 模型 ID
-   - 密钥变量：`AI_API_KEY`（通用）或对应平台专用 key（如 `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` / `QWEN_API_KEY` / `GROK_API_KEY` / `DEEPSEEK_API_KEY` / `GLM_API_KEY` / `DOUBAO_API_KEY`）
-4. Railway 自动读取根目录 `railway.json` 和 `Dockerfile` 完成构建。
-5. 如需持久化数据，在 **Volumes** 中挂载 `/app/data`，并设置 `DATABASE_FILE=/app/data/bot-data.db`。
+- 使用 `railway.json + Dockerfile`
+- 建议变量：`AI_PROVIDER`、`AI_MODEL`、`DATABASE_FILE=/app/data/bot-data.db`
+- 开启卷并挂载 `/app/data`
 
 ### Render
 
-Render 提供免费 Background Worker（免费层重启后磁盘数据会丢失，持久化需付费 Disk）。
-
-1. 点击 **Deploy to Render** 徽章，授权后 Render 自动读取 `render.yaml`。
-2. 在环境变量面板中填写 `BOT_TOKEN`、`AI_PROVIDER`、`AI_MODEL` 和密钥变量（`AI_API_KEY` 或对应平台专用 key）。
-3. 如需持久化，升级服务并在 `render.yaml` 中的 `disk` 段已预配置挂载点 `/var/data`。
-
-### Fly.io
-
-Fly.io 免费层包含 3GB 持久化卷，最适合长期运行。
-
-```bash
-# 安装 flyctl
-curl -L https://fly.io/install.sh | sh
-
-# 登录
-fly auth login
-
-# 创建应用（会使用 fly.toml 配置）
-fly launch --no-deploy
-
-# 创建持久化卷
-fly volumes create bot_data --size 1 --region sin
-
-# 设置密钥（不要写在 fly.toml 中）
-fly secrets set BOT_TOKEN=你的Token AI_PROVIDER=openai-compatible AI_MODEL=gpt-4.1-mini AI_API_KEY=你的Key
-
-# 部署
-fly deploy
-```
+- 使用 `render.yaml`
+- 已统一 `AI_PROVIDER`、`HEALTH_PORT`、`ADMIN_API_PORT`、`DATABASE_FILE=/var/data/bot-data.db`
+- 持久化挂载目录 `/var/data`
 
 ### Zeabur
 
-Zeabur 对中国区友好，推荐直接使用 **Deploy from GitHub** 导入仓库。
+- 推荐 Dockerfile 部署；`zbpack.json` 作为节点构建回退模板
+- 建议变量：`AI_PROVIDER`、`AI_MODEL`、`DATABASE_FILE=/app/data/bot-data.db`
+- 挂载 `/app/data` 持久化卷
 
-1. 点击 **Deploy on Zeabur** 徽章，或登录 [zeabur.com](https://zeabur.com)。
-2. 选择 **Deploy from GitHub**，选择本仓库与分支（通常 `main`）。
-3. Build 配置建议：
-   - Build Method: `Dockerfile`
-   - Dockerfile Path: `Dockerfile`
-   - Build Context: `.`
-4. 在服务的 **Variables** 面板中填写：
-   - `BOT_TOKEN`
-   - `AI_PROVIDER`
-   - `AI_API_KEY`（或平台专用 key）
-   - `AI_BASE_URL`（仅 `openai-compatible` 需要）
-   - `AI_MODEL`
-5. 如需持久化，在服务中挂载 `/app/data` 卷，并设置 `DATABASE_FILE=/app/data/bot-data.db`。
+### VPS（Docker Compose）
 
-如果你使用 **Arbitrary Git service**：
-- 必填 `gitURL`（例如 `https://github.com/huahua6688/Telegram-AI-Bot-Pro.git`）
-- 平台不会自动检测构建方式，需手动填写 Dockerfile 相关字段
+```bash
+cp .env.example .env
+# 编辑 .env 填写 BOT_TOKEN / AI_PROVIDER / AI_MODEL / 密钥 / ADMIN_API_TOKEN
+mkdir -p data
 
-### 常见报错速查
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+curl -fsS http://127.0.0.1:3000/
+```
 
-- `invalid_api_key (401)`  
-  密钥无效，或 `AI_PROVIDER` / 接口地址 / 模型组合不匹配（比如拿 A 平台 key 去请求 B 平台）。
-- `Dockerfile is required for arbitrary Git sources`  
-  你在 Arbitrary Git 模式下未配置 Dockerfile 路径与上下文。
-- `gitURL is required for arbitrary git service`  
-  你选择了 Arbitrary Git 但没填 `gitURL`。
+## 升级、回滚、备份恢复
 
-### 自动同步部署（GitHub Actions）
+### 升级
 
-仓库已内置 `.github/workflows/deploy.yml`，每次推送 `main` 分支时自动触发各平台 Deploy Hook。
+1. 拉取新版本代码
+2. 执行发布候选集：`npm run test:release`
+3. 重建并滚动启动容器
 
-在 GitHub 仓库的 **Settings → Secrets and variables → Actions** 中添加：
+### 回滚
 
-| Secret 名称 | 来源 |
-| --- | --- |
-| `RAILWAY_DEPLOY_HOOK` | Railway → Service → Settings → Deploy Hook |
-| `RENDER_DEPLOY_HOOK` | Render → Service → Settings → Deploy Hook |
-| `ZEABUR_DEPLOY_HOOK` | Zeabur → Service → Settings → Deploy Hook |
+1. 切回上一个稳定版本
+2. 使用相同 `.env` 与数据卷重启服务
+3. 验证健康检查与管理 API 可访问
 
-不需要的平台留空即可，脚本会自动跳过。
+### 备份恢复（SQLite）
+
+- 备份：复制 `DATABASE_FILE` 指向的 db 文件（例如 `data/bot-data.db`）
+- 恢复：停服务后替换 db 文件并重启
+- 如保留旧 JSON，`DATA_FILE` 可作为历史导入来源
+
+## 常见故障排查
+
+- `401/UNAUTHORIZED`：检查 `ADMIN_API_TOKEN`，并确认鉴权请求头格式是否正确
+- `FORBIDDEN`：检查 `x-admin-user-id` 对应角色权限（RBAC）
+- `DATABASE is locked`：确认单实例写入策略与持久化卷权限
+- `invalid_api_key (401)`：检查 `AI_PROVIDER / AI_MODEL / API Key` 组合一致性
+- `Dockerfile is required for arbitrary Git sources`：平台需手动指定 Dockerfile 路径与上下文
+
+## 上线核对
+
+- 发布门禁：`docs/release/phase-g-go-no-go.md`
+- 全局复查：`docs/release/phase-g-refactor-review.md`
+- CI 分级执行：`.github/workflows/phase-g-validation.yml`
 
 ## 测试
 
 ```bash
 npm test
 ```
+
+Phase G 分层测试命令：
+
+- `npm run test:quick`：PR 快速集
+- `npm run test:smoke`：发布前 smoke
+- `npm run test:e2e`：端到端核心链路
+- `npm run test:regression`：关键能力回归
+- `npm run test:load`：负载基线
+- `npm run test:fault`：故障注入
+- `npm run test:full`：主干全量集
+- `npm run test:release`：发布候选集（全量 + 负载 + 故障）
 
 ## Phase 1 架构变化
 
@@ -426,4 +459,4 @@ npm test
 
 - 图片理解支持多平台；`/tts`、语音转文字、`/image` 当前仅在 `openai-compatible` 提供商可用。
 - URL 抓取和联网搜索依赖运行环境的外网访问能力。
-- 当前文本文件解析优先支持 txt / md / json / csv / xml 等文本类文件。
+- 当前文件解析已内置 txt / md / json / csv / xml / pdf / docx / xlsx 路由，超限会自动拒绝并提示拆分。

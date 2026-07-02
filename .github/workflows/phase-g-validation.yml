@@ -1,0 +1,75 @@
+name: Phase G Validation
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quick-gate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: mkdir -p reports
+      - name: Run quick + smoke suites
+        run: |
+          set -o pipefail
+          npm run test:quick | tee reports/quick.txt
+          npm run test:smoke | tee reports/smoke.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phase-g-pr-reports
+          path: reports
+
+  main-full-gate:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: mkdir -p reports
+      - name: Run full regression suites
+        run: |
+          set -o pipefail
+          npm run test:full | tee reports/full.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phase-g-main-reports
+          path: reports
+
+  release-candidate-gate:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    env:
+      PHASE_G_LOAD_LOOPS: '400'
+      PHASE_G_LOAD_THRESHOLD_MS: '20000'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: mkdir -p reports
+      - name: Run release candidate suites (regression + load + fault)
+        run: |
+          set -o pipefail
+          npm run test:release | tee reports/release.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: phase-g-release-reports
+          path: reports

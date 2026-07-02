@@ -1,4 +1,5 @@
 import { Markup, Telegraf } from 'telegraf';
+import { randomUUID } from 'node:crypto';
 import { buildConversationHistory } from '../utils/conversation.js';
 import {
   extractCommandArgs,
@@ -6,17 +7,11 @@ import {
   normalizeLanguageCode,
   shouldRespondToMessage
 } from '../utils/telegram.js';
-import { extractUrls, splitMessage, toDataUri, truncateText } from '../utils/text.js';
+import { extractUrls, splitMessage, truncateText } from '../utils/text.js';
 import { personaPresets } from '../config.js';
-
-const SUPPORTED_TEXT_FILE_TYPES = new Set([
-  'text/plain',
-  'text/markdown',
-  'application/json',
-  'text/csv',
-  'application/xml',
-  'text/xml'
-]);
+import { DocumentParser } from './document-parser.js';
+import { MultimodalActionService } from './multimodal-action-service.js';
+import { AudioOrchestrator } from './audio-orchestrator.js';
 
 const LANGUAGE_NAMES = {
   zh: '中文',
@@ -32,15 +27,15 @@ const UI_TEXT = {
   zh: {
     helpTitle: '可用能力：',
     featureConversation: '- 文本对话：私聊直接发消息，群聊支持 @我 / 回复我 / 关键词触发',
-    featureReset: '- /reset 或 /clear：清空当前会话记忆',
-    featureModels: '- /models：查看可用模型',
-    featureModel: '- /model [name]：切换当前用户默认模型',
-    featurePersona: '- /persona [default|coder|translator|teacher|writer]：切换人格',
-    featureLanguage: '- /language [zh|en]：切换机器人界面语言',
+    featureReset: '- 清空记忆：使用按钮或发送“清空记忆”',
+    featureModels: '- 模型列表：使用按钮查看可用模型',
+    featureModel: '- 切换模型：在回复操作条点“🧠 模型”',
+    featurePersona: '- 人格切换：在“⋯ 更多”中切换',
+    featureLanguage: '- 语言切换：在“⋯ 更多”中切换',
     featureButtons: '- 可直接点击下方按钮，也支持自然语言如“搜索 xxx”“生成图片 xxx”',
-    featureWeb: '- /web [query]：联网搜索',
-    featureImage: '- /image [prompt]：生成图片',
-    featureTts: '- /tts [text]：生成语音',
+    featureWeb: '- 联网搜索：发送“搜索 xxx”',
+    featureImage: '- 图片能力：发送“生成图片 xxx”或“图片编辑 xxx”（需附图）',
+    featureTts: '- 语音朗读：发送“朗读 xxx”',
     featurePhoto: '- 直接发送图片：自动识别图片内容',
     featureVoice: '- 直接发送语音：自动转文字并继续对话',
     featureDocument: '- 发送文本文件：自动读取并总结',
@@ -48,7 +43,7 @@ const UI_TEXT = {
     featureKeyword: '- /keyword [text]：设置群聊关键词',
     featureStats: '- /stats：查看统计信息',
     featureAdmin: '- 管理员：/block /unblock /allow /disallow [userId]',
-    start: '你好，我已经准备好了。你可以直接发消息，也可以点按钮使用常用功能。发送 /help 查看详细说明。',
+    start: '你好，我已经准备好了。你可以直接发消息，也可以点按钮使用常用功能。',
     memoryCleared: '当前会话记忆已清空。',
     currentModel: '当前模型：{model}',
     availableModels: '可用模型：{models}',
@@ -62,6 +57,8 @@ const UI_TEXT = {
     searchFailed: '搜索失败：{error}',
     imageUsage: '用法：/image 你的图片描述',
     imageUnsupported: '当前提供商 {provider} 不支持图片生成。请切换到支持图片能力的平台。',
+    imageEditNeedPhoto: '图片编辑需要你同时发送一张图片，并附上编辑要求。',
+    imageEditUnsupported: '当前提供商 {provider} 不支持图片编辑。请切换到支持图片编辑的平台。',
     imageEmpty: '图片接口返回了空结果。',
     imageFailed: '图片生成失败：{error}',
     ttsUsage: '用法：/tts 你想转换成语音的文本',
@@ -92,6 +89,8 @@ const UI_TEXT = {
       '用户发送了图片，但当前模型提供商不支持图片理解。请提醒用户改发文字描述，或切换到支持图片理解的平台。',
     unsupportedDocument:
       '用户上传了一个名为 {filename}、类型为 {mimeType} 的文件。请说明当前仅支持直接总结文本类文件。',
+    documentTooLarge: '文件 {filename} 过大，当前超出可处理上限，请拆分后重试。',
+    documentParseFailed: '文件 {filename} 解析失败：{error}',
     continuePrompt: '请继续。',
     menu: '常用功能按钮已显示在下方。',
     currentLanguage: '当前语言：{language}',
@@ -109,20 +108,33 @@ const UI_TEXT = {
     buttonImage: '🖼️ 生成图片',
     buttonTts: '🔊 语音朗读',
     buttonLanguage: '🌍 语言',
-    streamingPlaceholder: '正在生成回复...'
+    streamingPlaceholder: '正在生成回复...',
+    actionRegenerate: '🔄 重生成',
+    actionModel: '🧠 模型',
+    actionTranslate: '🌍 翻译',
+    actionFavorite: '❤️ 收藏',
+    actionClearContext: '🗑 上下文',
+    actionMore: '⋯ 更多',
+    actionBack: '⬅️ 返回',
+    actionSaved: '已收藏这条回复。',
+    actionAlreadySaved: '这条回复已收藏。',
+    actionContextCleared: '当前会话上下文已清空。',
+    actionWorking: '处理中...',
+    actionNoContext: '操作已过期，请重新发送一条消息。',
+    adminEntry: '管理员入口：可用 /block /unblock /allow /disallow [userId]'
   },
   en: {
     helpTitle: 'Available features:',
     featureConversation: '- Chat directly in private; groups support @mention, reply, or keyword triggers',
-    featureReset: '- /reset or /clear: clear the current conversation memory',
-    featureModels: '- /models: list available models',
-    featureModel: '- /model [name]: switch your default model',
-    featurePersona: '- /persona [default|coder|translator|teacher|writer]: switch persona',
-    featureLanguage: '- /language [zh|en]: switch bot UI language',
+    featureReset: '- Clear memory: use the button or send "clear memory"',
+    featureModels: '- Model list: view available models via buttons',
+    featureModel: '- Switch model: tap "🧠 Model" on the reply action bar',
+    featurePersona: '- Persona switch: open from "⋯ More"',
+    featureLanguage: '- Language switch: open from "⋯ More"',
     featureButtons: '- You can tap the buttons below, or use natural requests like "search ..." or "generate an image ..."',
-    featureWeb: '- /web [query]: web search',
-    featureImage: '- /image [prompt]: generate an image',
-    featureTts: '- /tts [text]: text to speech',
+    featureWeb: '- Web search: send "search ..."',
+    featureImage: '- Image actions: send "generate image ..." or "edit image ..." with a photo',
+    featureTts: '- Text to speech: send "read aloud ..."',
     featurePhoto: '- Send a photo directly: auto image understanding',
     featureVoice: '- Send voice directly: auto transcription and continue chatting',
     featureDocument: '- Send a text file: auto read and summarize',
@@ -130,7 +142,7 @@ const UI_TEXT = {
     featureKeyword: '- /keyword [text]: set group trigger keyword',
     featureStats: '- /stats: view usage stats',
     featureAdmin: '- Admin: /block /unblock /allow /disallow [userId]',
-    start: 'Hi, I am ready. You can chat directly or tap the buttons for common actions. Send /help for details.',
+    start: 'Hi, I am ready. You can chat directly or tap the buttons for common actions.',
     memoryCleared: 'The current conversation memory has been cleared.',
     currentModel: 'Current model: {model}',
     availableModels: 'Available models: {models}',
@@ -144,6 +156,8 @@ const UI_TEXT = {
     searchFailed: 'Search failed: {error}',
     imageUsage: 'Usage: /image your prompt',
     imageUnsupported: 'The current provider {provider} does not support image generation. Please switch to a provider that does.',
+    imageEditNeedPhoto: 'Image editing requires sending a photo together with your edit prompt.',
+    imageEditUnsupported: 'The current provider {provider} does not support image editing. Please switch to a provider that does.',
     imageEmpty: 'The image API returned an empty result.',
     imageFailed: 'Image generation failed: {error}',
     ttsUsage: 'Usage: /tts the text you want to speak',
@@ -174,6 +188,8 @@ const UI_TEXT = {
       'The user sent a photo, but the current provider does not support image understanding. Tell the user to describe the image in text instead or switch providers.',
     unsupportedDocument:
       'The user uploaded a file named {filename} with type {mimeType}. Explain that only text-like files are summarized directly right now.',
+    documentTooLarge: 'The file {filename} is too large to parse directly. Ask the user to split it.',
+    documentParseFailed: 'Failed to parse file {filename}: {error}',
     continuePrompt: 'Please continue.',
     menu: 'Common action buttons are shown below.',
     currentLanguage: 'Current language: {language}',
@@ -191,7 +207,20 @@ const UI_TEXT = {
     buttonImage: '🖼️ Image',
     buttonTts: '🔊 TTS',
     buttonLanguage: '🌍 Language',
-    streamingPlaceholder: 'Composing reply...'
+    streamingPlaceholder: 'Composing reply...',
+    actionRegenerate: '🔄 Regenerate',
+    actionModel: '🧠 Model',
+    actionTranslate: '🌍 Translate',
+    actionFavorite: '❤️ Favorite',
+    actionClearContext: '🗑 Context',
+    actionMore: '⋯ More',
+    actionBack: '⬅️ Back',
+    actionSaved: 'Saved this reply to favorites.',
+    actionAlreadySaved: 'This reply is already saved.',
+    actionContextCleared: 'Current conversation context cleared.',
+    actionWorking: 'Working...',
+    actionNoContext: 'This action expired. Send a new message first.',
+    adminEntry: 'Admin entry: use /block /unblock /allow /disallow [userId]'
   }
 };
 
@@ -282,16 +311,35 @@ function createStreamingFrames(text, minLength) {
 }
 
 export class TelegramAIBot {
-  constructor({ config, db, aiClient, toolRegistry, pluginManager, logger }) {
+  constructor({ config, db, aiClient, toolRegistry, pluginManager, logger, accessControl = null }) {
     this.config = config;
     this.db = db;
     this.aiClient = aiClient;
     this.toolRegistry = toolRegistry;
     this.pluginManager = pluginManager;
     this.logger = logger;
+    this.accessControl = accessControl;
     this.rateLimits = new Map();
+    this.assistantActionStates = new Map();
+    this.assistantActionStatesByMessage = new Map();
     this.bot = new Telegraf(config.botToken);
     this.botUsername = '';
+    this.documentParser = new DocumentParser(config, logger);
+    this.multimodalActions = new MultimodalActionService({
+      aiClient,
+      db,
+      logger,
+      getProviderCapabilities: () => this.getProviderCapabilities(),
+      getProviderName: () => this.getProviderName()
+    });
+    this.audioOrchestrator = new AudioOrchestrator({
+      config,
+      aiClient,
+      db,
+      logger,
+      getProviderCapabilities: () => this.getProviderCapabilities(),
+      getProviderName: () => this.getProviderName()
+    });
   }
 
   getLocale(ctx, user = this.db.findUser(ctx.from?.id)) {
@@ -353,6 +401,64 @@ export class TelegramAIBot {
     return Markup.inlineKeyboard(chunkItems(buttons, 2));
   }
 
+  createAssistantActionKeyboard(locale, token) {
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback(this.t(locale, 'actionRegenerate'), `act:regen:${token}`),
+        Markup.button.callback(this.t(locale, 'actionModel'), `act:model:${token}`),
+        Markup.button.callback(this.t(locale, 'actionTranslate'), `act:translate:${token}`)
+      ],
+      [
+        Markup.button.callback(this.t(locale, 'actionFavorite'), `act:favorite:${token}`),
+        Markup.button.callback(this.t(locale, 'actionClearContext'), `act:clear:${token}`),
+        Markup.button.callback(this.t(locale, 'actionMore'), `act:more:${token}`)
+      ]
+    ]);
+  }
+
+  createAssistantMoreKeyboard(locale, token) {
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback(this.t(locale, 'buttonPersona'), `act:persona:${token}`),
+        Markup.button.callback(this.t(locale, 'buttonLanguage'), `act:language:${token}`)
+      ],
+      [Markup.button.callback(this.t(locale, 'actionBack'), `act:back:${token}`)]
+    ]);
+  }
+
+  createAssistantModelKeyboard(locale, token, currentModel = '') {
+    const modelButtons = this.config.availableModels.map((model, index) =>
+      Markup.button.callback(model === currentModel ? `✅ ${model}` : model, `act:model_pick:${token}:${index}`)
+    );
+    return Markup.inlineKeyboard([
+      ...chunkItems(modelButtons, 2),
+      [Markup.button.callback(this.t(locale, 'actionBack'), `act:back:${token}`)]
+    ]);
+  }
+
+  createAssistantPersonaKeyboard(locale, token, currentPersona = 'default') {
+    const buttons = Object.keys(personaPresets).map((persona) =>
+      Markup.button.callback(
+        persona === currentPersona ? `✅ ${persona}` : persona,
+        `act:persona_pick:${token}:${persona}`
+      )
+    );
+    return Markup.inlineKeyboard([
+      ...chunkItems(buttons, 2),
+      [Markup.button.callback(this.t(locale, 'actionBack'), `act:back:${token}`)]
+    ]);
+  }
+
+  createAssistantLanguageKeyboard(locale, token, currentLanguage = 'zh') {
+    const buttons = Object.entries(LANGUAGE_NAMES).map(([code, name]) =>
+      Markup.button.callback(code === currentLanguage ? `✅ ${name}` : name, `act:language_pick:${token}:${code}`)
+    );
+    return Markup.inlineKeyboard([
+      ...chunkItems(buttons, 2),
+      [Markup.button.callback(this.t(locale, 'actionBack'), `act:back:${token}`)]
+    ]);
+  }
+
   parseNaturalLanguageAction(text = '', locale = 'zh') {
     const content = text.trim();
     if (!content) return null;
@@ -381,6 +487,7 @@ export class TelegramAIBot {
     const actionPatterns = [
       { type: 'web', regex: /^(?:web|search|搜索|联网搜索|上网搜)\s+(.+)$/i },
       { type: 'image', regex: /^(?:image|draw|paint|生成图片|生成圖像|画|畫)\s+(.+)$/i },
+      { type: 'image_edit', regex: /^(?:edit image|图片编辑|圖片編輯|改图|改圖)\s+(.+)$/i },
       { type: 'tts', regex: /^(?:tts|speak|read aloud|语音朗读|朗读|转语音|轉語音)\s+(.+)$/i },
       { type: 'model', regex: /^(?:set model|use model|切换模型|切換模型|模型切换|模型切換)\s+(.+)$/i },
       { type: 'persona_set', regex: /^(?:set persona|use persona|切换人格|切換人格|人格切换|人格切換)\s+(.+)$/i },
@@ -419,14 +526,81 @@ export class TelegramAIBot {
         toolCalls: true,
         vision: true,
         imageGeneration: true,
+        imageEditing: false,
         speechSynthesis: true,
-        speechTranscription: true
+        speechTranscription: true,
+        liveAudio: false,
+        liveTranslate: false
       }
     );
   }
 
   getProviderName() {
     return this.aiClient.getProviderName?.() || this.config.aiProvider || 'unknown';
+  }
+
+  createAssistantActionState(payload) {
+    const token = randomUUID().replace(/-/g, '').slice(0, 16);
+    while (this.assistantActionStates.size >= 200) {
+      const oldest = this.assistantActionStates.keys().next().value;
+      const oldestState = this.assistantActionStates.get(oldest);
+      if (oldestState) {
+        this.assistantActionStatesByMessage.delete(`${oldestState.chatId}:${oldestState.messageId}`);
+      }
+      this.assistantActionStates.delete(oldest);
+    }
+    const state = { ...payload, token, createdAt: Date.now() };
+    this.assistantActionStates.set(token, state);
+    this.assistantActionStatesByMessage.set(`${payload.chatId}:${payload.messageId}`, token);
+    return state;
+  }
+
+  getAssistantActionStateByToken(token = '') {
+    return this.assistantActionStates.get(token) || null;
+  }
+
+  getAssistantActionStateFromContext(ctx) {
+    const callbackData = ctx.callbackQuery?.data || '';
+    const tokenFromData = callbackData.split(':')[2] || '';
+    const fromToken = this.getAssistantActionStateByToken(tokenFromData);
+    if (fromToken) return fromToken;
+    const messageId = ctx.callbackQuery?.message?.message_id;
+    const chatId = ctx.chat?.id;
+    if (!chatId || !messageId) return null;
+    const fallbackToken = this.assistantActionStatesByMessage.get(`${chatId}:${messageId}`);
+    return fallbackToken ? this.getAssistantActionStateByToken(fallbackToken) : null;
+  }
+
+  async applyAssistantActionKeyboard(ctx, keyboard) {
+    const messageId = ctx.callbackQuery?.message?.message_id;
+    if (!messageId) return false;
+    try {
+      await ctx.telegram.editMessageReplyMarkup(ctx.chat.id, messageId, undefined, keyboard.reply_markup);
+      return true;
+    } catch (error) {
+      this.logger.warn('Failed to edit action keyboard', { chatId: ctx.chat?.id, error: error.message });
+      return false;
+    }
+  }
+
+  async editAssistantMessageText(ctx, text, keyboard = null) {
+    const messageId = ctx.callbackQuery?.message?.message_id;
+    if (!messageId) return false;
+    const editableText = splitMessage(String(text || ''), this.config.maxOutputChars)[0] || this.t(this.getLocale(ctx), 'noReply');
+    const keyboardOptions = keyboard?.reply_markup ? { reply_markup: keyboard.reply_markup } : keyboard || undefined;
+    try {
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        messageId,
+        undefined,
+        editableText,
+        keyboardOptions
+      );
+      return true;
+    } catch (error) {
+      this.logger.warn('Failed to edit assistant message', { chatId: ctx.chat?.id, error: error.message });
+      return false;
+    }
   }
 
   async init() {
@@ -458,51 +632,52 @@ export class TelegramAIBot {
     this.botUsername = me.username || '';
     await this.bot.telegram.setMyCommands([
       { command: 'start', description: 'Start the bot' },
-      { command: 'help', description: 'Show help' },
-      { command: 'reset', description: 'Clear current conversation memory' },
-      { command: 'model', description: 'View or set the current model' },
-      { command: 'models', description: 'List available models' },
-      { command: 'language', description: 'View or set the bot UI language' },
-      { command: 'menu', description: 'Show common action buttons' },
-      { command: 'persona', description: 'View or set persona' },
-      ...this.pluginManager.getCommands(),
-      { command: 'stats', description: 'Show usage statistics' }
+      { command: 'block', description: 'Admin: block user by ID' },
+      { command: 'unblock', description: 'Admin: unblock user by ID' },
+      { command: 'allow', description: 'Admin: allow user by ID' },
+      { command: 'disallow', description: 'Admin: disallow user by ID' }
     ]);
   }
 
   registerCommands() {
     this.bot.command('start', (ctx) => this.handleStart(ctx));
-    this.bot.command('help', (ctx) => this.handleHelp(ctx));
-    this.bot.command(['reset', 'clear'], (ctx) => this.handleReset(ctx));
-    this.bot.command('models', (ctx) => this.handleModels(ctx));
-    this.bot.command('model', (ctx) => this.handleModel(ctx));
-    this.bot.command('menu', (ctx) => this.handleMenu(ctx));
-    this.bot.command('language', (ctx) => this.handleLanguage(ctx));
-    this.bot.command('persona', (ctx) => this.handlePersona(ctx));
-    this.bot.command('stats', (ctx) => this.handleStats(ctx));
-    this.bot.command('chatmode', (ctx) => this.handleChatMode(ctx));
-    this.bot.command('keyword', (ctx) => this.handleKeyword(ctx));
     this.bot.command('block', (ctx) => this.handleBlock(ctx, true));
     this.bot.command('unblock', (ctx) => this.handleBlock(ctx, false));
     this.bot.command('allow', (ctx) => this.handleAllow(ctx, true));
     this.bot.command('disallow', (ctx) => this.handleAllow(ctx, false));
-    for (const command of this.pluginManager.getCommands()) {
-      this.bot.command(command.command, (ctx) => this.handlePluginCommand(ctx, command.command));
-    }
     this.bot.action(/^set_model:(.+)$/, (ctx) => this.handleModelCallback(ctx));
     this.bot.action(/^set_persona:(.+)$/, (ctx) => this.handlePersonaCallback(ctx));
     this.bot.action(/^set_language:(.+)$/, (ctx) => this.handleLanguageCallback(ctx));
+    this.bot.action(/^act:/, (ctx) => this.handleAssistantActionCallback(ctx));
   }
 
   isAdmin(ctx) {
-    return this.config.adminUserIds.has(String(ctx.from?.id));
+    const userId = String(ctx.from?.id || '');
+    if (this.accessControl) {
+      return this.accessControl.isAdmin(userId);
+    }
+    return this.config.adminUserIds.has(userId);
   }
 
   isAllowed(ctx) {
     const userId = String(ctx.from?.id || '');
     const chatId = String(ctx.chat?.id || '');
+    if (this.accessControl) {
+      const decision = this.accessControl.canAccessBot({ userId, chatId });
+      if (!decision.allowed) {
+        this.db.logAudit({
+          actorId: userId,
+          actorType: 'telegram_user',
+          action: 'telegram.access_deny',
+          targetType: 'chat',
+          targetId: chatId,
+          result: 'deny',
+          details: decision
+        });
+      }
+      return decision.allowed;
+    }
     const user = this.db.findUser(userId);
-
     if (this.config.blockedUserIds.has(userId) || user?.isBlocked) return false;
     if (this.config.allowedChatIds.size > 0 && !this.config.allowedChatIds.has(chatId)) return false;
     if (this.config.allowedUserIds.size > 0) {
@@ -526,9 +701,10 @@ export class TelegramAIBot {
 
   async handleStart(ctx) {
     const locale = this.getLocale(ctx);
+    const adminLine = this.isAdmin(ctx) ? `\n\n${this.t(locale, 'adminEntry')}` : '';
     await sendTextReply(
       ctx,
-      this.t(locale, 'start'),
+      `${this.t(locale, 'start')}${adminLine}`,
       this.config.maxOutputChars,
       this.createMenuKeyboard(locale)
     );
@@ -683,7 +859,22 @@ export class TelegramAIBot {
           name: 'web_search',
           arguments: JSON.stringify({ query })
         }
+      }, {
+        source: 'telegram_command',
+        userId: ctx.from?.id,
+        chatId: ctx.chat?.id,
+        isAdmin: this.isAdmin(ctx),
+        toolUsage: { count: 0 }
       });
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed?.error) {
+          await ctx.reply(this.t(locale, 'searchFailed', { error: parsed.message || parsed.error }));
+          return;
+        }
+      } catch {
+        // No-op, keep raw text path.
+      }
       await this.db.incrementStats('toolCalls');
       await sendTextReply(ctx, this.t(locale, 'webResult', { result: raw }), this.config.maxOutputChars);
     } catch (error) {
@@ -691,31 +882,67 @@ export class TelegramAIBot {
     }
   }
 
-  async runImageGeneration(ctx, prompt = extractCommandArgs(ctx.message.text || '')) {
+  async runImageGeneration(ctx, prompt = extractCommandArgs(ctx.message.text || ''), mode = 'generate') {
     const locale = this.getLocale(ctx);
     if (!prompt) {
       await ctx.reply(this.t(locale, 'imageUsage'));
       return;
     }
 
-    const capabilities = this.getProviderCapabilities();
-    if (!capabilities.imageGeneration) {
-      await ctx.reply(this.t(locale, 'imageUnsupported', { provider: this.getProviderName() }));
+    try {
+      await ctx.sendChatAction('upload_photo');
+      const result = await this.multimodalActions.runImageAction({
+        mode,
+        prompt
+      });
+      if (!result.ok) {
+        const textKey = mode === 'edit' ? 'imageEditUnsupported' : 'imageUnsupported';
+        await ctx.reply(this.t(locale, textKey, { provider: this.getProviderName() }));
+        return;
+      }
+      const item = this.multimodalActions.pickImageResultItem(result.response);
+      if (item?.type === 'url') {
+        await ctx.replyWithPhoto(item.value, { caption: prompt });
+        return;
+      }
+      if (item?.type === 'base64') {
+        await ctx.replyWithPhoto({ source: Buffer.from(item.value, 'base64') }, { caption: prompt });
+        return;
+      }
+      await ctx.reply(this.t(locale, 'imageEmpty'));
+    } catch (error) {
+      await ctx.reply(this.t(locale, 'imageFailed', { error: error.message }));
+    }
+  }
+
+  async runImageEdit(ctx, prompt = extractCommandArgs(ctx.message.text || '')) {
+    const locale = this.getLocale(ctx);
+    const photo = ctx.message?.photo?.[ctx.message.photo.length - 1];
+    if (!photo) {
+      await ctx.reply(this.t(locale, 'imageEditNeedPhoto'));
       return;
     }
 
+    const file = await readTelegramFile(ctx, photo.file_id, 'image.jpg', 'image/jpeg');
     try {
       await ctx.sendChatAction('upload_photo');
-      const response = await this.aiClient.generateImage({ prompt });
-      await this.db.incrementStats('aiCalls');
-      await this.db.incrementStats('imageGenerations');
-      const item = response.data?.[0];
-      if (item?.url) {
-        await ctx.replyWithPhoto(item.url, { caption: prompt });
+      const result = await this.multimodalActions.runImageAction({
+        mode: 'edit',
+        prompt,
+        imageBuffer: file.buffer,
+        mimeType: file.mimeType
+      });
+      if (!result.ok) {
+        await ctx.reply(this.t(locale, 'imageEditUnsupported', { provider: this.getProviderName() }));
         return;
       }
-      if (item?.b64_json) {
-        await ctx.replyWithPhoto({ source: Buffer.from(item.b64_json, 'base64') }, { caption: prompt });
+      const item = this.multimodalActions.pickImageResultItem(result.response);
+      if (item?.type === 'url') {
+        await ctx.replyWithPhoto(item.value, { caption: prompt });
+        return;
+      }
+      if (item?.type === 'base64') {
+        await ctx.replyWithPhoto({ source: Buffer.from(item.value, 'base64') }, { caption: prompt });
         return;
       }
       await ctx.reply(this.t(locale, 'imageEmpty'));
@@ -739,10 +966,13 @@ export class TelegramAIBot {
 
     try {
       await ctx.sendChatAction('record_voice');
-      const audio = await this.aiClient.generateSpeech({ input: truncateText(text, 4000) });
+      const result = await this.audioOrchestrator.textToSpeech({ input: text });
+      if (!result.ok) {
+        await ctx.reply(this.t(locale, 'ttsFailed', { error: result.error || 'unknown error' }));
+        return;
+      }
       await this.db.incrementStats('aiCalls');
-      await this.db.incrementStats('ttsGenerations');
-      await ctx.replyWithAudio({ source: audio, filename: 'speech.mp3' });
+      await ctx.replyWithAudio({ source: result.audio, filename: 'speech.mp3' });
     } catch (error) {
       await ctx.reply(this.t(locale, 'ttsFailed', { error: error.message }));
     }
@@ -845,6 +1075,201 @@ export class TelegramAIBot {
     await ctx.reply(allowed ? this.t(locale, 'allowDone', { userId }) : this.t(locale, 'disallowDone', { userId }));
   }
 
+  async handleAssistantActionCallback(ctx) {
+    const parts = String(ctx.callbackQuery?.data || '').split(':');
+    const action = parts[1] || '';
+    const token = parts[2] || '';
+    const state = this.getAssistantActionStateByToken(token);
+    const locale = this.getLocale(ctx);
+
+    if (!state) {
+      await ctx.answerCbQuery(this.t(locale, 'actionNoContext'));
+      return;
+    }
+    if (String(state.userId) !== String(ctx.from?.id)) {
+      await ctx.answerCbQuery(this.t(locale, 'adminOnly'));
+      return;
+    }
+
+    try {
+      if (action === 'more') {
+        await ctx.answerCbQuery();
+        await this.applyAssistantActionKeyboard(ctx, this.createAssistantMoreKeyboard(state.locale, token));
+        return;
+      }
+      if (action === 'back') {
+        await ctx.answerCbQuery();
+        await this.applyAssistantActionKeyboard(ctx, this.createAssistantActionKeyboard(state.locale, token));
+        return;
+      }
+      if (action === 'model') {
+        const user = this.db.findUser(state.userId);
+        await ctx.answerCbQuery();
+        await this.applyAssistantActionKeyboard(
+          ctx,
+          this.createAssistantModelKeyboard(state.locale, token, user?.preferredModel || state.model || this.config.defaultModel)
+        );
+        return;
+      }
+      if (action === 'model_pick') {
+        const index = Number(parts[3]);
+        const model = this.config.availableModels[index];
+        await ctx.answerCbQuery();
+        if (!model) return;
+        await this.db.setUserSettings(state.userId, { preferredModel: model });
+        state.model = model;
+        await this.applyAssistantActionKeyboard(ctx, this.createAssistantActionKeyboard(state.locale, token));
+        return;
+      }
+      if (action === 'persona') {
+        const user = this.db.findUser(state.userId);
+        await ctx.answerCbQuery();
+        await this.applyAssistantActionKeyboard(
+          ctx,
+          this.createAssistantPersonaKeyboard(state.locale, token, user?.persona || 'default')
+        );
+        return;
+      }
+      if (action === 'persona_pick') {
+        const persona = parts[3] || '';
+        await ctx.answerCbQuery();
+        if (!(persona in personaPresets)) return;
+        await this.db.setUserSettings(state.userId, { persona, customSystemPrompt: '' });
+        await this.applyAssistantActionKeyboard(ctx, this.createAssistantMoreKeyboard(state.locale, token));
+        return;
+      }
+      if (action === 'language') {
+        const user = this.db.findUser(state.userId);
+        await ctx.answerCbQuery();
+        await this.applyAssistantActionKeyboard(
+          ctx,
+          this.createAssistantLanguageKeyboard(state.locale, token, user?.preferredLanguage || state.locale || 'zh')
+        );
+        return;
+      }
+      if (action === 'language_pick') {
+        const language = this.normalizeLanguageInput(parts[3] || '');
+        await ctx.answerCbQuery();
+        if (!language) return;
+        await this.db.setUserSettings(state.userId, { preferredLanguage: language });
+        state.locale = language;
+        await this.applyAssistantActionKeyboard(ctx, this.createAssistantActionKeyboard(state.locale, token));
+        return;
+      }
+      if (action === 'favorite') {
+        const favoriteTargetId = state.assistantMessageVersionId || state.messageId;
+        const existing = this.db.findFavorite(state.chatId, state.userId, favoriteTargetId);
+        if (existing) {
+          await ctx.answerCbQuery(this.t(state.locale, 'actionAlreadySaved'));
+          return;
+        }
+        await this.db.saveFavorite({
+          chatId: state.chatId,
+          userId: state.userId,
+          sessionId: state.sessionId,
+          messageId: state.messageId,
+          messageVersionId: state.assistantMessageVersionId || '',
+          targetType: state.assistantMessageVersionId ? 'message_version' : 'message',
+          targetId: favoriteTargetId,
+          text: state.replyText,
+          sourceText: state.sourceText,
+          model: state.model,
+          locale: state.locale
+        });
+        await ctx.answerCbQuery(this.t(state.locale, 'actionSaved'));
+        return;
+      }
+      if (action === 'clear') {
+        await this.db.clearConversation(state.sessionId);
+        await ctx.answerCbQuery(this.t(state.locale, 'actionContextCleared'));
+        return;
+      }
+      if (action === 'translate') {
+        await ctx.answerCbQuery(this.t(state.locale, 'actionWorking'));
+        const translated = await this.translateAssistantReply(state);
+        if (!translated) return;
+        state.replyText = translated;
+        await this.editAssistantMessageText(ctx, translated, this.createAssistantActionKeyboard(state.locale, token));
+        return;
+      }
+      if (action === 'regen') {
+        await ctx.answerCbQuery(this.t(state.locale, 'actionWorking'));
+        const regenerated = await this.regenerateAssistantReply(state);
+        if (!regenerated?.text) return;
+        state.replyText = regenerated.text;
+        state.assistantMessageId = regenerated.assistantRef?.messageId || state.assistantMessageId || '';
+        state.assistantMessageVersionId = regenerated.assistantRef?.messageVersionId || state.assistantMessageVersionId || '';
+        await this.editAssistantMessageText(ctx, regenerated.text, this.createAssistantActionKeyboard(state.locale, token));
+        return;
+      }
+      await ctx.answerCbQuery();
+    } catch (error) {
+      this.logger.warn('Assistant callback action failed', { chatId: ctx.chat?.id, action, error: error.message });
+      await ctx.answerCbQuery(error.message.slice(0, 180));
+    }
+  }
+
+  async translateAssistantReply(state) {
+    const targetLocale = state.locale === 'zh' ? 'en' : 'zh';
+    const prompt =
+      targetLocale === 'zh'
+        ? '请将下面内容翻译成简体中文，只输出翻译结果，不要额外说明。'
+        : 'Translate the content below to English and output translation only.';
+    const result = await this.aiClient.completeWithTools({
+      model: state.model || this.config.defaultModel,
+      messages: [
+        { role: 'system', content: prompt },
+        { role: 'user', content: state.replyText || '' }
+      ],
+      tools: []
+    });
+    return result.text || '';
+  }
+
+  async regenerateAssistantReply(state) {
+    if (!state?.systemMessage || !state?.preparedMessage || !state?.sessionId) {
+      this.logger.warn('Skip regenerate: incomplete state payload', {
+        hasSystemMessage: Boolean(state?.systemMessage),
+        hasPreparedMessage: Boolean(state?.preparedMessage),
+        hasSessionId: Boolean(state?.sessionId)
+      });
+      return null;
+    }
+    const user = this.db.findUser(state.userId);
+    const model = user?.preferredModel || state.model || this.config.defaultModel;
+    const result = await this.aiClient.completeWithTools({
+      model,
+      messages: [state.systemMessage, ...(state.historyBefore || []), state.preparedMessage],
+      tools:
+        this.config.enableToolCalls && this.getProviderCapabilities().toolCalls
+          ? this.toolRegistry.getDefinitions()
+          : [],
+      toolRunner: async (toolCall) => {
+        const output = await this.toolRegistry.execute(toolCall, {
+          source: 'assistant_regenerate',
+          userId: state.userId,
+          chatId: state.chatId,
+          isAdmin: this.config.adminUserIds.has(String(state.userId)),
+          toolUsage: state.toolUsage || (state.toolUsage = { count: 0 })
+        });
+        await this.db.incrementStats('toolCalls');
+        return output;
+      }
+    });
+    await this.db.setConversation(
+      state.sessionId,
+      buildConversationHistory(
+        result.messages.filter((item) => item.role !== 'system'),
+        this.config.maxHistoryMessages
+      )
+    );
+    state.model = model;
+    return {
+      text: result.text || '',
+      assistantRef: this.db.getLatestAssistantMessageReference(state.sessionId)
+    };
+  }
+
   async handleModelCallback(ctx) {
     const model = ctx.match[1];
     const locale = this.getLocale(ctx);
@@ -854,7 +1279,7 @@ export class TelegramAIBot {
       return;
     }
     await this.db.setUserSettings(ctx.from.id, { preferredModel: model });
-    await ctx.reply(this.t(locale, 'modelSwitched', { model }), this.createModelKeyboard(model));
+    await this.editAssistantMessageText(ctx, this.t(locale, 'modelSwitched', { model }), this.createModelKeyboard(model));
   }
 
   async handlePersonaCallback(ctx) {
@@ -866,7 +1291,7 @@ export class TelegramAIBot {
       return;
     }
     await this.db.setUserSettings(ctx.from.id, { persona, customSystemPrompt: '' });
-    await ctx.reply(this.t(locale, 'personaSwitched', { persona }), this.createPersonaKeyboard(persona));
+    await this.editAssistantMessageText(ctx, this.t(locale, 'personaSwitched', { persona }), this.createPersonaKeyboard(persona));
   }
 
   async handleLanguageCallback(ctx) {
@@ -878,9 +1303,10 @@ export class TelegramAIBot {
       return;
     }
     await this.db.setUserSettings(ctx.from.id, { preferredLanguage: language });
-    await ctx.reply(
+    await this.editAssistantMessageText(
+      ctx,
       this.t(language, 'languageSet', { language: LANGUAGE_NAMES[language] || language }),
-      this.createMenuKeyboard(language)
+      this.createLanguageKeyboard(language)
     );
   }
 
@@ -954,13 +1380,18 @@ export class TelegramAIBot {
       const prepared = await this.prepareUserMessage(ctx);
       const model = user?.preferredModel || chat?.defaultModel || this.config.defaultModel;
       const sessionId = createSessionId(ctx);
-      const history = buildConversationHistory(this.db.getConversation(sessionId), this.config.maxHistoryMessages);
+      const storedContext = this.db.getConversationForContext(sessionId, {
+        maxMessages: this.config.maxHistoryMessages,
+        strategy: 'recent'
+      });
+      const history = buildConversationHistory(storedContext, this.config.maxHistoryMessages);
       const systemMessage = {
         role: 'system',
         content: createSystemPrompt(this.config, chat || {}, user || { persona: 'default', customSystemPrompt: '' }, locale)
       };
 
       const messages = [systemMessage, ...history, prepared.message];
+      const toolUsage = { count: 0 };
       const result = await this.aiClient.completeWithTools({
         model,
         messages,
@@ -969,7 +1400,13 @@ export class TelegramAIBot {
             ? this.toolRegistry.getDefinitions()
             : [],
         toolRunner: async (toolCall) => {
-          const output = await this.toolRegistry.execute(toolCall);
+          const output = await this.toolRegistry.execute(toolCall, {
+            source: 'assistant_chat',
+            userId: ctx.from?.id,
+            chatId: ctx.chat?.id,
+            isAdmin: this.isAdmin(ctx),
+            toolUsage
+          });
           await this.db.incrementStats('toolCalls');
           return output;
         }
@@ -984,8 +1421,33 @@ export class TelegramAIBot {
           this.config.maxHistoryMessages
         )
       );
+      const assistantRef = this.db.getLatestAssistantMessageReference(sessionId);
 
-      await this.sendAssistantReply(ctx, result.text || this.t(locale, 'noReply'));
+      const assistantText = result.text || this.t(locale, 'noReply');
+      const reply = await this.sendAssistantReply(ctx, assistantText);
+      if (reply?.lastMessageId) {
+        const state = this.createAssistantActionState({
+          chatId: ctx.chat.id,
+          userId: ctx.from.id,
+          messageId: reply.lastMessageId,
+          sessionId,
+          locale,
+          model,
+          preparedMessage: prepared.message,
+          historyBefore: history,
+          systemMessage,
+          sourceText: typeof prepared.message?.content === 'string' ? prepared.message.content : text || caption || '',
+          replyText: assistantText,
+          assistantMessageId: assistantRef?.messageId || '',
+          assistantMessageVersionId: assistantRef?.messageVersionId || ''
+        });
+        await ctx.telegram.editMessageReplyMarkup(
+          ctx.chat.id,
+          reply.lastMessageId,
+          undefined,
+          this.createAssistantActionKeyboard(locale, state.token).reply_markup
+        );
+      }
     } catch (error) {
       this.logger.error('Failed to handle message', error);
       await ctx.reply(this.t(locale, 'messageFailed', { error: error.message }));
@@ -1002,7 +1464,14 @@ export class TelegramAIBot {
     }
 
     if (ctx.message.photo?.length) {
-      if (!this.getProviderCapabilities().vision) {
+      const photo = ctx.message.photo[ctx.message.photo.length - 1];
+      const file = await readTelegramFile(ctx, photo.file_id, 'image.jpg', 'image/jpeg');
+      const prepared = this.multimodalActions.createImageUnderstandingMessage({
+        locale,
+        text: decoratedText,
+        file
+      });
+      if (!prepared.ok) {
         return {
           message: {
             role: 'user',
@@ -1015,35 +1484,12 @@ export class TelegramAIBot {
           }
         };
       }
-
-      const photo = ctx.message.photo[ctx.message.photo.length - 1];
-      const file = await readTelegramFile(ctx, photo.file_id, 'image.jpg', 'image/jpeg');
       return {
-        message: {
-          role: 'user',
-          content: [
-            { type: 'text', text: decoratedText || (locale === 'en' ? 'Please analyze this image.' : '请分析这张图片。') },
-            { type: 'image_url', image_url: { url: toDataUri(file.buffer, file.mimeType) } }
-          ]
-        }
+        message: prepared.message
       };
     }
 
     if (ctx.message.voice || ctx.message.audio) {
-      if (!this.getProviderCapabilities().speechTranscription) {
-        return {
-          message: {
-            role: 'user',
-            content: [
-              decoratedText,
-              this.t(locale, 'noTranscriptionSupport')
-            ]
-              .filter(Boolean)
-              .join('\n\n')
-          }
-        };
-      }
-
       const voice = ctx.message.voice || ctx.message.audio;
       const file = await readTelegramFile(
         ctx,
@@ -1051,43 +1497,61 @@ export class TelegramAIBot {
         voice.file_name || 'audio.ogg',
         voice.mime_type || 'audio/ogg'
       );
-      const transcript = await this.aiClient.transcribeAudio({
-        buffer: file.buffer,
-        filename: file.filename,
-        mimeType: file.mimeType,
+      const audioResult = await this.audioOrchestrator.transcribeIncomingAudio({
+        file,
+        locale,
+        userText: decoratedText,
         prompt: 'Transcribe the user audio accurately.'
       });
-      await this.db.incrementStats('voiceTranscriptions');
-      const prompt = [decoratedText, `Voice transcript:\n${transcript}`].filter(Boolean).join('\n\n');
+      if (!audioResult.ok) {
+        return {
+          message: {
+            role: 'user',
+            content: [decoratedText, this.t(locale, 'noTranscriptionSupport')].filter(Boolean).join('\n\n')
+          }
+        };
+      }
       return {
         message: {
           role: 'user',
-          content: prompt || transcript
+          content: audioResult.text
         }
       };
     }
 
     if (ctx.message.document) {
       const document = ctx.message.document;
-      if (!SUPPORTED_TEXT_FILE_TYPES.has(document.mime_type)) {
-        return {
-          message: {
-            role: 'user',
-            content: `${decoratedText}\n\n${this.t(locale, 'unsupportedDocument', {
-              filename: document.file_name || 'document',
-              mimeType: document.mime_type
-            })}`.trim()
-          }
-        };
-      }
-
       const file = await readTelegramFile(
         ctx,
         document.file_id,
         document.file_name || 'document.txt',
-        document.mime_type || 'text/plain'
+        document.mime_type || 'application/octet-stream'
       );
-      const extracted = truncateText(file.buffer.toString('utf8'), this.config.maxInputChars);
+      const parsed = await this.documentParser.parse({
+        buffer: file.buffer,
+        filename: file.filename,
+        mimeType: file.mimeType
+      });
+
+      if (!parsed.ok) {
+        const key =
+          parsed.error?.code === 'DOCUMENT_TOO_LARGE'
+            ? 'documentTooLarge'
+            : parsed.error?.code === 'DOCUMENT_PARSE_FAILED'
+              ? 'documentParseFailed'
+              : 'unsupportedDocument';
+        return {
+          message: {
+            role: 'user',
+            content: `${decoratedText}\n\n${this.t(locale, key, {
+              filename: document.file_name || 'document',
+              mimeType: document.mime_type,
+              error: parsed.error?.message || ''
+            })}`.trim()
+          }
+        };
+      }
+      const extracted = truncateText(parsed.text, this.config.maxInputChars);
       return {
         message: {
           role: 'user',
@@ -1116,15 +1580,24 @@ export class TelegramAIBot {
 
   async sendAssistantReply(ctx, text, extra = {}) {
     const chunks = splitMessage(text, this.config.maxOutputChars);
+    let lastMessageId = null;
     for (const chunk of chunks) {
       if (!this.config.enableStreamingReplies) {
-        await sendTextReply(ctx, chunk, this.config.maxOutputChars, extra);
+        const sent = await ctx.reply(chunk, {
+          ...extra,
+          reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined
+        });
+        lastMessageId = sent?.message_id || lastMessageId;
         continue;
       }
 
       const frames = createStreamingFrames(chunk, this.config.streamingMinLength);
       if (frames.length <= 1) {
-        await sendTextReply(ctx, chunk, this.config.maxOutputChars, extra);
+        const sent = await ctx.reply(chunk, {
+          ...extra,
+          reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined
+        });
+        lastMessageId = sent?.message_id || lastMessageId;
         continue;
       }
 
@@ -1132,6 +1605,7 @@ export class TelegramAIBot {
         ...extra,
         reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined
       });
+      lastMessageId = sent?.message_id || lastMessageId;
 
       let streamFailed = false;
       let lastFrame = '';
@@ -1151,12 +1625,14 @@ export class TelegramAIBot {
       }
 
       if (streamFailed && lastFrame !== chunk) {
-        await ctx.reply(chunk, {
+        const fallback = await ctx.reply(chunk, {
           ...extra,
           reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined
         });
+        lastMessageId = fallback?.message_id || lastMessageId;
       }
     }
+    return { lastMessageId };
   }
 
   async tryEditStreamingMessage(ctx, messageId, text, extra = {}) {

@@ -40,6 +40,15 @@ test('loadConfig resolves gemini provider aliases and keys', () => {
   assert.equal(config.geminiApiKey, 'gemini-key');
 });
 
+test('loadConfig resolves gemini-live aliases and keys', () => {
+  resetEnv();
+  process.env.AI_PROVIDER = 'google-live';
+  process.env.GEMINI_API_KEY = 'gemini-shared-key';
+  const config = loadConfig();
+  assert.equal(config.aiProvider, 'gemini-live');
+  assert.equal(config.geminiLiveApiKey, 'gemini-shared-key');
+});
+
 test('loadConfig resolves first-batch native provider aliases', () => {
   resetEnv();
   process.env.AI_PROVIDER = 'xai';
@@ -77,4 +86,29 @@ test('loadConfig defaults to SQLite storage and streaming replies', () => {
   assert.match(config.databaseFile, /bot-data\.db$/);
   assert.match(config.legacyDataFile, /bot-data\.json$/);
   assert.equal(config.enableStreamingReplies, true);
+});
+
+test('loadConfig parses tool policy and document parsing options', () => {
+  resetEnv();
+  process.env.TOOL_ALLOWED_NAMES = 'get_time,web_search';
+  process.env.NETWORK_TOOL_SCOPE = 'admin';
+  process.env.DOCUMENT_MAX_BYTES = '2048';
+  const config = loadConfig();
+  assert.equal(config.toolAllowedNames.has('get_time'), true);
+  assert.equal(config.toolAllowedNames.has('web_search'), true);
+  assert.equal(config.networkToolScope, 'admin');
+  assert.equal(config.documentMaxBytes, 2048);
+});
+
+test('loadConfig parses admin API options', () => {
+  resetEnv();
+  process.env.ADMIN_API_ENABLED = 'true';
+  process.env.ADMIN_API_PORT = '3900';
+  process.env.ADMIN_API_PREFIX = '/admin/api/v2';
+  process.env.ADMIN_API_TOKEN = 'token-123';
+  const config = loadConfig();
+  assert.equal(config.adminApiEnabled, true);
+  assert.equal(config.adminApiPort, 3900);
+  assert.equal(config.adminApiPrefix, '/admin/api/v2');
+  assert.equal(config.adminApiToken, 'token-123');
 });

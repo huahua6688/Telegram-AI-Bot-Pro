@@ -33,6 +33,38 @@ test('createAIClient creates first-batch native provider clients via registry', 
   assert.equal(capabilities.toolCalls, true);
   assert.equal(capabilities.vision, true);
   assert.equal(capabilities.imageGeneration, false);
+  assert.equal(capabilities.liveAudio, false);
+  assert.equal(capabilities.liveTranslate, false);
+});
+
+test('createAIClient creates gemini-live provider client via registry', () => {
+  const client = createAIClient(
+    {
+      aiProvider: 'gemini-live',
+      geminiLiveApiKey: 'gemini-live-key',
+      geminiLiveBaseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+      requestTimeoutMs: 1000,
+      temperature: 0.6,
+      aiMaxToolSteps: 1,
+      geminiLiveTranscriptionModel: 'gemini-2.5-flash-preview-native-audio-dialog',
+      geminiLiveTtsModel: 'gemini-2.5-flash-preview-native-audio-dialog',
+      ttsModel: 'x',
+      ttsVoice: 'x',
+      transcriptionModel: 'x',
+      imageModel: 'x',
+      imageSize: '1024x1024'
+    },
+    logger
+  );
+
+  assert.equal(client.getProviderName(), 'gemini-live');
+  const capabilities = client.getCapabilities();
+  assert.equal(capabilities.chat, true);
+  assert.equal(capabilities.toolCalls, false);
+  assert.equal(capabilities.speechTranscription, true);
+  assert.equal(capabilities.speechSynthesis, true);
+  assert.equal(capabilities.liveAudio, true);
+  assert.equal(capabilities.nativeAudio, true);
 });
 
 test('createAIClient throws for unknown provider', () => {
