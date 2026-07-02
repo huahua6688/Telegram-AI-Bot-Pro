@@ -55,8 +55,18 @@ function resolveKind({ filename = '', mimeType = '' }) {
 }
 
 async function parsePdf(buffer) {
-  const result = await pdfParse(buffer);
-  return String(result.text || '').trim();
+  const parser = new PDFParse({
+    data: buffer
+  });
+
+  try {
+    const result = await parser.parse();
+    return String(result.text || "").trim();
+  } finally {
+    if (typeof parser.destroy === "function") {
+      await parser.destroy();
+    }
+  }
 }
 
 async function parseDocx(buffer) {
@@ -84,21 +94,6 @@ export class DocumentParser {
     this.config = config;
     this.logger = logger;
   }
-
-  async function parsePdf(buffer) {
-  const parser = new PDFParse({
-    data: buffer
-  });
-
-  try {
-    const result = await parser.parse();
-    return String(result.text || "").trim();
-  } finally {
-    if (typeof parser.destroy === "function") {
-      await parser.destroy();
-    }
-  }
-}
 
     const { kind, extension } = resolveKind({ filename, mimeType });
     if (!kind) {
