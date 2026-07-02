@@ -1,7 +1,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { normalizeLanguageCode } from './utils/telegram.js';
+
+const CURRENT_SCHEMA_VERSION = 2;
 
 const defaultData = {
   meta: {
@@ -61,6 +64,10 @@ function toBoolean(value) {
   return Boolean(value);
 }
 
+function toIntegerBoolean(value) {
+  return value ? 1 : 0;
+}
+
 function rowToUser(row) {
   if (!row) return undefined;
   return {
@@ -100,10 +107,20 @@ function rowToChat(row) {
   };
 }
 
-function mapPatchToColumns(patch, columnMap) {
-  return Object.entries(patch)
-    .filter(([key, value]) => columnMap[key] && value !== undefined)
-    .map(([key, value]) => [columnMap[key], value]);
+function rowToSession(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    chatId: row.chat_id,
+    userId: row.user_id,
+    threadId: row.thread_id || 'main',
+    name: row.name || 'main',
+    status: row.status || 'active',
+    isDefault: toBoolean(row.is_default),
+    lastAccessedAt: row.last_accessed_at || row.updated_at || '',
+    createdAt: row.created_at || '',
+    updatedAt: row.updated_at || ''
+  };
 }
 
 function parseLegacyData(content) {
@@ -124,6 +141,58 @@ function parseLegacyData(content) {
   }
 }
 
+function mapPatchToColumns(patch, columnMap) {
+  return Object.entries(patch)
+    .filter(([key, value]) => columnMap[key] && value !== undefined)
+    .map(([key, value]) => [columnMap[key], value]);
+}
+
+function parseSessionIdentity(sessionId = '') {
+  const [chatId = '', userId = '', threadId = 'main'] = String(sessionId).split(':');
+  return {
+    chatId: chatId || '',
+    userId: userId || '',
+    threadId: threadId || 'main'
+  };
+}
+
+function createMessageId(sessionId, sequence) {
+  return `msg:${sessionId}:${sequence}`;
+}
+
+function createVersionId(messageId, version) {
+  return `${messageId}:v${version}`;
+}
+
+function normalizeFavoriteTarget({ targetType = 'message', targetId = '', promptId = '', messageVersionId = '', messageId = '' }) {
+  const resolvedType = targetType || 'message';
+  if (resolvedType === 'prompt') {
+    return {
+      targetType: 'prompt',
+      targetId: String(targetId || promptId || ''),
+      promptId: String(promptId || targetId || ''),
+      messageVersionId: '',
+      messageId: ''
+    };
+  }
+  if (resolvedType === 'message_version') {
+    return {
+      targetType: 'message_version',
+      targetId: String(targetId || messageVersionId || ''),
+      promptId: '',
+      messageVersionId: String(messageVersionId || targetId || ''),
+      messageId: String(messageId || '')
+    };
+  }
+  return {
+    targetType: 'message',
+    targetId: String(targetId || messageId || ''),
+    promptId: '',
+    messageVersionId: '',
+    messageId: String(messageId || targetId || '')
+  };
+}
+
 export class BotDatabase {
   constructor(filePath, legacyFilePath = '') {
     this.filePath = filePath;
@@ -134,12 +203,38 @@ export class BotDatabase {
   async init() {
     await fs.mkdir(path.dirname(this.filePath), { recursive: true });
     this.db = new DatabaseSync(this.filePath);
+    this.db.exec('PRAGMA journal_mode = WAL;');
+
     this.db.exec(`
-      PRAGMA journal_mode = WAL;
       CREATE TABLE IF NOT EXISTS meta (
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
       );
+    `);
+
+    await this.importLegacyJsonIfNeeded();
+    this.runMigrations();
+
+    this.setMeta('createdAt', this.getMeta('createdAt') || now());
+    this.setMeta('updatedAt', now());
+    this.ensureStatsRow(this.getStats().startedAt || now());
+  }
+
+  runMigrations() {
+    const currentVersion = Number.parseInt(this.getMeta('schemaVersion') || '0', 10) || 0;
+    for (let version = currentVersion + 1; version <= CURRENT_SCHEMA_VERSION; version += 1) {
+      if (version === 1) {
+        this.applySchemaV1();
+      }
+      if (version === 2) {
+        this.applySchemaV2();
+      }
+      this.setMeta('schemaVersion', String(version));
+    }
+  }
+
+  applySchemaV1() {
+    this.db.exec(`
       CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
         username TEXT NOT NULL DEFAULT '',
@@ -200,16 +295,137 @@ export class BotDatabase {
         UNIQUE(chat_id, user_id, message_id)
       );
     `);
+  }
 
-    const createdAt = this.getMeta('createdAt');
-    if (!createdAt) {
-      await this.importLegacyJsonIfNeeded();
-      this.setMeta('createdAt', this.getMeta('createdAt') || now());
-      this.ensureStatsRow(this.getStats().startedAt || now());
+  applySchemaV2() {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS sessions (
+        id TEXT PRIMARY KEY,
+        chat_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        thread_id TEXT NOT NULL DEFAULT 'main',
+        name TEXT NOT NULL DEFAULT 'main',
+        status TEXT NOT NULL DEFAULT 'active',
+        is_default INTEGER NOT NULL DEFAULT 0,
+        last_accessed_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        role TEXT NOT NULL,
+        sequence INTEGER NOT NULL,
+        parent_message_id TEXT,
+        active_version INTEGER NOT NULL DEFAULT 1,
+        status TEXT NOT NULL DEFAULT 'active',
+        source TEXT NOT NULL DEFAULT 'chat',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        UNIQUE(session_id, sequence),
+        FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+        FOREIGN KEY(parent_message_id) REFERENCES messages(id) ON DELETE SET NULL
+      );
+      CREATE TABLE IF NOT EXISTS message_versions (
+        id TEXT PRIMARY KEY,
+        message_id TEXT NOT NULL,
+        version INTEGER NOT NULL,
+        content_json TEXT NOT NULL,
+        model TEXT NOT NULL DEFAULT '',
+        prompt_snapshot_json TEXT NOT NULL DEFAULT '',
+        context_snapshot_json TEXT NOT NULL DEFAULT '',
+        is_current INTEGER NOT NULL DEFAULT 1,
+        created_at TEXT NOT NULL,
+        UNIQUE(message_id, version),
+        FOREIGN KEY(message_id) REFERENCES messages(id) ON DELETE CASCADE
+      );
+      CREATE TABLE IF NOT EXISTS prompts (
+        id TEXT PRIMARY KEY,
+        prompt_key TEXT NOT NULL,
+        version INTEGER NOT NULL DEFAULT 1,
+        parent_prompt_id TEXT,
+        owner_user_id TEXT NOT NULL DEFAULT '',
+        chat_id TEXT NOT NULL DEFAULT '',
+        session_id TEXT NOT NULL DEFAULT '',
+        scope TEXT NOT NULL DEFAULT 'user',
+        kind TEXT NOT NULL DEFAULT 'system',
+        name TEXT NOT NULL DEFAULT '',
+        content TEXT NOT NULL,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        is_default INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(parent_prompt_id) REFERENCES prompts(id) ON DELETE SET NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_sessions_user_chat ON sessions(user_id, chat_id, status, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_sessions_last_accessed ON sessions(last_accessed_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_messages_session_sequence ON messages(session_id, sequence);
+      CREATE INDEX IF NOT EXISTS idx_messages_session_role ON messages(session_id, role, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_message_versions_message_current ON message_versions(message_id, is_current, version DESC);
+      CREATE INDEX IF NOT EXISTS idx_prompts_scope_owner ON prompts(scope, owner_user_id, chat_id, session_id, is_active, updated_at DESC);
+    `);
+
+    this.ensureFavoritesV2Columns();
+    this.backfillFavoritesTargets();
+    this.migrateConversationsToStructuredHistory();
+  }
+
+  ensureFavoritesV2Columns() {
+    const columns = this.db.prepare('PRAGMA table_info(favorites)').all();
+    const existing = new Set(columns.map((column) => column.name));
+    const alterStatements = [
+      existing.has('target_type') ? '' : "ALTER TABLE favorites ADD COLUMN target_type TEXT NOT NULL DEFAULT 'message'",
+      existing.has('target_id') ? '' : "ALTER TABLE favorites ADD COLUMN target_id TEXT NOT NULL DEFAULT ''",
+      existing.has('session_id') ? '' : "ALTER TABLE favorites ADD COLUMN session_id TEXT NOT NULL DEFAULT ''",
+      existing.has('message_version_id') ? '' : "ALTER TABLE favorites ADD COLUMN message_version_id TEXT NOT NULL DEFAULT ''",
+      existing.has('prompt_id') ? '' : "ALTER TABLE favorites ADD COLUMN prompt_id TEXT NOT NULL DEFAULT ''",
+      existing.has('updated_at') ? '' : "ALTER TABLE favorites ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''"
+    ].filter(Boolean);
+
+    for (const sql of alterStatements) {
+      this.db.exec(sql);
     }
 
-    this.setMeta('updatedAt', now());
-    this.ensureStatsRow(this.getStats().startedAt || now());
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_favorites_user_type_created ON favorites(user_id, target_type, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_favorites_chat_session ON favorites(chat_id, session_id, created_at DESC);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_favorites_target_unique ON favorites(chat_id, user_id, target_type, target_id);
+    `);
+  }
+
+  backfillFavoritesTargets() {
+    this.db.prepare(
+      `UPDATE favorites
+       SET target_type = CASE WHEN target_type = '' THEN 'message' ELSE target_type END,
+           target_id = CASE
+             WHEN target_id != '' THEN target_id
+             ELSE ('legacy:' || chat_id || ':' || user_id || ':' || message_id)
+           END,
+           updated_at = CASE WHEN updated_at = '' THEN created_at ELSE updated_at END
+       WHERE target_id = '' OR target_type = '' OR updated_at = ''`
+    ).run();
+  }
+
+  migrateConversationsToStructuredHistory() {
+    const rows = this.db.prepare('SELECT session_id, messages_json, created_at, updated_at FROM conversations').all();
+    for (const row of rows) {
+      let messages = [];
+      try {
+        messages = JSON.parse(row.messages_json);
+      } catch {
+        messages = [];
+      }
+      if (!Array.isArray(messages) || messages.length === 0) {
+        this.ensureSessionFromId(row.session_id, row.created_at || now(), row.updated_at || now());
+        continue;
+      }
+      this.syncConversationMessages(row.session_id, messages, {
+        source: 'legacy',
+        createdAt: row.created_at || now(),
+        updatedAt: row.updated_at || now(),
+        touchMeta: false
+      });
+    }
   }
 
   getMeta(key) {
@@ -233,6 +449,13 @@ export class BotDatabase {
   }
 
   async importLegacyJsonIfNeeded() {
+    const createdAt = this.getMeta('createdAt');
+    if (createdAt) {
+      return;
+    }
+
+    this.applySchemaV1();
+
     if (!this.legacyFilePath) return;
 
     let content;
@@ -459,7 +682,157 @@ export class BotDatabase {
     return this.findUser(userId);
   }
 
+  ensureSessionFromId(sessionId, createdAt = now(), updatedAt = now()) {
+    const identity = parseSessionIdentity(sessionId);
+    const timestamp = updatedAt || now();
+    this.db
+      .prepare(
+        `INSERT INTO sessions(
+          id, chat_id, user_id, thread_id, name, status, is_default, last_accessed_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, 'main', 'active', 1, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          last_accessed_at = excluded.last_accessed_at,
+          updated_at = excluded.updated_at`
+      )
+      .run(String(sessionId), identity.chatId, identity.userId, identity.threadId, timestamp, createdAt || timestamp, timestamp);
+    return this.findSession(sessionId);
+  }
+
+  findSession(sessionId) {
+    const row = this.db.prepare('SELECT * FROM sessions WHERE id = ?').get(String(sessionId));
+    return rowToSession(row);
+  }
+
+  async createSession({ chatId, userId, threadId = 'main', name = '', isDefault = false }) {
+    const normalizedName = name?.trim() || (isDefault ? 'main' : `session-${Date.now()}`);
+    const id = isDefault
+      ? `${String(chatId)}:${String(userId)}:${String(threadId || 'main')}`
+      : `${String(chatId)}:${String(userId)}:${String(threadId || 'main')}:${randomUUID().slice(0, 8)}`;
+    const timestamp = now();
+    this.db
+      .prepare(
+        `INSERT INTO sessions(
+          id, chat_id, user_id, thread_id, name, status, is_default, last_accessed_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`
+      )
+      .run(id, String(chatId), String(userId), String(threadId || 'main'), normalizedName, toIntegerBoolean(isDefault), timestamp, timestamp, timestamp);
+    await this.write();
+    return this.findSession(id);
+  }
+
+  listSessions({ chatId = '', userId = '', threadId = '', status = 'active', limit = 20, offset = 0 } = {}) {
+    const filters = [];
+    const params = [];
+    if (chatId) {
+      filters.push('chat_id = ?');
+      params.push(String(chatId));
+    }
+    if (userId) {
+      filters.push('user_id = ?');
+      params.push(String(userId));
+    }
+    if (threadId) {
+      filters.push('thread_id = ?');
+      params.push(String(threadId));
+    }
+    if (status) {
+      filters.push('status = ?');
+      params.push(String(status));
+    }
+    const whereClause = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM sessions
+         ${whereClause}
+         ORDER BY last_accessed_at DESC, created_at DESC
+         LIMIT ? OFFSET ?`
+      )
+      .all(...params, Math.max(1, Number(limit) || 20), Math.max(0, Number(offset) || 0));
+    return rows.map(rowToSession);
+  }
+
+  async setSessionStatus(sessionId, status = 'active') {
+    this.db
+      .prepare('UPDATE sessions SET status = ?, updated_at = ?, last_accessed_at = ? WHERE id = ?')
+      .run(String(status || 'active'), now(), now(), String(sessionId));
+    await this.write();
+    return this.findSession(sessionId);
+  }
+
+  async touchSession(sessionId) {
+    const timestamp = now();
+    this.db
+      .prepare('UPDATE sessions SET last_accessed_at = ?, updated_at = ? WHERE id = ?')
+      .run(timestamp, timestamp, String(sessionId));
+    await this.write();
+  }
+
+  async deleteSession(sessionId) {
+    this.db.prepare('DELETE FROM sessions WHERE id = ?').run(String(sessionId));
+    this.db.prepare('DELETE FROM conversations WHERE session_id = ?').run(String(sessionId));
+    await this.write();
+  }
+
+  getConversationEntries(sessionId, { limit = 0, offset = 0, order = 'asc' } = {}) {
+    this.ensureSessionFromId(String(sessionId));
+    const sortOrder = order === 'desc' ? 'DESC' : 'ASC';
+    const limitClause = limit > 0 ? 'LIMIT ? OFFSET ?' : '';
+    const params = [String(sessionId)];
+    if (limit > 0) {
+      params.push(Number(limit), Number(offset || 0));
+    }
+
+    const rows = this.db
+      .prepare(
+        `SELECT
+           m.id AS message_id,
+           m.role,
+           m.sequence,
+           m.active_version,
+           mv.id AS message_version_id,
+           mv.content_json,
+           mv.model,
+           mv.created_at AS version_created_at,
+           m.created_at,
+           m.updated_at
+         FROM messages m
+         JOIN message_versions mv
+           ON mv.message_id = m.id
+          AND mv.version = m.active_version
+         WHERE m.session_id = ?
+         ORDER BY m.sequence ${sortOrder}
+         ${limitClause}`
+      )
+      .all(...params);
+
+    return rows.map((row) => {
+      let content = '';
+      try {
+        content = JSON.parse(row.content_json);
+      } catch {
+        content = '';
+      }
+      return {
+        messageId: row.message_id,
+        messageVersionId: row.message_version_id,
+        role: row.role,
+        content,
+        version: row.active_version,
+        model: row.model || '',
+        sequence: row.sequence,
+        createdAt: row.created_at,
+        updatedAt: row.updated_at,
+        versionCreatedAt: row.version_created_at
+      };
+    });
+  }
+
   getConversation(sessionId) {
+    const entries = this.getConversationEntries(sessionId, { order: 'asc' });
+    if (entries.length > 0) {
+      return entries.map((entry) => ({ role: entry.role, content: entry.content }));
+    }
+
     const row = this.db
       .prepare('SELECT messages_json FROM conversations WHERE session_id = ?')
       .get(String(sessionId));
@@ -471,50 +844,439 @@ export class BotDatabase {
     }
   }
 
-  async setConversation(sessionId, messages) {
-    const existing = this.db
-      .prepare('SELECT created_at FROM conversations WHERE session_id = ?')
-      .get(String(sessionId));
-    const timestamp = now();
-    this.db
+  getConversationForContext(sessionId, { maxMessages = 0, strategy = 'recent' } = {}) {
+    const allMessages = this.getConversation(sessionId);
+    if (maxMessages <= 0 || strategy !== 'recent') {
+      return allMessages;
+    }
+    const approximateLimit = maxMessages * 3;
+    return allMessages.slice(-approximateLimit);
+  }
+
+  getMessageVersionHistory(messageId) {
+    const rows = this.db
       .prepare(
-        `INSERT OR REPLACE INTO conversations(session_id, messages_json, created_at, updated_at)
-         VALUES (?, ?, ?, ?)`
+        `SELECT id, message_id, version, content_json, model, is_current, created_at
+         FROM message_versions
+         WHERE message_id = ?
+         ORDER BY version DESC`
       )
-      .run(String(sessionId), JSON.stringify(messages || []), existing?.created_at || timestamp, timestamp);
+      .all(String(messageId));
+    return rows.map((row) => {
+      let content = '';
+      try {
+        content = JSON.parse(row.content_json);
+      } catch {
+        content = '';
+      }
+      return {
+        id: row.id,
+        messageId: row.message_id,
+        version: row.version,
+        content,
+        model: row.model || '',
+        isCurrent: toBoolean(row.is_current),
+        createdAt: row.created_at
+      };
+    });
+  }
+
+  getLatestAssistantMessageReference(sessionId) {
+    const row = this.db
+      .prepare(
+        `SELECT
+           m.id AS message_id,
+           m.active_version,
+           mv.id AS message_version_id,
+           mv.content_json,
+           mv.model
+         FROM messages m
+         JOIN message_versions mv
+           ON mv.message_id = m.id
+          AND mv.version = m.active_version
+         WHERE m.session_id = ? AND m.role = 'assistant'
+         ORDER BY m.sequence DESC
+         LIMIT 1`
+      )
+      .get(String(sessionId));
+
+    if (!row) return null;
+    let content = '';
+    try {
+      content = JSON.parse(row.content_json);
+    } catch {
+      content = '';
+    }
+    return {
+      messageId: row.message_id,
+      messageVersionId: row.message_version_id,
+      version: row.active_version,
+      content,
+      model: row.model || ''
+    };
+  }
+
+  syncConversationMessages(sessionId, messages, { source = 'chat', createdAt = '', updatedAt = '', touchMeta = true } = {}) {
+    const safeMessages = Array.isArray(messages) ? messages : [];
+    const timestamp = updatedAt || now();
+    const createdTimestamp = createdAt || timestamp;
+    this.ensureSessionFromId(String(sessionId), createdTimestamp, timestamp);
+
+    const existingRows = this.db
+      .prepare('SELECT id, role, sequence, active_version, created_at FROM messages WHERE session_id = ? ORDER BY sequence ASC')
+      .all(String(sessionId));
+    const existingBySequence = new Map(existingRows.map((row) => [row.sequence, row]));
+
+    const beginManagedTransaction = this.db.isTransaction ? !this.db.isTransaction : true;
+    if (beginManagedTransaction) {
+      this.db.exec('BEGIN');
+    }
+
+    try {
+      for (let index = 0; index < safeMessages.length; index += 1) {
+        const sequence = index + 1;
+        const item = safeMessages[index] || {};
+        const role = String(item.role || 'user');
+        const contentJson = JSON.stringify(item.content ?? '');
+        const model = String(item.model || '');
+        const existing = existingBySequence.get(sequence);
+
+        if (!existing || existing.role !== role) {
+          if (existing && existing.role !== role) {
+            this.db.prepare('DELETE FROM messages WHERE id = ?').run(existing.id);
+          }
+
+          const messageId = createMessageId(sessionId, sequence);
+          const versionId = createVersionId(messageId, 1);
+          this.db
+            .prepare(
+              `INSERT INTO messages(
+                id, session_id, role, sequence, parent_message_id, active_version, status, source, created_at, updated_at
+              ) VALUES (?, ?, ?, ?, NULL, 1, 'active', ?, ?, ?)
+              ON CONFLICT(id) DO UPDATE SET
+                role = excluded.role,
+                sequence = excluded.sequence,
+                source = excluded.source,
+                updated_at = excluded.updated_at`
+            )
+            .run(messageId, String(sessionId), role, sequence, source, createdTimestamp, timestamp);
+
+          this.db
+            .prepare(
+              `INSERT INTO message_versions(
+                id, message_id, version, content_json, model, prompt_snapshot_json, context_snapshot_json, is_current, created_at
+              ) VALUES (?, ?, 1, ?, ?, '', '', 1, ?)
+              ON CONFLICT(message_id, version) DO UPDATE SET
+                content_json = excluded.content_json,
+                model = excluded.model,
+                is_current = 1`
+            )
+            .run(versionId, messageId, contentJson, model, timestamp);
+
+          this.db.prepare('UPDATE message_versions SET is_current = 0 WHERE message_id = ? AND id != ?').run(messageId, versionId);
+          continue;
+        }
+
+        const currentVersionRow = this.db
+          .prepare('SELECT id, version, content_json FROM message_versions WHERE message_id = ? AND version = ?')
+          .get(existing.id, existing.active_version);
+
+        if (!currentVersionRow || currentVersionRow.content_json !== contentJson) {
+          const nextVersion = Number(existing.active_version || 0) + 1;
+          const versionId = createVersionId(existing.id, nextVersion);
+          this.db.prepare('UPDATE message_versions SET is_current = 0 WHERE message_id = ?').run(existing.id);
+          this.db
+            .prepare(
+              `INSERT INTO message_versions(
+                id, message_id, version, content_json, model, prompt_snapshot_json, context_snapshot_json, is_current, created_at
+              ) VALUES (?, ?, ?, ?, ?, '', '', 1, ?)
+              ON CONFLICT(message_id, version) DO UPDATE SET
+                content_json = excluded.content_json,
+                model = excluded.model,
+                is_current = 1`
+            )
+            .run(versionId, existing.id, nextVersion, contentJson, model, timestamp);
+
+          this.db
+            .prepare('UPDATE messages SET active_version = ?, updated_at = ? WHERE id = ?')
+            .run(nextVersion, timestamp, existing.id);
+        } else {
+          this.db
+            .prepare('UPDATE messages SET updated_at = ? WHERE id = ?')
+            .run(timestamp, existing.id);
+        }
+      }
+
+      if (existingRows.length > safeMessages.length) {
+        this.db
+          .prepare('DELETE FROM messages WHERE session_id = ? AND sequence > ?')
+          .run(String(sessionId), safeMessages.length);
+      }
+
+      this.db
+        .prepare('UPDATE sessions SET last_accessed_at = ?, updated_at = ? WHERE id = ?')
+        .run(timestamp, timestamp, String(sessionId));
+
+      this.db
+        .prepare(
+          `INSERT OR REPLACE INTO conversations(session_id, messages_json, created_at, updated_at)
+           VALUES (?, ?, COALESCE((SELECT created_at FROM conversations WHERE session_id = ?), ?), ?)`
+        )
+        .run(String(sessionId), JSON.stringify(safeMessages), String(sessionId), createdTimestamp, timestamp);
+
+      if (beginManagedTransaction) {
+        this.db.exec('COMMIT');
+      }
+    } catch (error) {
+      if (beginManagedTransaction) {
+        this.db.exec('ROLLBACK');
+      }
+      throw error;
+    }
+
+    if (touchMeta) {
+      this.setMeta('updatedAt', now());
+    }
+  }
+
+  async setConversation(sessionId, messages) {
+    this.syncConversationMessages(sessionId, messages, { source: 'chat', touchMeta: true });
     await this.write();
   }
 
   async clearConversation(sessionId) {
+    this.db.prepare('DELETE FROM messages WHERE session_id = ?').run(String(sessionId));
     this.db.prepare('DELETE FROM conversations WHERE session_id = ?').run(String(sessionId));
-    await this.write();
+    await this.touchSession(sessionId);
   }
 
-  findFavorite(chatId, userId, messageId) {
+  findFavorite(chatId, userId, messageIdOrTargetId) {
     return this.db
-      .prepare('SELECT * FROM favorites WHERE chat_id = ? AND user_id = ? AND message_id = ?')
-      .get(String(chatId), String(userId), String(messageId));
+      .prepare(
+        `SELECT * FROM favorites
+         WHERE chat_id = ? AND user_id = ?
+           AND (message_id = ? OR target_id = ?)
+         LIMIT 1`
+      )
+      .get(String(chatId), String(userId), String(messageIdOrTargetId), String(messageIdOrTargetId));
   }
 
-  async saveFavorite({ chatId, userId, messageId, text, sourceText = '', model = '', locale = 'zh' }) {
+  listFavorites({ chatId = '', userId = '', sessionId = '', targetType = '', limit = 50, offset = 0 } = {}) {
+    const filters = [];
+    const params = [];
+    if (chatId) {
+      filters.push('chat_id = ?');
+      params.push(String(chatId));
+    }
+    if (userId) {
+      filters.push('user_id = ?');
+      params.push(String(userId));
+    }
+    if (sessionId) {
+      filters.push('session_id = ?');
+      params.push(String(sessionId));
+    }
+    if (targetType) {
+      filters.push('target_type = ?');
+      params.push(String(targetType));
+    }
+
+    const whereClause = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
+    return this.db
+      .prepare(
+        `SELECT * FROM favorites
+         ${whereClause}
+         ORDER BY created_at DESC
+         LIMIT ? OFFSET ?`
+      )
+      .all(...params, Math.max(1, Number(limit) || 50), Math.max(0, Number(offset) || 0));
+  }
+
+  async saveFavorite({
+    chatId,
+    userId,
+    sessionId = '',
+    messageId = '',
+    messageVersionId = '',
+    promptId = '',
+    targetType = '',
+    targetId = '',
+    text,
+    sourceText = '',
+    model = '',
+    locale = 'zh'
+  }) {
+    const resolved = normalizeFavoriteTarget({ targetType, targetId, promptId, messageVersionId, messageId });
+    const timestamp = now();
+
     this.db
       .prepare(
-        `INSERT OR IGNORE INTO favorites(
-          chat_id, user_id, message_id, text, source_text, model, locale, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT INTO favorites(
+          chat_id, user_id, message_id, text, source_text, model, locale, created_at,
+          target_type, target_id, session_id, message_version_id, prompt_id, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(chat_id, user_id, target_type, target_id)
+        DO UPDATE SET
+          text = excluded.text,
+          source_text = excluded.source_text,
+          model = excluded.model,
+          locale = excluded.locale,
+          session_id = excluded.session_id,
+          message_version_id = excluded.message_version_id,
+          prompt_id = excluded.prompt_id,
+          updated_at = excluded.updated_at`
       )
       .run(
         String(chatId),
         String(userId),
-        String(messageId),
+        String(resolved.messageId || messageId || resolved.targetId),
         String(text || ''),
         String(sourceText || ''),
         String(model || ''),
         String(locale || 'zh'),
-        now()
+        timestamp,
+        String(resolved.targetType),
+        String(resolved.targetId),
+        String(sessionId || ''),
+        String(resolved.messageVersionId || ''),
+        String(resolved.promptId || ''),
+        timestamp
       );
     await this.write();
-    return this.findFavorite(chatId, userId, messageId);
+
+    return this.db
+      .prepare(
+        `SELECT * FROM favorites
+         WHERE chat_id = ? AND user_id = ? AND target_type = ? AND target_id = ?`
+      )
+      .get(String(chatId), String(userId), String(resolved.targetType), String(resolved.targetId));
+  }
+
+  async savePrompt({
+    promptKey = '',
+    parentPromptId = '',
+    ownerUserId = '',
+    chatId = '',
+    sessionId = '',
+    scope = 'user',
+    kind = 'system',
+    name = '',
+    content = '',
+    isActive = true,
+    isDefault = false
+  }) {
+    const key = String(promptKey || randomUUID());
+    const latest = this.db
+      .prepare('SELECT id, version FROM prompts WHERE prompt_key = ? ORDER BY version DESC LIMIT 1')
+      .get(key);
+    const version = latest ? Number(latest.version || 1) + 1 : 1;
+    const id = randomUUID();
+    const parentId = parentPromptId || latest?.id || null;
+    const timestamp = now();
+
+    if (isDefault) {
+      this.db
+        .prepare(
+          `UPDATE prompts
+           SET is_default = 0, updated_at = ?
+           WHERE scope = ?
+             AND owner_user_id = ?
+             AND chat_id = ?
+             AND session_id = ?
+             AND kind = ?`
+        )
+        .run(timestamp, String(scope), String(ownerUserId), String(chatId), String(sessionId), String(kind));
+    }
+
+    this.db
+      .prepare(
+        `INSERT INTO prompts(
+          id, prompt_key, version, parent_prompt_id, owner_user_id, chat_id, session_id,
+          scope, kind, name, content, is_active, is_default, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        id,
+        key,
+        version,
+        parentId,
+        String(ownerUserId),
+        String(chatId),
+        String(sessionId),
+        String(scope),
+        String(kind),
+        String(name),
+        String(content),
+        toIntegerBoolean(Boolean(isActive)),
+        toIntegerBoolean(Boolean(isDefault)),
+        timestamp,
+        timestamp
+      );
+
+    await this.write();
+    return this.getPromptById(id);
+  }
+
+  getPromptById(promptId) {
+    const row = this.db.prepare('SELECT * FROM prompts WHERE id = ?').get(String(promptId));
+    if (!row) return null;
+    return {
+      id: row.id,
+      promptKey: row.prompt_key,
+      version: row.version,
+      parentPromptId: row.parent_prompt_id || '',
+      ownerUserId: row.owner_user_id,
+      chatId: row.chat_id,
+      sessionId: row.session_id,
+      scope: row.scope,
+      kind: row.kind,
+      name: row.name,
+      content: row.content,
+      isActive: toBoolean(row.is_active),
+      isDefault: toBoolean(row.is_default),
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
+  }
+
+  listPrompts({ ownerUserId = '', chatId = '', sessionId = '', scope = '', kind = '', activeOnly = true, limit = 50 } = {}) {
+    const filters = [];
+    const params = [];
+    if (ownerUserId) {
+      filters.push('owner_user_id = ?');
+      params.push(String(ownerUserId));
+    }
+    if (chatId) {
+      filters.push('chat_id = ?');
+      params.push(String(chatId));
+    }
+    if (sessionId) {
+      filters.push('session_id = ?');
+      params.push(String(sessionId));
+    }
+    if (scope) {
+      filters.push('scope = ?');
+      params.push(String(scope));
+    }
+    if (kind) {
+      filters.push('kind = ?');
+      params.push(String(kind));
+    }
+    if (activeOnly) {
+      filters.push('is_active = 1');
+    }
+
+    const whereClause = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM prompts
+         ${whereClause}
+         ORDER BY updated_at DESC
+         LIMIT ?`
+      )
+      .all(...params, Math.max(1, Number(limit) || 50));
+
+    return rows.map((row) => this.getPromptById(row.id));
   }
 
   async incrementStats(key, by = 1) {

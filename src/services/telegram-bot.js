@@ -1062,7 +1062,8 @@ export class TelegramAIBot {
         return;
       }
       if (action === 'favorite') {
-        const existing = this.db.findFavorite(state.chatId, state.userId, state.messageId);
+        const favoriteTargetId = state.assistantMessageVersionId || state.messageId;
+        const existing = this.db.findFavorite(state.chatId, state.userId, favoriteTargetId);
         if (existing) {
           await ctx.answerCbQuery(this.t(state.locale, 'actionAlreadySaved'));
           return;
@@ -1070,7 +1071,11 @@ export class TelegramAIBot {
         await this.db.saveFavorite({
           chatId: state.chatId,
           userId: state.userId,
+          sessionId: state.sessionId,
           messageId: state.messageId,
+          messageVersionId: state.assistantMessageVersionId || '',
+          targetType: state.assistantMessageVersionId ? 'message_version' : 'message',
+          targetId: favoriteTargetId,
           text: state.replyText,
           sourceText: state.sourceText,
           model: state.model,
@@ -1095,9 +1100,11 @@ export class TelegramAIBot {
       if (action === 'regen') {
         await ctx.answerCbQuery(this.t(state.locale, 'actionWorking'));
         const regenerated = await this.regenerateAssistantReply(state);
-        if (!regenerated) return;
-        state.replyText = regenerated;
-        await this.editAssistantMessageText(ctx, regenerated, this.createAssistantActionKeyboard(state.locale, token));
+        if (!regenerated?.text) return;
+        state.replyText = regenerated.text;
+        state.assistantMessageId = regenerated.assistantRef?.messageId || state.assistantMessageId || '';
+        state.assistantMessageVersionId = regenerated.assistantRef?.messageVersionId || state.assistantMessageVersionId || '';
+        await this.editAssistantMessageText(ctx, regenerated.text, this.createAssistantActionKeyboard(state.locale, token));
         return;
       }
       await ctx.answerCbQuery();
@@ -1148,7 +1155,10 @@ export class TelegramAIBot {
       )
     );
     state.model = model;
-    return result.text || '';
+    return {
+      text: result.text || '',
+      assistantRef: this.db.getLatestAssistantMessageReference(state.sessionId)
+    };
   }
 
   async handleModelCallback(ctx) {
@@ -1261,7 +1271,11 @@ export class TelegramAIBot {
       const prepared = await this.prepareUserMessage(ctx);
       const model = user?.preferredModel || chat?.defaultModel || this.config.defaultModel;
       const sessionId = createSessionId(ctx);
-      const history = buildConversationHistory(this.db.getConversation(sessionId), this.config.maxHistoryMessages);
+      const storedContext = this.db.getConversationForContext(sessionId, {
+        maxMessages: this.config.maxHistoryMessages,
+        strategy: 'recent'
+      });
+      const history = buildConversationHistory(storedContext, this.config.maxHistoryMessages);
       const systemMessage = {
         role: 'system',
         content: createSystemPrompt(this.config, chat || {}, user || { persona: 'default', customSystemPrompt: '' }, locale)
@@ -1291,6 +1305,7 @@ export class TelegramAIBot {
           this.config.maxHistoryMessages
         )
       );
+      const assistantRef = this.db.getLatestAssistantMessageReference(sessionId);
 
       const assistantText = result.text || this.t(locale, 'noReply');
       const reply = await this.sendAssistantReply(ctx, assistantText);
@@ -1306,7 +1321,9 @@ export class TelegramAIBot {
           historyBefore: history,
           systemMessage,
           sourceText: typeof prepared.message?.content === 'string' ? prepared.message.content : text || caption || '',
-          replyText: assistantText
+          replyText: assistantText,
+          assistantMessageId: assistantRef?.messageId || '',
+          assistantMessageVersionId: assistantRef?.messageVersionId || ''
         });
         await ctx.telegram.editMessageReplyMarkup(
           ctx.chat.id,
