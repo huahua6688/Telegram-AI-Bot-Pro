@@ -45,11 +45,14 @@ test('Admin API authenticates token and enforces RBAC', async (t) => {
   const unauthorized = await fetch(`http://127.0.0.1:${port}/admin/api/v1/users`);
   assert.equal(unauthorized.status, 401);
 
-  const forbidden = await fetch(`http://127.0.0.1:${port}/admin/api/v1/users`, {
+  const forbidden = await fetch(`http://127.0.0.1:${port}/admin/api/v1/users/9002`, {
+    method: 'PATCH',
     headers: {
       Authorization: ['Bearer', 'test-token'].join(' '),
-      'x-admin-user-id': '9002'
-    }
+      'x-admin-user-id': '9002',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ isBlocked: true })
   });
   assert.equal(forbidden.status, 403);
 
