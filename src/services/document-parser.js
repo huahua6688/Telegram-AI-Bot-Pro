@@ -1,7 +1,5 @@
 import path from 'node:path';
-import * as pdfParse from 'pdf-parse';
-
-console.log('pdf-parse exports:', Object.keys(pdfParse));
+import { PDFParse } from 'pdf-parse';
 import mammoth from 'mammoth';
 import readXlsxFile from 'read-excel-file/node';
 import { truncateText } from '../utils/text.js';
@@ -87,18 +85,20 @@ export class DocumentParser {
     this.logger = logger;
   }
 
-  async parse({ buffer, filename = '', mimeType = '' }) {
-    const sizeBytes = buffer?.length || 0;
-    if (sizeBytes > this.config.documentMaxBytes) {
-      return {
-        ok: false,
-        error: {
-          code: 'DOCUMENT_TOO_LARGE',
-          message: `File is too large (${sizeBytes} bytes > ${this.config.documentMaxBytes} bytes).`
-        },
-        meta: { filename, mimeType, sizeBytes }
-      };
+  async function parsePdf(buffer) {
+  const parser = new PDFParse({
+    data: buffer
+  });
+
+  try {
+    const result = await parser.parse();
+    return String(result.text || "").trim();
+  } finally {
+    if (typeof parser.destroy === "function") {
+      await parser.destroy();
     }
+  }
+}
 
     const { kind, extension } = resolveKind({ filename, mimeType });
     if (!kind) {
