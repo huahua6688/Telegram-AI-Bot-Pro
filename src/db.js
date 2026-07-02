@@ -187,6 +187,18 @@ export class BotDatabase {
         tts_generations INTEGER NOT NULL DEFAULT 0,
         started_at TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS favorites (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        chat_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        text TEXT NOT NULL,
+        source_text TEXT NOT NULL DEFAULT '',
+        model TEXT NOT NULL DEFAULT '',
+        locale TEXT NOT NULL DEFAULT 'zh',
+        created_at TEXT NOT NULL,
+        UNIQUE(chat_id, user_id, message_id)
+      );
     `);
 
     const createdAt = this.getMeta('createdAt');
@@ -476,6 +488,33 @@ export class BotDatabase {
   async clearConversation(sessionId) {
     this.db.prepare('DELETE FROM conversations WHERE session_id = ?').run(String(sessionId));
     await this.write();
+  }
+
+  findFavorite(chatId, userId, messageId) {
+    return this.db
+      .prepare('SELECT * FROM favorites WHERE chat_id = ? AND user_id = ? AND message_id = ?')
+      .get(String(chatId), String(userId), String(messageId));
+  }
+
+  async saveFavorite({ chatId, userId, messageId, text, sourceText = '', model = '', locale = 'zh' }) {
+    this.db
+      .prepare(
+        `INSERT OR IGNORE INTO favorites(
+          chat_id, user_id, message_id, text, source_text, model, locale, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        String(chatId),
+        String(userId),
+        String(messageId),
+        String(text || ''),
+        String(sourceText || ''),
+        String(model || ''),
+        String(locale || 'zh'),
+        now()
+      );
+    await this.write();
+    return this.findFavorite(chatId, userId, messageId);
   }
 
   async incrementStats(key, by = 1) {

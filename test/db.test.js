@@ -82,10 +82,21 @@ test('BotDatabase persists updates and quota counters in SQLite', async (t) => {
   await db.setChatSettings(2, { keyword: 'hello' });
   const result = db.consumeDailyQuota(1, 2);
   await db.write();
+  const favorite = await db.saveFavorite({
+    chatId: 2,
+    userId: 1,
+    messageId: 101,
+    text: 'assistant text',
+    sourceText: 'user question',
+    model: 'gpt-4.1',
+    locale: 'zh'
+  });
 
   assert.equal(result.allowed, true);
   assert.equal(db.findUser(1)?.preferredModel, 'gpt-4.1');
   assert.equal(db.findUser(1)?.isAllowed, true);
   assert.equal(db.findChat(2)?.keyword, 'hello');
   assert.equal(db.findUser(1)?.dailyUsageCount, 1);
+  assert.equal(favorite?.text, 'assistant text');
+  assert.equal(db.findFavorite(2, 1, 101)?.model, 'gpt-4.1');
 });
