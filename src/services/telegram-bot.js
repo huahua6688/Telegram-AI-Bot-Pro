@@ -570,7 +570,7 @@ export class TelegramAIBot {
         messageId,
         undefined,
         editableText,
-        keyboard ? keyboard : undefined
+        keyboard
       );
       return true;
     } catch (error) {
