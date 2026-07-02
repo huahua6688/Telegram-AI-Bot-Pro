@@ -33,6 +33,8 @@ test('createAIClient creates first-batch native provider clients via registry', 
   assert.equal(capabilities.toolCalls, true);
   assert.equal(capabilities.vision, true);
   assert.equal(capabilities.imageGeneration, false);
+  assert.equal(capabilities.liveAudio, false);
+  assert.equal(capabilities.liveTranslate, false);
 });
 
 test('createAIClient creates gemini-live provider client via registry', () => {
@@ -61,6 +63,8 @@ test('createAIClient creates gemini-live provider client via registry', () => {
   assert.equal(capabilities.toolCalls, false);
   assert.equal(capabilities.speechTranscription, true);
   assert.equal(capabilities.speechSynthesis, true);
+  assert.equal(capabilities.liveAudio, true);
+  assert.equal(capabilities.nativeAudio, true);
 });
 
 test('createAIClient throws for unknown provider', () => {
