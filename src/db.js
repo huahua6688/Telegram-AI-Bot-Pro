@@ -4,6 +4,10 @@ import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { normalizeLanguageCode } from './utils/telegram.js';
 
+// Schema version history:
+// v1: Core bot tables (users/chats/conversations/stats/favorites)
+// v2: Structured session/message/prompt history and favorites target migration
+// v3: RBAC, feature flags, policy rules, provider/model configs, admin audit logs
 const CURRENT_SCHEMA_VERSION = 3;
 
 const defaultData = {
