@@ -1,5 +1,10 @@
 {
   "node_version": "22",
   "build_command": "npm ci --omit=dev",
-  "start_command": "npm start"
+  "start_command": "npm start",
+  "environment": {
+    "HEALTH_PORT": "3000",
+    "ADMIN_API_PORT": "3001",
+    "DATABASE_FILE": "/app/data/bot-data.db"
+  }
 }

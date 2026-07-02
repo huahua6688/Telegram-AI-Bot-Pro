@@ -9,7 +9,10 @@ primary_region = "sin"
   dockerfile = "Dockerfile"
 
 [env]
+  AI_PROVIDER = "openai-compatible"
   HEALTH_PORT = "3000"
+  ADMIN_API_PORT = "3001"
+  DATABASE_FILE = "/data/bot-data.db"
   DATA_FILE = "/data/bot-data.json"
   AI_BASE_URL = "https://api.openai.com/v1"
   AI_MODEL = "gpt-4.1-mini"
@@ -37,6 +40,7 @@ primary_region = "sin"
 # Secrets (set with `fly secrets set`):
 #   BOT_TOKEN=<your telegram bot token>
 #   AI_API_KEY=<your ai api key>
+#   ADMIN_API_TOKEN=<strong random token>
 #   ADMIN_USER_IDS=<comma-separated admin user IDs>
 
 [[mounts]]

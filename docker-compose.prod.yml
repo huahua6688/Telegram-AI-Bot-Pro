@@ -8,8 +8,13 @@ services:
       ADMIN_API_PORT: 3001
       DATABASE_FILE: /app/data/bot-data.db
     ports:
-      - "3000:3000"
-      - "3001:3001"
+      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:3001:3001"
     volumes:
       - ./data:/app/data
-    restart: unless-stopped
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
