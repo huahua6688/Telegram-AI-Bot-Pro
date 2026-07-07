@@ -38,6 +38,18 @@ export async function createApplication() {
 
     await bot.init();
 
+    logger.info('Application initialized', {
+      provider: runtimeConfig.aiProvider,
+      defaultModel: runtimeConfig.defaultModel,
+      translationModel: runtimeConfig.translationModel,
+      routerModel: runtimeConfig.routerModel,
+      availableModels: runtimeConfig.availableModels,
+      healthPort: runtimeConfig.healthPort,
+      databaseFile: runtimeConfig.databaseFile,
+      aiRouterMode: runtimeConfig.enableAiRouter ? runtimeConfig.aiRouterMode : 'off',
+      memorySummaryInterval: runtimeConfig.memorySummaryInterval
+    });
+
     const healthServer = startHealthServer({
       port: runtimeConfig.healthPort,
       db,
@@ -60,6 +72,11 @@ export async function createApplication() {
       adminServer,
       async start() {
         await bot.launch();
+        logger.info('Telegram bot launched', {
+          provider: runtimeConfig.aiProvider,
+          defaultModel: runtimeConfig.defaultModel,
+          healthPort: runtimeConfig.healthPort
+        });
       },
       async stop(signal) {
         healthServer.close();
