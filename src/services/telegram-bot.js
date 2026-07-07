@@ -101,14 +101,19 @@ const UI_TEXT = {
     languagePrompt: '请选择机器人界面语言：',
     modelsPrompt: '请选择模型：',
     personaPrompt: '请选择人格：',
+    buttonChat: '💬 对话',
+    buttonTranslate: '🌍 翻译',
+    buttonMemory: '🧠 记忆',
     buttonHelp: '🆘 帮助',
-    buttonReset: '🧹 清空记忆',
+    buttonReset: '🧹 清空',
     buttonModels: '🤖 模型',
     buttonPersona: '🎭 人格',
     buttonWeb: '🌐 联网搜索',
     buttonImage: '🖼️ 图片识别',
     buttonTts: '🎤 语音消息',
     buttonLanguage: '🌍 语言',
+    chatHint: '直接发送你想问的内容就行，我会自动判断怎么处理。',
+    translateHint: '请直接发送要翻译的内容。我会自动判断源语言并翻译。',
     streamingPlaceholder: '正在生成回复...',
     actionRegenerate: '🔄 重生成',
     actionModel: '🧠 模型',
@@ -200,14 +205,19 @@ const UI_TEXT = {
     languagePrompt: 'Choose the bot UI language:',
     modelsPrompt: 'Choose a model:',
     personaPrompt: 'Choose a persona:',
+    buttonChat: '💬 Chat',
+    buttonTranslate: '🌍 Translate',
+    buttonMemory: '🧠 Memory',
     buttonHelp: '🆘 Help',
-    buttonReset: '🧹 Clear Memory',
+    buttonReset: '🧹 Clear',
     buttonModels: '🤖 Models',
     buttonPersona: '🎭 Persona',
     buttonWeb: '🌐 Web Search',
     buttonImage: '🖼️ Image Understanding',
     buttonTts: '🎤 Voice',
     buttonLanguage: '🌍 Language',
+    chatHint: 'Send me anything directly. I will decide how to handle it.',
+    translateHint: 'Send the text you want to translate. I will detect the source language automatically.',
     streamingPlaceholder: 'Composing reply...',
     actionRegenerate: '🔄 Regenerate',
     actionModel: '🧠 Model',
@@ -413,6 +423,16 @@ export class TelegramAIBot {
       return this.runWebSearch(ctx, text);
     }
 
+    if (pendingAction === 'translate_prompt') {
+      const locale = this.getLocale(ctx);
+      if (!text) {
+        await ctx.reply(this.t(locale, 'translateHint'));
+        return true;
+      }
+      await this.runTranslation(ctx, text, 'auto');
+      return true;
+    }
+
     if (pendingAction === 'image_prompt') {
       if (ctx.message?.photo?.length) {
         // 直接走普通图片识别流程，不需要用户再输入指令
@@ -447,6 +467,9 @@ export class TelegramAIBot {
 
   getMenuLabels(locale) {
     return {
+      chat: this.t(locale, 'buttonChat'),
+      translate: this.t(locale, 'buttonTranslate'),
+      memory: this.t(locale, 'buttonMemory'),
       help: this.t(locale, 'buttonHelp'),
       reset: this.t(locale, 'buttonReset'),
       models: this.t(locale, 'buttonModels'),
@@ -461,10 +484,9 @@ export class TelegramAIBot {
   createMenuKeyboard(locale) {
     const labels = this.getMenuLabels(locale);
     return Markup.keyboard([
-      [labels.help, labels.reset],
-      [labels.models, labels.persona],
-      [labels.web, labels.image],
-      [labels.tts, labels.language]
+      [labels.chat, labels.translate],
+      [labels.memory, labels.models],
+      [labels.reset, labels.help]
     ]).resize();
   }
 
@@ -559,6 +581,9 @@ export class TelegramAIBot {
 
     const menuLabels = this.getMenuLabels(locale);
     const buttonMap = new Map([
+      [menuLabels.chat, { type: 'chat_hint' }],
+      [menuLabels.translate, { type: 'translate_prompt' }],
+      [menuLabels.memory, { type: 'memory_show' }],
       [menuLabels.help, { type: 'help' }],
       [menuLabels.reset, { type: 'reset' }],
       [menuLabels.models, { type: 'models' }],
@@ -2089,6 +2114,11 @@ export class TelegramAIBot {
 
     // 先处理按钮本身，避免“上一个按钮”等待输入时把新按钮当成内容
     if (naturalAction) {
+      if (naturalAction.type === 'chat_hint') return ctx.reply(this.t(locale, 'chatHint'), this.createMenuKeyboard(locale));
+      if (naturalAction.type === 'translate_prompt') {
+        this.setPendingMenuAction(ctx, 'translate_prompt');
+        return ctx.reply(this.t(locale, 'translateHint'), this.createMenuKeyboard(locale));
+      }
       if (naturalAction.type === 'help') return this.handleHelp(ctx);
       if (naturalAction.type === 'reset') return this.handleReset(ctx);
       if (naturalAction.type === 'models') return this.handleModels(ctx);
