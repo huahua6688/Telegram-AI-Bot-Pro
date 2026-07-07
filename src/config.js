@@ -128,7 +128,7 @@ export function loadConfig() {
     rateLimitWindowMs: parseInteger(process.env.RATE_LIMIT_WINDOW_MS, 60000),
     rateLimitMaxRequests: parseInteger(process.env.RATE_LIMIT_MAX_REQUESTS, 12),
     dailyQuota: parseInteger(process.env.DAILY_QUOTA, 200),
-    healthPort: parseInteger(process.env.HEALTH_PORT, 3000),
+    healthPort: parseInteger(process.env.HEALTH_PORT || process.env.PORT, 3000),
     adminApiPort: parseInteger(process.env.ADMIN_API_PORT, 3001),
     adminApiPrefix: process.env.ADMIN_API_PREFIX || '/admin/api/v1',
     adminApiToken: process.env.ADMIN_API_TOKEN || '',
