@@ -1005,9 +1005,9 @@ export class TelegramAIBot {
       await ctx.sendChatAction('typing');
 
       const completion = await this.completeWithAiFallback({
-        scope: 'router',
+        scope: 'translation',
         model,
-        locale: this.getLocale(ctx),
+        locale,
         request: {
           messages: [
           {
