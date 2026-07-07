@@ -114,6 +114,8 @@ const UI_TEXT = {
     buttonLanguage: '🌍 语言',
     chatHint: '直接发送你想问的内容就行，我会自动判断怎么处理。',
     translateHint: '请直接发送要翻译的内容。我会自动判断源语言并翻译。',
+    translationTargetPrompt: '请选择要翻译成哪种语言：',
+    translationSendPrompt: '请发送要翻译的内容。',
     streamingPlaceholder: '正在生成回复...',
     actionRegenerate: '🔄 重生成',
     actionModel: '🧠 模型',
@@ -218,6 +220,8 @@ const UI_TEXT = {
     buttonLanguage: '🌍 Language',
     chatHint: 'Send me anything directly. I will decide how to handle it.',
     translateHint: 'Send the text you want to translate. I will detect the source language automatically.',
+    translationTargetPrompt: 'Choose the target language:',
+    translationSendPrompt: 'Send the text you want to translate.',
     streamingPlaceholder: 'Composing reply...',
     actionRegenerate: '🔄 Regenerate',
     actionModel: '🧠 Model',
@@ -362,6 +366,7 @@ export class TelegramAIBot {
     this.pendingMenuActions = new Map();
     this.bot = new Telegraf(config.botToken);
     this.botUsername = '';
+    this.bot.action(/^translate_pick:(.+)$/, (ctx) => this.handleTranslateTargetCallback(ctx));
     this.documentParser = new DocumentParser(config, logger);
     this.multimodalActions = new MultimodalActionService({
       aiClient,
@@ -398,6 +403,17 @@ export class TelegramAIBot {
     });
   }
 
+  normalizePendingAction(pendingAction) {
+    if (!pendingAction) return { type: '', targetLanguage: '' };
+    if (typeof pendingAction === 'string') {
+      return { type: pendingAction, targetLanguage: '' };
+    }
+    return {
+      type: String(pendingAction.type || ''),
+      targetLanguage: String(pendingAction.targetLanguage || '')
+    };
+  }
+
   takePendingMenuAction(ctx) {
     const key = this.getPendingMenuKey(ctx);
     const state = this.pendingMenuActions.get(key);
@@ -414,8 +430,19 @@ export class TelegramAIBot {
 
   async handlePendingMenuAction(ctx, pendingAction) {
     const text = String(ctx.message?.text || ctx.message?.caption || '').trim();
+    const pending = this.normalizePendingAction(pendingAction);
 
-    if (pendingAction === 'web_prompt') {
+    if (pending.type === 'translate_prompt') {
+      const locale = this.getLocale(ctx);
+      if (!text) {
+        await ctx.reply(this.t(locale, 'translationSendPrompt'));
+        return true;
+      }
+      await this.runTranslation(ctx, text, pending.targetLanguage || 'auto');
+      return true;
+    }
+
+    if (pending.type === 'web_prompt') {
       if (!text) {
         await ctx.reply('请直接发送你要搜索的内容。');
         return true;
@@ -433,7 +460,7 @@ export class TelegramAIBot {
       return true;
     }
 
-    if (pendingAction === 'image_prompt') {
+    if (pending.type === 'image_prompt') {
       if (ctx.message?.photo?.length) {
         // 直接走普通图片识别流程，不需要用户再输入指令
         return this.handleIncomingMessage(ctx);
@@ -443,7 +470,7 @@ export class TelegramAIBot {
       return true;
     }
 
-    if (pendingAction === 'voice_prompt') {
+    if (pending.type === 'voice_prompt') {
       if (ctx.message?.voice || ctx.message?.audio) {
         // 直接走普通语音处理流程
         return this.handleIncomingMessage(ctx);
@@ -515,6 +542,42 @@ export class TelegramAIBot {
       )
     );
     return Markup.inlineKeyboard(chunkItems(buttons, 2));
+  }
+
+  createTranslationTargetKeyboard(locale = 'zh') {
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback('中文', 'translate_pick:zh'),
+        Markup.button.callback('English', 'translate_pick:en')
+      ],
+      [
+        Markup.button.callback('高棉语', 'translate_pick:km'),
+        Markup.button.callback('粤语', 'translate_pick:yue')
+      ],
+      [
+        Markup.button.callback('繁体中文', 'translate_pick:zh_hant'),
+        Markup.button.callback(locale === 'en' ? 'Auto' : '自动判断', 'translate_pick:auto')
+      ]
+    ]);
+  }
+
+  resolveTranslationTargetCode(code = '') {
+    const normalized = String(code || '').trim().toLowerCase();
+
+    const targets = {
+      auto: 'auto',
+      zh: 'Simplified Chinese',
+      cn: 'Simplified Chinese',
+      en: 'English',
+      km: 'Khmer',
+      khmer: 'Khmer',
+      yue: 'Cantonese (Hong Kong)',
+      cantonese: 'Cantonese (Hong Kong)',
+      zh_hant: 'Traditional Chinese',
+      traditional: 'Traditional Chinese'
+    };
+
+    return targets[normalized] || 'auto';
   }
 
   createAssistantActionKeyboard(locale, token) {
@@ -1858,6 +1921,23 @@ export class TelegramAIBot {
     await ctx.reply(allowed ? this.t(locale, 'allowDone', { userId }) : this.t(locale, 'disallowDone', { userId }));
   }
 
+  async handleTranslateTargetCallback(ctx) {
+    const locale = this.getLocale(ctx);
+    const code = String(ctx.match?.[1] || 'auto');
+    const targetLanguage = this.resolveTranslationTargetCode(code);
+
+    this.setPendingMenuAction(ctx, {
+      type: 'translate_prompt',
+      targetLanguage
+    });
+
+    await ctx.answerCbQuery();
+    await ctx.reply(
+      `${this.t(locale, 'translationSendPrompt')}\n目标语言：${targetLanguage === 'auto' ? 'auto' : targetLanguage}`,
+      this.createMenuKeyboard(locale)
+    );
+  }
+
   async handleAssistantActionCallback(ctx) {
     const parts = String(ctx.callbackQuery?.data || '').split(':');
     const action = parts[1] || '';
@@ -2116,8 +2196,7 @@ export class TelegramAIBot {
     if (naturalAction) {
       if (naturalAction.type === 'chat_hint') return ctx.reply(this.t(locale, 'chatHint'), this.createMenuKeyboard(locale));
       if (naturalAction.type === 'translate_prompt') {
-        this.setPendingMenuAction(ctx, 'translate_prompt');
-        return ctx.reply(this.t(locale, 'translateHint'), this.createMenuKeyboard(locale));
+        return ctx.reply(this.t(locale, 'translationTargetPrompt'), this.createTranslationTargetKeyboard(locale));
       }
       if (naturalAction.type === 'help') return this.handleHelp(ctx);
       if (naturalAction.type === 'reset') return this.handleReset(ctx);
