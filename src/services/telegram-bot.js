@@ -1595,6 +1595,7 @@ export class TelegramAIBot {
     this.botUsername = me.username || '';
     await this.bot.telegram.setMyCommands([
       { command: 'start', description: 'Start the bot' },
+      { command: 'status', description: 'Show bot status' },
       { command: 'block', description: 'Admin: block user by ID' },
       { command: 'unblock', description: 'Admin: unblock user by ID' },
       { command: 'allow', description: 'Admin: allow user by ID' },
@@ -1604,6 +1605,7 @@ export class TelegramAIBot {
 
   registerCommands() {
     this.bot.command('start', (ctx) => this.handleStart(ctx));
+    this.bot.command('status', (ctx) => this.handleStatus(ctx));
     this.bot.command('translate', (ctx) => this.runTranslation(ctx, extractCommandArgs(ctx.message.text || ''), 'auto'));
     this.bot.command('tr', (ctx) => this.runTranslation(ctx, extractCommandArgs(ctx.message.text || ''), 'auto'));
     this.bot.command('block', (ctx) => this.handleBlock(ctx, true));
@@ -2100,6 +2102,98 @@ export class TelegramAIBot {
     } catch (error) {
       await ctx.reply(this.formatUserFacingError(error, locale));
     }
+  }
+
+  formatUptime(seconds = 0) {
+    const total = Math.max(0, Math.floor(Number(seconds) || 0));
+    const days = Math.floor(total / 86400);
+    const hours = Math.floor((total % 86400) / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+
+    return [
+      days ? `${days}d` : '',
+      hours ? `${hours}h` : '',
+      `${minutes}m`
+    ].filter(Boolean).join(' ');
+  }
+
+  listActiveAiCooldowns() {
+    const entries = Array.from(this.aiCooldowns?.entries?.() || []);
+    const nowMs = Date.now();
+
+    return entries
+      .map(([key, expiresAt]) => {
+        const retrySeconds = Math.ceil((Number(expiresAt) - nowMs) / 1000);
+        return { key, retrySeconds };
+      })
+      .filter((item) => item.retrySeconds > 0)
+      .slice(0, 10);
+  }
+
+  async handleStatus(ctx) {
+    const locale = this.getLocale(ctx);
+    const user = this.db.findUser(ctx.from.id);
+    const stats = this.db.getStats?.() || {};
+    const cooldowns = this.listActiveAiCooldowns();
+
+    const models = Array.isArray(this.config.availableModels)
+      ? this.config.availableModels.join(', ')
+      : String(this.config.defaultModel || '');
+
+    if (locale === 'en') {
+      const lines = [
+        '🤖 Bot status',
+        `Provider: ${this.getProviderName()}`,
+        `Default model: ${this.config.defaultModel}`,
+        `Translation model: ${this.config.translationModel || this.config.defaultModel}`,
+        `Router model: ${this.config.routerModel || this.config.defaultModel}`,
+        `Available models: ${models}`,
+        `AI Router: ${this.config.enableAiRouter ? this.config.aiRouterMode || 'smart' : 'off'}`,
+        `Memory summary: every ${this.config.memorySummaryInterval || 5} turns`,
+        `Today: ${user?.dailyUsageCount || 0}/${this.config.dailyQuota}`,
+        `Total messages: ${user?.totalMessages || 0}`,
+        `Uptime: ${this.formatUptime(process.uptime())}`,
+        '',
+        'AI cooldown:',
+        cooldowns.length
+          ? cooldowns.map((item) => `- ${item.key}: ${item.retrySeconds}s`).join('\n')
+          : '- none',
+        '',
+        'Stats:',
+        `- messagesHandled: ${stats.messagesHandled || 0}`,
+        `- aiCalls: ${stats.aiCalls || 0}`,
+        `- toolCalls: ${stats.toolCalls || 0}`
+      ];
+
+      await ctx.reply(lines.join('\n'), this.createMenuKeyboard(locale));
+      return;
+    }
+
+    const lines = [
+      '🤖 Bot 状态',
+      `Provider：${this.getProviderName()}`,
+      `默认模型：${this.config.defaultModel}`,
+      `翻译模型：${this.config.translationModel || this.config.defaultModel}`,
+      `Router 模型：${this.config.routerModel || this.config.defaultModel}`,
+      `可用模型：${models}`,
+      `AI Router：${this.config.enableAiRouter ? this.config.aiRouterMode || 'smart' : 'off'}`,
+      `记忆总结：每 ${this.config.memorySummaryInterval || 5} 轮`,
+      `今日用量：${user?.dailyUsageCount || 0}/${this.config.dailyQuota}`,
+      `总消息数：${user?.totalMessages || 0}`,
+      `运行时间：${this.formatUptime(process.uptime())}`,
+      '',
+      'AI 冷却：',
+      cooldowns.length
+        ? cooldowns.map((item) => `- ${item.key}：${item.retrySeconds}s`).join('\n')
+        : '- 无',
+      '',
+      '统计：',
+      `- messagesHandled：${stats.messagesHandled || 0}`,
+      `- aiCalls：${stats.aiCalls || 0}`,
+      `- toolCalls：${stats.toolCalls || 0}`
+    ];
+
+    await ctx.reply(lines.join('\n'), this.createMenuKeyboard(locale));
   }
 
   async handleStats(ctx) {
