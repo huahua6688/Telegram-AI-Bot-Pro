@@ -739,22 +739,6 @@ export class TelegramAIBot {
       return { type: 'topics_clear' };
     }
 
-    if (/^(查看|显示|顯示|show)?(长期|長期)?记忆$/i.test(content) || /^(memory|mem)$/i.test(content)) {
-      return { type: 'memory_show' };
-    }
-    if (/^(查看|显示|顯示|show)?(当前|當前)?话题$/i.test(content) || /^(topic|current topic)$/i.test(content)) {
-      return { type: 'topic_show' };
-    }
-    if (/^(查看|显示|顯示|show)?话题列表$/i.test(content) || /^(topics)$/i.test(content)) {
-      return { type: 'topics_show' };
-    }
-    if (/^(清空|删除|刪除|clear|delete)(长期|長期)?记忆$/i.test(content) || /^(clear memory|delete memory)$/i.test(content)) {
-      return { type: 'memory_clear' };
-    }
-    if (/^(清空|删除|刪除|clear|delete)话题状态$/i.test(content) || /^(clear topics)$/i.test(content)) {
-      return { type: 'topics_clear' };
-    }
-
     const actionPatterns = [
       { type: 'web', regex: /^(?:web|search|搜索|联网搜索|上网搜)\s+(.+)$/i },
       { type: 'image', regex: /^(?:image|draw|paint|生成图片|生成圖像|画|畫)\s+(.+)$/i },
@@ -1108,6 +1092,7 @@ export class TelegramAIBot {
   async classifyUserIntent(ctx, text = '', memoryContext = null) {
     if (!this.config.enableAiRouter) return { intent: 'chat' };
 
+    const locale = this.getLocale(ctx);
     const content = String(text || '').trim();
     if (!content) return { intent: 'chat' };
 
@@ -1807,7 +1792,7 @@ export class TelegramAIBot {
       '/start —— 显示主菜单',
       '/help —— 显示帮助',
       '/status —— 管理员专用：查看 Bot 状态、模型、额度冷却',
-        '/whoami —— 查看你的 Telegram 用户 ID',
+      '/whoami —— 查看你的 Telegram 用户 ID',
       '/translate 文本 —— 自动翻译文本',
       '',
       '说明：',
