@@ -105,8 +105,8 @@ const UI_TEXT = {
     buttonModels: '🤖 模型',
     buttonPersona: '🎭 人格',
     buttonWeb: '🌐 联网搜索',
-    buttonImage: '🖼️ 生成图片',
-    buttonTts: '🔊 语音朗读',
+    buttonImage: '🖼️ 图片识别',
+    buttonTts: '🎤 语音消息',
     buttonLanguage: '🌍 语言',
     streamingPlaceholder: '正在生成回复...',
     actionRegenerate: '🔄 重生成',
@@ -204,8 +204,8 @@ const UI_TEXT = {
     buttonModels: '🤖 Models',
     buttonPersona: '🎭 Persona',
     buttonWeb: '🌐 Web Search',
-    buttonImage: '🖼️ Image',
-    buttonTts: '🔊 TTS',
+    buttonImage: '🖼️ Image Understanding',
+    buttonTts: '🎤 Voice',
     buttonLanguage: '🌍 Language',
     streamingPlaceholder: 'Composing reply...',
     actionRegenerate: '🔄 Regenerate',
@@ -322,6 +322,7 @@ export class TelegramAIBot {
     this.rateLimits = new Map();
     this.assistantActionStates = new Map();
     this.assistantActionStatesByMessage = new Map();
+    this.pendingMenuActions = new Map();
     this.bot = new Telegraf(config.botToken);
     this.botUsername = '';
     this.documentParser = new DocumentParser(config, logger);
@@ -340,6 +341,66 @@ export class TelegramAIBot {
       getProviderCapabilities: () => this.getProviderCapabilities(),
       getProviderName: () => this.getProviderName()
     });
+  }
+
+
+  getPendingMenuKey(ctx) {
+    return `${ctx.chat?.id || ''}:${ctx.from?.id || ''}`;
+  }
+
+  setPendingMenuAction(ctx, action) {
+    this.pendingMenuActions.set(this.getPendingMenuKey(ctx), {
+      action,
+      createdAt: Date.now()
+    });
+  }
+
+  takePendingMenuAction(ctx) {
+    const key = this.getPendingMenuKey(ctx);
+    const state = this.pendingMenuActions.get(key);
+    if (!state) return null;
+    this.pendingMenuActions.delete(key);
+
+    // 5 分钟过期
+    if (Date.now() - state.createdAt > 5 * 60 * 1000) {
+      return null;
+    }
+
+    return state.action;
+  }
+
+  async handlePendingMenuAction(ctx, pendingAction) {
+    const text = String(ctx.message?.text || ctx.message?.caption || '').trim();
+
+    if (pendingAction === 'web_prompt') {
+      if (!text) {
+        await ctx.reply('请直接发送你要搜索的内容。');
+        return true;
+      }
+      return this.runWebSearch(ctx, text);
+    }
+
+    if (pendingAction === 'image_prompt') {
+      if (ctx.message?.photo?.length) {
+        // 直接走普通图片识别流程，不需要用户再输入指令
+        return this.handleIncomingMessage(ctx);
+      }
+
+      await ctx.reply('请直接发送图片给我识别。图片生成还没有接好，所以这个按钮先只做图片识别。');
+      return true;
+    }
+
+    if (pendingAction === 'voice_prompt') {
+      if (ctx.message?.voice || ctx.message?.audio) {
+        // 直接走普通语音处理流程
+        return this.handleIncomingMessage(ctx);
+      }
+
+      await ctx.reply('请直接发送 Telegram 语音消息。文字转语音和 Gemini Live 后面再单独接。');
+      return true;
+    }
+
+    return false;
   }
 
   getLocale(ctx, user = this.db.findUser(ctx.from?.id)) {
@@ -1321,6 +1382,12 @@ export class TelegramAIBot {
     const user = this.db.findUser(ctx.from.id);
     const chat = this.db.findChat(ctx.chat.id);
     const locale = this.getLocale(ctx, user);
+    const pendingAction = this.takePendingMenuAction(ctx);
+    if (pendingAction) {
+      const handled = await this.handlePendingMenuAction(ctx, pendingAction);
+      if (handled !== false) return;
+    }
+
     const naturalAction = text ? this.parseNaturalLanguageAction(text, locale) : null;
 
     if (naturalAction) {
@@ -1329,6 +1396,25 @@ export class TelegramAIBot {
       if (naturalAction.type === 'models') return this.handleModels(ctx);
       if (naturalAction.type === 'persona') return this.handlePersona(ctx);
       if (naturalAction.type === 'language') return this.handleLanguage(ctx);
+
+      if (naturalAction.type === 'web_prompt') {
+        this.setPendingMenuAction(ctx, 'web_prompt');
+        await ctx.reply('🌐 联网搜索\n\n请直接发送你要搜索的内容，不需要输入“搜索”两个字。');
+        return;
+      }
+
+      if (naturalAction.type === 'image_prompt') {
+        this.setPendingMenuAction(ctx, 'image_prompt');
+        await ctx.reply('🖼️ 图片识别\n\n请直接发送图片，不需要输入指令。');
+        return;
+      }
+
+      if (naturalAction.type === 'tts_prompt') {
+        this.setPendingMenuAction(ctx, 'voice_prompt');
+        await ctx.reply('🎤 语音消息\n\n请直接发送 Telegram 语音消息。\n\n说明：TTS 朗读和 Gemini Live 还没真正接好，后面单独做。');
+        return;
+      }
+
       if (naturalAction.type === 'model') {
         ctx.message.text = `/model ${naturalAction.value}`;
         return this.handleModel(ctx);
