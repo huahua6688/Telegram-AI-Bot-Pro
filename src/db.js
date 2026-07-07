@@ -8,7 +8,8 @@ import { normalizeLanguageCode } from './utils/telegram.js';
 // v1: Core bot tables (users/chats/conversations/stats/favorites)
 // v2: Structured session/message/prompt history and favorites target migration
 // v3: RBAC, feature flags, policy rules, provider/model configs, admin audit logs
-const CURRENT_SCHEMA_VERSION = 3;
+// v4: Long-term memory, topic states, active context
+const CURRENT_SCHEMA_VERSION = 4;
 
 const defaultData = {
   meta: {
@@ -235,6 +236,9 @@ export class BotDatabase {
       }
       if (version === 3) {
         this.applySchemaV3();
+      }
+      if (version === 4) {
+        this.applySchemaV4();
       }
       this.setMeta('schemaVersion', String(version));
     }
@@ -472,6 +476,55 @@ export class BotDatabase {
       CREATE INDEX IF NOT EXISTS idx_message_versions_model ON message_versions(model, created_at DESC);
     `);
     this.seedAccessControlDefaults();
+  }
+
+  applySchemaV4() {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_items (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL DEFAULT '',
+        chat_id TEXT NOT NULL DEFAULT '',
+        topic_id TEXT NOT NULL DEFAULT '',
+        memory_type TEXT NOT NULL DEFAULT 'fact',
+        key TEXT NOT NULL DEFAULT '',
+        value TEXT NOT NULL,
+        confidence REAL NOT NULL DEFAULT 0.8,
+        source TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS topic_states (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL DEFAULT '',
+        chat_id TEXT NOT NULL DEFAULT '',
+        topic_id TEXT NOT NULL,
+        title TEXT NOT NULL DEFAULT '',
+        summary TEXT NOT NULL DEFAULT '',
+        current_goal TEXT NOT NULL DEFAULT '',
+        last_step TEXT NOT NULL DEFAULT '',
+        next_step TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'active',
+        last_accessed_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS active_contexts (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL DEFAULT '',
+        chat_id TEXT NOT NULL DEFAULT '',
+        active_topic_id TEXT NOT NULL DEFAULT '',
+        return_topic_id TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_memory_lookup ON memory_items(user_id, chat_id, topic_id, memory_type, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_memory_key ON memory_items(user_id, chat_id, topic_id, key);
+      CREATE INDEX IF NOT EXISTS idx_topic_states_lookup ON topic_states(user_id, chat_id, topic_id, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_topic_states_accessed ON topic_states(user_id, chat_id, last_accessed_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_active_contexts_lookup ON active_contexts(user_id, chat_id);
+    `);
   }
 
   ensureFavoritesV2Columns() {
@@ -2017,4 +2070,237 @@ export class BotDatabase {
       modelDistribution: modelRows.map((row) => ({ model: row.model, count: Number(row.count || 0) }))
     };
   }
+  getMemoryItems({ userId = '', chatId = '', topicId = '', limit = 20 } = {}) {
+    const rows = this.db
+      .prepare(
+        `SELECT id, user_id, chat_id, topic_id, memory_type, key, value, confidence, source, created_at, updated_at
+         FROM memory_items
+         WHERE user_id = ?
+           AND (chat_id = ? OR chat_id = '')
+           AND (topic_id = ? OR topic_id = '')
+         ORDER BY updated_at DESC
+         LIMIT ?`
+      )
+      .all(String(userId || ''), String(chatId || ''), String(topicId || ''), Number(limit || 20));
+
+    return rows.map((row) => ({
+      id: row.id,
+      userId: row.user_id,
+      chatId: row.chat_id,
+      topicId: row.topic_id,
+      memoryType: row.memory_type,
+      key: row.key,
+      value: row.value,
+      confidence: row.confidence,
+      source: row.source,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    }));
+  }
+
+  upsertMemoryItem({
+    id = '',
+    userId = '',
+    chatId = '',
+    topicId = '',
+    memoryType = 'fact',
+    key = '',
+    value = '',
+    confidence = 0.8,
+    source = ''
+  } = {}) {
+    const timestamp = now();
+    const resolvedId = id || `mem:${String(userId || 'global')}:${String(chatId || 'global')}:${String(topicId || 'global')}:${String(key || randomUUID())}`;
+
+    this.db
+      .prepare(
+        `INSERT INTO memory_items (
+           id, user_id, chat_id, topic_id, memory_type, key, value, confidence, source, created_at, updated_at
+         )
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           memory_type = excluded.memory_type,
+           key = excluded.key,
+           value = excluded.value,
+           confidence = excluded.confidence,
+           source = excluded.source,
+           updated_at = excluded.updated_at`
+      )
+      .run(
+        resolvedId,
+        String(userId || ''),
+        String(chatId || ''),
+        String(topicId || ''),
+        String(memoryType || 'fact'),
+        String(key || ''),
+        String(value || ''),
+        Number(confidence || 0.8),
+        String(source || ''),
+        timestamp,
+        timestamp
+      );
+
+    this.setMeta('updatedAt', timestamp);
+    return resolvedId;
+  }
+
+  getTopicState({ userId = '', chatId = '', topicId = '' } = {}) {
+    const row = this.db
+      .prepare(
+        `SELECT id, user_id, chat_id, topic_id, title, summary, current_goal, last_step, next_step,
+                status, last_accessed_at, created_at, updated_at
+         FROM topic_states
+         WHERE user_id = ? AND chat_id = ? AND topic_id = ?
+         LIMIT 1`
+      )
+      .get(String(userId || ''), String(chatId || ''), String(topicId || ''));
+
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      userId: row.user_id,
+      chatId: row.chat_id,
+      topicId: row.topic_id,
+      title: row.title,
+      summary: row.summary,
+      currentGoal: row.current_goal,
+      lastStep: row.last_step,
+      nextStep: row.next_step,
+      status: row.status,
+      lastAccessedAt: row.last_accessed_at,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    };
+  }
+
+  listRecentTopicStates({ userId = '', chatId = '', limit = 8 } = {}) {
+    const rows = this.db
+      .prepare(
+        `SELECT id, user_id, chat_id, topic_id, title, summary, current_goal, last_step, next_step,
+                status, last_accessed_at, created_at, updated_at
+         FROM topic_states
+         WHERE user_id = ? AND chat_id = ? AND status = 'active'
+         ORDER BY last_accessed_at DESC
+         LIMIT ?`
+      )
+      .all(String(userId || ''), String(chatId || ''), Number(limit || 8));
+
+    return rows.map((row) => ({
+      id: row.id,
+      userId: row.user_id,
+      chatId: row.chat_id,
+      topicId: row.topic_id,
+      title: row.title,
+      summary: row.summary,
+      currentGoal: row.current_goal,
+      lastStep: row.last_step,
+      nextStep: row.next_step,
+      status: row.status,
+      lastAccessedAt: row.last_accessed_at,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at
+    }));
+  }
+
+  upsertTopicState({
+    userId = '',
+    chatId = '',
+    topicId = 'general',
+    title = '',
+    summary = '',
+    currentGoal = '',
+    lastStep = '',
+    nextStep = '',
+    status = 'active'
+  } = {}) {
+    const timestamp = now();
+    const id = `topic:${String(userId || 'global')}:${String(chatId || 'global')}:${String(topicId || 'general')}`;
+
+    this.db
+      .prepare(
+        `INSERT INTO topic_states (
+           id, user_id, chat_id, topic_id, title, summary, current_goal, last_step, next_step,
+           status, last_accessed_at, created_at, updated_at
+         )
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           title = excluded.title,
+           summary = excluded.summary,
+           current_goal = excluded.current_goal,
+           last_step = excluded.last_step,
+           next_step = excluded.next_step,
+           status = excluded.status,
+           last_accessed_at = excluded.last_accessed_at,
+           updated_at = excluded.updated_at`
+      )
+      .run(
+        id,
+        String(userId || ''),
+        String(chatId || ''),
+        String(topicId || 'general'),
+        String(title || ''),
+        String(summary || ''),
+        String(currentGoal || ''),
+        String(lastStep || ''),
+        String(nextStep || ''),
+        String(status || 'active'),
+        timestamp,
+        timestamp,
+        timestamp
+      );
+
+    this.setMeta('updatedAt', timestamp);
+    return id;
+  }
+
+  getActiveContext({ userId = '', chatId = '' } = {}) {
+    const row = this.db
+      .prepare(
+        `SELECT id, user_id, chat_id, active_topic_id, return_topic_id, updated_at
+         FROM active_contexts
+         WHERE user_id = ? AND chat_id = ?
+         LIMIT 1`
+      )
+      .get(String(userId || ''), String(chatId || ''));
+
+    if (!row) return null;
+
+    return {
+      id: row.id,
+      userId: row.user_id,
+      chatId: row.chat_id,
+      activeTopicId: row.active_topic_id,
+      returnTopicId: row.return_topic_id,
+      updatedAt: row.updated_at
+    };
+  }
+
+  setActiveContext({ userId = '', chatId = '', activeTopicId = '', returnTopicId = '' } = {}) {
+    const timestamp = now();
+    const id = `active:${String(userId || 'global')}:${String(chatId || 'global')}`;
+
+    this.db
+      .prepare(
+        `INSERT INTO active_contexts (id, user_id, chat_id, active_topic_id, return_topic_id, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           active_topic_id = excluded.active_topic_id,
+           return_topic_id = excluded.return_topic_id,
+           updated_at = excluded.updated_at`
+      )
+      .run(
+        id,
+        String(userId || ''),
+        String(chatId || ''),
+        String(activeTopicId || ''),
+        String(returnTopicId || ''),
+        timestamp
+      );
+
+    this.setMeta('updatedAt', timestamp);
+    return id;
+  }
+
+
 }
