@@ -1382,14 +1382,9 @@ export class TelegramAIBot {
     const user = this.db.findUser(ctx.from.id);
     const chat = this.db.findChat(ctx.chat.id);
     const locale = this.getLocale(ctx, user);
-    const pendingAction = this.takePendingMenuAction(ctx);
-    if (pendingAction) {
-      const handled = await this.handlePendingMenuAction(ctx, pendingAction);
-      if (handled !== false) return;
-    }
-
     const naturalAction = text ? this.parseNaturalLanguageAction(text, locale) : null;
 
+    // 先处理按钮本身，避免“上一个按钮”等待输入时把新按钮当成内容
     if (naturalAction) {
       if (naturalAction.type === 'help') return this.handleHelp(ctx);
       if (naturalAction.type === 'reset') return this.handleReset(ctx);
@@ -1430,6 +1425,13 @@ export class TelegramAIBot {
       if (await this.pluginManager.runNaturalAction(naturalAction, { bot: this, ctx, locale })) {
         return;
       }
+    }
+
+    // 只有不是按钮的新消息，才作为上一个按钮的输入
+    const pendingAction = this.takePendingMenuAction(ctx);
+    if (pendingAction) {
+      const handled = await this.handlePendingMenuAction(ctx, pendingAction);
+      if (handled !== false) return;
     }
 
     const shouldRespond = shouldRespondToMessage({
