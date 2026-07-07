@@ -1618,6 +1618,7 @@ export class TelegramAIBot {
     this.botUsername = me.username || '';
     await this.bot.telegram.setMyCommands([
       { command: 'start', description: 'Start the bot' },
+      { command: 'help', description: 'Show help' },
       { command: 'status', description: 'Show bot status' },
       { command: 'block', description: 'Admin: block user by ID' },
       { command: 'unblock', description: 'Admin: unblock user by ID' },
@@ -1628,6 +1629,7 @@ export class TelegramAIBot {
 
   registerCommands() {
     this.bot.command('start', (ctx) => this.handleStart(ctx));
+    this.bot.command('help', (ctx) => this.handleHelp(ctx));
     this.bot.command('status', (ctx) => this.handleStatus(ctx));
     this.bot.command('translate', (ctx) => this.runTranslation(ctx, extractCommandArgs(ctx.message.text || ''), 'auto'));
     this.bot.command('tr', (ctx) => this.runTranslation(ctx, extractCommandArgs(ctx.message.text || ''), 'auto'));
@@ -1702,29 +1704,75 @@ export class TelegramAIBot {
 
   async handleHelp(ctx) {
     const locale = this.getLocale(ctx);
+
+    if (locale === 'en') {
+      const helpText = [
+        '🆘 Help',
+        '',
+        'Main menu:',
+        '💬 Chat — send any question directly.',
+        '🌍 Translate — choose target language first, then send text.',
+        '🧠 Memory — view memory, current topic, topic list, or clear memory.',
+        '🤖 Models — view and switch available AI models.',
+        '🧹 Clear — choose what to clear: current context, long-term memory, or all.',
+        '🆘 Help — show this page.',
+        '',
+        'Reply buttons:',
+        '🔄 Regenerate — regenerate the last answer.',
+        '🧠 Model — switch model for future replies.',
+        '🌍 Translate — translate this answer into a selected language.',
+        '❤️ Favorite — save the answer.',
+        '🗑 Context — clear current conversation context.',
+        '',
+        'Useful commands:',
+        '/start — show main menu',
+        '/help — show help',
+        '/status — show bot status, models, quota cooldowns',
+        '/translate text — translate text automatically',
+        '',
+        'Notes:',
+        '- If Gemini quota is exhausted, the bot will show a short cooldown message.',
+        '- If fallback models are configured, the bot will try another model automatically.',
+        '- Long-term memory and current chat context are separate.'
+      ].join('\n');
+
+      await sendTextReply(ctx, helpText, this.config.maxOutputChars, this.createMenuKeyboard(locale));
+      return;
+    }
+
     const helpText = [
-      this.t(locale, 'helpTitle'),
-      this.t(locale, 'featureConversation'),
-      this.t(locale, 'featureReset'),
-      this.t(locale, 'featureModels'),
-      this.t(locale, 'featureModel'),
-      this.t(locale, 'featurePersona'),
-      this.t(locale, 'featureLanguage'),
-      this.t(locale, 'featureButtons'),
-      this.t(locale, 'featureWeb'),
-      this.t(locale, 'featureImage'),
-      this.t(locale, 'featureTts'),
-      this.t(locale, 'featurePhoto'),
-      this.t(locale, 'featureVoice'),
-      this.t(locale, 'featureDocument'),
-      this.t(locale, 'featureChatmode'),
-      this.t(locale, 'featureKeyword'),
-      this.t(locale, 'featureStats'),
-      this.t(locale, 'featureAdmin')
+      '🆘 帮助',
+      '',
+      '主菜单：',
+      '💬 对话 —— 直接发问题就行。',
+      '🌍 翻译 —— 先选目标语言，再发送要翻译的内容。',
+      '🧠 记忆 —— 查看当前记忆、当前话题、话题列表，或清空记忆。',
+      '🤖 模型 —— 查看并切换可用 AI 模型。',
+      '🧹 清空 —— 可选择清空当前上下文、长期记忆，或全部清空。',
+      '🆘 帮助 —— 显示这个页面。',
+      '',
+      '回复下方按钮：',
+      '🔄 重生成 —— 重新生成上一条回答。',
+      '🧠 模型 —— 切换后续回复使用的模型。',
+      '🌍 翻译 —— 把这条回复翻译成指定语言。',
+      '❤️ 收藏 —— 保存这条回复。',
+      '🗑 上下文 —— 清空当前对话上下文。',
+      '',
+      '常用命令：',
+      '/start —— 显示主菜单',
+      '/help —— 显示帮助',
+      '/status —— 查看 Bot 状态、模型、额度冷却',
+      '/translate 文本 —— 自动翻译文本',
+      '',
+      '说明：',
+      '- Gemini 额度用完时，Bot 会显示简洁冷却提示。',
+      '- 如果配置了备用模型，Bot 会自动尝试切换模型。',
+      '- 长期记忆和当前对话上下文是分开的。'
     ].join('\n');
 
     await sendTextReply(ctx, helpText, this.config.maxOutputChars, this.createMenuKeyboard(locale));
   }
+
 
   async handleClearPrompt(ctx) {
     const locale = this.getLocale(ctx);
