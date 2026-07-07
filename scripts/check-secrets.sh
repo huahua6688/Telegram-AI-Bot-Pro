@@ -4,7 +4,7 @@ set -euo pipefail
 bad_files="$(
   git ls-files \
     | grep -E '(^\.env$|^\.env\.|^data/|\.db$|\.sqlite$|\.sqlite3$|\.db-journal$|\.sqlite-journal$|\.sqlite3-journal$)' \
-    | grep -v '^\.env\.example$' || true
+    | grep -v -E '^\.env\.(example|zeabur\.example)$' || true
 )"
 
 if [ -n "$bad_files" ]; then
