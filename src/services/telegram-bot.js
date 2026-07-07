@@ -1092,7 +1092,6 @@ export class TelegramAIBot {
   async classifyUserIntent(ctx, text = '', memoryContext = null) {
     if (!this.config.enableAiRouter) return { intent: 'chat' };
 
-    const locale = this.getLocale(ctx);
     const content = String(text || '').trim();
     if (!content) return { intent: 'chat' };
 
@@ -1100,9 +1099,9 @@ export class TelegramAIBot {
 
     try {
       const completion = await this.completeWithAiFallback({
-        scope: 'translation',
+        scope: 'router',
         model,
-        locale,
+        locale: this.getLocale(ctx),
         request: {
           messages: [
           {
