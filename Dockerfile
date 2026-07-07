@@ -14,9 +14,7 @@ RUN if [ -f package-lock.json ]; then \
 
 COPY . .
 
-RUN mkdir -p /data && chown -R node:node /app /data
-
-USER node
+RUN mkdir -p /data
 
 EXPOSE 8080
 
