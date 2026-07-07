@@ -245,8 +245,34 @@ function createSessionId(ctx) {
   return `${chatId}:${userId}:${threadId}`;
 }
 
+function cleanBotOutput(text = '') {
+  return String(text || '')
+    // 去掉代码块围栏
+    .replace(/```[\w-]*\n?/g, '')
+    .replace(/```/g, '')
+    // 去掉行内代码反引号
+    .replace(/`([^`]+)`/g, '$1')
+    // 去掉 Markdown 标题符号
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    // Markdown 加粗/斜体符号
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/(^|[^\w])\*([^*\n]+)\*/g, '$1$2')
+    .replace(/(^|[^\w])_([^_\n]+)_/g, '$1$2')
+    // 列表统一成普通短横线，避免一堆 *
+    .replace(/^\s*[\*\u2022]\s+/gm, '- ')
+    // 去掉引用符号
+    .replace(/^\s*>\s?/gm, '')
+    // 去掉模型偶尔输出的脚注/上标符号
+    .replace(/\^+/g, '')
+    // 清理过多空行
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 async function sendTextReply(ctx, text, maxLength, extra = {}) {
-  const chunks = splitMessage(text, maxLength);
+  const cleaned = cleanBotOutput(text);
+  const chunks = splitMessage(cleaned, maxLength);
   for (const chunk of chunks) {
     await ctx.reply(chunk, {
       ...extra,
