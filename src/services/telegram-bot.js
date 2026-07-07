@@ -605,6 +605,24 @@ export class TelegramAIBot {
     ]);
   }
 
+  createAssistantTranslationKeyboard(locale, token) {
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback('中文', `act:translate_pick:${token}:zh`),
+        Markup.button.callback('English', `act:translate_pick:${token}:en`)
+      ],
+      [
+        Markup.button.callback('高棉语', `act:translate_pick:${token}:km`),
+        Markup.button.callback('粤语', `act:translate_pick:${token}:yue`)
+      ],
+      [
+        Markup.button.callback('繁体中文', `act:translate_pick:${token}:zh_hant`),
+        Markup.button.callback(locale === 'en' ? 'Auto' : '自动', `act:translate_pick:${token}:auto`)
+      ],
+      [Markup.button.callback(this.t(locale, 'actionBack'), `act:back:${token}`)]
+    ]);
+  }
+
   createAssistantModelKeyboard(locale, token, currentModel = '') {
     const modelButtons = this.config.availableModels.map((model, index) =>
       Markup.button.callback(model === currentModel ? `✅ ${model}` : model, `act:model_pick:${token}:${index}`)
@@ -2048,8 +2066,14 @@ export class TelegramAIBot {
         return;
       }
       if (action === 'translate') {
+        await ctx.answerCbQuery();
+        await this.applyAssistantActionKeyboard(ctx, this.createAssistantTranslationKeyboard(state.locale, token));
+        return;
+      }
+      if (action === 'translate_pick') {
+        const targetLanguage = this.resolveTranslationTargetCode(parts[3] || 'auto');
         await ctx.answerCbQuery(this.t(state.locale, 'actionWorking'));
-        const translated = await this.translateAssistantReply(state);
+        const translated = await this.translateAssistantReply(state, targetLanguage);
         if (!translated) return;
         state.replyText = translated;
         await this.editAssistantMessageText(ctx, translated, this.createAssistantActionKeyboard(state.locale, token));
@@ -2072,14 +2096,22 @@ export class TelegramAIBot {
     }
   }
 
-  async translateAssistantReply(state) {
-    const targetLocale = state.locale === 'zh' ? 'en' : 'zh';
-    const prompt =
-      targetLocale === 'zh'
-        ? '请将下面内容翻译成简体中文，只输出翻译结果，不要额外说明。'
-        : 'Translate the content below to English and output translation only.';
+  async translateAssistantReply(state, targetLanguage = 'auto') {
+    const resolvedTarget = String(targetLanguage || 'auto').trim();
+
+    let prompt = '';
+    if (!resolvedTarget || resolvedTarget === 'auto') {
+      const targetLocale = state.locale === 'zh' ? 'en' : 'zh';
+      prompt =
+        targetLocale === 'zh'
+          ? '请将下面内容翻译成简体中文，只输出翻译结果，不要额外说明。'
+          : 'Translate the content below to English and output translation only.';
+    } else {
+      prompt = `Translate the content below into ${resolvedTarget}. Output the translation only. Do not add explanations.`;
+    }
+
     const result = await this.aiClient.completeWithTools({
-      model: state.model || this.config.defaultModel,
+      model: state.model || this.config.translationModel || this.config.defaultModel,
       messages: [
         { role: 'system', content: prompt },
         { role: 'user', content: state.replyText || '' }
