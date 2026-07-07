@@ -4,23 +4,32 @@ import fs from 'node:fs';
 
 const source = fs.readFileSync('src/services/telegram-bot.js', 'utf8');
 
-function extractMethod(name) {
-  const start = source.indexOf(`  async ${name}`);
-  assert.notEqual(start, -1, `missing method ${name}`);
+function extractBetween(startMarker, endMarker) {
+  const start = source.indexOf(startMarker);
+  assert.notEqual(start, -1, `missing start marker: ${startMarker}`);
 
-  const next = source.indexOf('\n  async ', start + 1);
-  const nextSync = source.indexOf('\n  ', start + 1);
+  const end = source.indexOf(endMarker, start + startMarker.length);
+  assert.notEqual(end, -1, `missing end marker: ${endMarker}`);
 
-  const endCandidates = [next, nextSync]
-    .filter((item) => item > start)
-    .sort((a, b) => a - b);
-
-  const end = endCandidates[0] || source.length;
   return source.slice(start, end);
 }
 
+function extractRunTranslation() {
+  return extractBetween(
+    '  async runTranslation(ctx, text = \'\', targetLanguage = \'auto\') {',
+    '\n  normalizeLanguageInput'
+  );
+}
+
+function extractClassifyUserIntent() {
+  return extractBetween(
+    '  async classifyUserIntent(ctx, text = \'\', memoryContext = null) {',
+    '\n  async handleRoutedIntent'
+  );
+}
+
 test('translation uses translation fallback scope', () => {
-  const block = extractMethod('runTranslation');
+  const block = extractRunTranslation();
 
   assert.match(block, /completeWithAiFallback\(\{/);
   assert.match(block, /scope:\s*'translation'/);
@@ -28,7 +37,7 @@ test('translation uses translation fallback scope', () => {
 });
 
 test('router uses router fallback scope and a real locale value', () => {
-  const block = extractMethod('classifyUserIntent');
+  const block = extractClassifyUserIntent();
 
   assert.match(block, /completeWithAiFallback\(\{/);
   assert.match(block, /scope:\s*'router'/);
@@ -38,8 +47,8 @@ test('router uses router fallback scope and a real locale value', () => {
 });
 
 test('fallback handles cooldown instead of pre-blocking primary model', () => {
-  const translationBlock = extractMethod('runTranslation');
-  const routerBlock = extractMethod('classifyUserIntent');
+  const translationBlock = extractRunTranslation();
+  const routerBlock = extractClassifyUserIntent();
 
   assert.doesNotMatch(
     translationBlock,
