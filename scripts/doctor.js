@@ -110,6 +110,17 @@ if (!process.env.HEALTH_PORT && !process.env.PORT) {
   warnings.push('没有设置 HEALTH_PORT 或 PORT。Zeabur 建议设置 PORT=8080 或 HEALTH_PORT=8080。');
 }
 
+if (!hasEnv('ADMIN_USER_IDS')) {
+  warnings.push('ADMIN_USER_IDS 未配置。/status 是管理员专用命令，请先给 Bot 发送 /whoami，再把用户 ID 填到 Zeabur 的 ADMIN_USER_IDS。');
+} else {
+  ok(`ADMIN_USER_IDS: ${mask(process.env.ADMIN_USER_IDS)}`);
+}
+
+const adminApiEnabled = String(process.env.ADMIN_API_ENABLED || '').trim().toLowerCase();
+if (adminApiEnabled === 'true' && !hasEnv('ADMIN_API_TOKEN')) {
+  warnings.push('ADMIN_API_ENABLED=true 但 ADMIN_API_TOKEN 未配置。建议设置强随机 token，或关闭 ADMIN_API_ENABLED。');
+}
+
 if (config.aiProvider === 'gemini' && String(config.defaultModel || '').includes('live')) {
   warnings.push('AI_PROVIDER=gemini 但 AI_MODEL 看起来是 Live 模型。Live 模型建议后续单独用 gemini-live 能力接入。');
 }
