@@ -15,7 +15,8 @@
     "test:load": "node --test test/phase-g.load.test.js",
     "test:fault": "node --test test/phase-g.fault-injection.test.js",
     "test:full": "npm run test:quick && npm run test:e2e && npm run test:regression",
-    "test:release": "npm run test:full && npm run test:load && npm run test:fault"
+    "test:release": "npm run test:full && npm run test:load && npm run test:fault",
+    "doctor": "node scripts/doctor.js"
   },
   "keywords": [
     "telegram",
