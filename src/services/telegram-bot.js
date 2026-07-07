@@ -605,6 +605,9 @@ export class TelegramAIBot {
     if (['高棉语', '柬埔寨语', '柬语', 'khmer', 'km'].includes(normalized)) {
       return 'Khmer';
     }
+    if (['粤语', '粵語', '广东话', '廣東話', '香港粤语', '香港粵語', '香港廣東話', 'cantonese', 'yue'].includes(normalized)) {
+      return 'Cantonese, using natural Hong Kong Cantonese expressions and Traditional Chinese characters';
+    }
     if (['日语', '日本语', 'japanese', 'ja'].includes(normalized)) {
       return 'Japanese';
     }
