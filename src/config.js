@@ -132,7 +132,7 @@ export function loadConfig() {
     adminApiPort: parseInteger(process.env.ADMIN_API_PORT, 3001),
     adminApiPrefix: process.env.ADMIN_API_PREFIX || '/admin/api/v1',
     adminApiToken: process.env.ADMIN_API_TOKEN || '',
-    adminApiEnabled: parseBoolean(process.env.ADMIN_API_ENABLED, true),
+    adminApiEnabled: parseBoolean(process.env.ADMIN_API_ENABLED, false),
     databaseFile,
     legacyDataFile,
     adminUserIds: new Set(parseList(process.env.ADMIN_USER_IDS).map(String)),
