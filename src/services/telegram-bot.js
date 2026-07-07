@@ -12,6 +12,7 @@ import { personaPresets } from '../config.js';
 import { DocumentParser } from './document-parser.js';
 import { MultimodalActionService } from './multimodal-action-service.js';
 import { AudioOrchestrator } from './audio-orchestrator.js';
+import { MemoryManager } from './memory-manager.js';
 
 const LANGUAGE_NAMES = {
   zh: '中文',
@@ -366,6 +367,12 @@ export class TelegramAIBot {
       logger,
       getProviderCapabilities: () => this.getProviderCapabilities(),
       getProviderName: () => this.getProviderName()
+    });
+    this.memoryManager = new MemoryManager({
+      db,
+      aiClient,
+      config,
+      logger
     });
   }
 
@@ -876,6 +883,22 @@ export class TelegramAIBot {
         liveTranslate: false
       }
     );
+  }
+
+  buildMemoryEnhancedSystemPrompt(basePrompt = '', memoryContext = null) {
+    const prompt = String(basePrompt || '').trim();
+    const memoryText = String(memoryContext?.text || '').trim();
+
+    if (!memoryText) return prompt;
+
+    return [
+      prompt,
+      '',
+      'Memory and topic context:',
+      memoryText,
+      '',
+      'Use the memory above only when it is relevant. If the user asks a side question, answer it clearly and then keep the previous main task in mind.'
+    ].join('\n');
   }
 
   getProviderName() {
@@ -1753,6 +1776,28 @@ export class TelegramAIBot {
       return;
     }
 
+    let memoryContext = null;
+    try {
+      this.memoryManager.rememberProjectDefaults({
+        userId: ctx.from.id,
+        chatId: ctx.chat.id
+      });
+      memoryContext = this.memoryManager.getMemoryContext({
+        userId: ctx.from.id,
+        chatId: ctx.chat.id,
+        text: text || caption
+      });
+      this.memoryManager.updateAfterUserMessage({
+        userId: ctx.from.id,
+        chatId: ctx.chat.id,
+        memoryContext,
+        userText: text || caption
+      });
+    } catch (error) {
+      this.logger.warn('Memory context unavailable', { error: error.message });
+      memoryContext = null;
+    }
+
     try {
       await ctx.sendChatAction('typing');
       const prepared = await this.prepareUserMessage(ctx);
@@ -1763,9 +1808,10 @@ export class TelegramAIBot {
         strategy: 'recent'
       });
       const history = buildConversationHistory(storedContext, this.config.maxHistoryMessages);
+      const baseSystemPrompt = createSystemPrompt(this.config, chat || {}, user || { persona: 'default', customSystemPrompt: '' }, locale);
       const systemMessage = {
         role: 'system',
-        content: createSystemPrompt(this.config, chat || {}, user || { persona: 'default', customSystemPrompt: '' }, locale)
+        content: this.buildMemoryEnhancedSystemPrompt(baseSystemPrompt, memoryContext)
       };
 
       const messages = [systemMessage, ...history, prepared.message];
@@ -1814,6 +1860,7 @@ export class TelegramAIBot {
           preparedMessage: prepared.message,
           historyBefore: history,
           systemMessage,
+          memoryContext,
           sourceText: typeof prepared.message?.content === 'string' ? prepared.message.content : text || caption || '',
           replyText: assistantText,
           assistantMessageId: assistantRef?.messageId || '',
