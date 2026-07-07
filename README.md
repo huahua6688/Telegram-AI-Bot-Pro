@@ -1,5 +1,38 @@
 # Telegram-AI-Bot-Pro
 
+<!-- ZEABUR_DEPLOY_START -->
+## 🚀 Zeabur 一键部署入口
+
+本项目推荐使用 Dockerfile 部署到 Zeabur。
+
+部署前检查：
+
+    npm run predeploy
+
+Zeabur 环境变量模板：
+
+    .env.zeabur.example
+
+完整部署说明：
+
+    docs/ZEABUR.md
+
+最少需要在 Zeabur 填写这些环境变量：
+
+    BOT_TOKEN
+    AI_PROVIDER
+    GEMINI_API_KEY
+    AI_MODEL
+    ADMIN_USER_IDS
+
+不知道自己的 Telegram 用户 ID 时，部署后给机器人发送：
+
+    /whoami
+
+然后把显示的 User ID 填到 Zeabur 的 ADMIN_USER_IDS。
+<!-- ZEABUR_DEPLOY_END -->
+
+
 [![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template?template=https://github.com/huahua6688/Telegram-AI-Bot-Pro)
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/huahua6688/Telegram-AI-Bot-Pro)
 [![Deploy on Zeabur](https://zeabur.com/button.svg)](https://zeabur.com/new?template=https://github.com/huahua6688/Telegram-AI-Bot-Pro)
