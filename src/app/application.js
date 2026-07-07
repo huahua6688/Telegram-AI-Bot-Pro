@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { createConfigCenter } from '../core/config/config-center.js';
 import { AppError } from '../core/errors/app-error.js';
 import { ErrorCodes } from '../core/errors/error-codes.js';
@@ -12,6 +14,17 @@ import { startAdminApiServer } from '../services/admin-api-server.js';
 import { AccessControlService } from '../services/access-control-service.js';
 import { createStructuredLogger } from '../core/observability/structured-logger.js';
 
+function ensureRuntimeFileDirectory(filePath = '', label = 'file') {
+  const raw = String(filePath || '').trim();
+  if (!raw) return;
+
+  const dir = path.dirname(raw);
+  if (!dir || dir === '.') return;
+
+  fs.mkdirSync(dir, { recursive: true });
+  fs.accessSync(dir, fs.constants.W_OK);
+}
+
 export async function createApplication() {
   const logger = createStructuredLogger();
 
@@ -19,6 +32,9 @@ export async function createApplication() {
     const rawConfig = loadEnvConfig();
     const configCenter = createConfigCenter(rawConfig);
     const runtimeConfig = configCenter.raw;
+
+    ensureRuntimeFileDirectory(runtimeConfig.databaseFile, 'DATABASE_FILE');
+    ensureRuntimeFileDirectory(runtimeConfig.dataFile, 'DATA_FILE');
 
     const db = await createDatabase(runtimeConfig);
     const accessControl = new AccessControlService({ config: runtimeConfig, db, logger });
