@@ -981,9 +981,12 @@ export class TelegramAIBot {
     try {
       await ctx.sendChatAction('typing');
 
-      const result = await this.aiClient.completeWithTools({
+      const completion = await this.completeWithAiFallback({
+        scope: 'router',
         model,
-        messages: [
+        locale: this.getLocale(ctx),
+        request: {
+          messages: [
           {
             role: 'system',
             content: [
@@ -1002,10 +1005,12 @@ export class TelegramAIBot {
             content: `${targetInstruction}\n\nSource text:\n${sourceText}`
           }
         ],
-        tools: [],
-        temperature: 0.1
+          tools: [],
+          temperature: 0.1
+        }
       });
 
+      const result = completion.result;
       await sendTextReply(ctx, result.text || this.t(locale, 'noReply'), this.config.maxOutputChars);
     } catch (error) {
       if (this.isAiQuotaError(error)) {
@@ -1095,9 +1100,12 @@ export class TelegramAIBot {
     }
 
     try {
-      const result = await this.aiClient.completeWithTools({
+      const completion = await this.completeWithAiFallback({
+        scope: 'translation',
         model,
-        messages: [
+        locale,
+        request: {
+          messages: [
           {
             role: 'system',
             content: [
@@ -1149,10 +1157,12 @@ export class TelegramAIBot {
             ].join('\n').trim()
           }
         ],
-        tools: [],
-        temperature: 0
+          tools: [],
+          temperature: 0
+        }
       });
 
+      const result = completion.result;
       const parsed = this.extractJsonObject(result.text || '');
       if (!parsed || typeof parsed !== 'object') return { intent: 'chat' };
 
@@ -1306,6 +1316,70 @@ export class TelegramAIBot {
       message: this.formatUserFacingError(error, 'zh').split('\n')[0],
       detail: cleaned || undefined
     };
+  }
+
+  buildAiModelCandidates(primaryModel = '', ...extraModels) {
+    return Array.from(
+      new Set(
+        [
+          primaryModel,
+          ...extraModels,
+          this.config.defaultModel,
+          this.config.translationModel,
+          this.config.routerModel,
+          ...(this.config.availableModels || [])
+        ]
+          .map((item) => String(item || '').trim())
+          .filter(Boolean)
+      )
+    );
+  }
+
+  async completeWithAiFallback({ scope = 'chat', model = '', request = {}, locale = 'zh' } = {}) {
+    const candidates = this.buildAiModelCandidates(model);
+    const skippedCooldowns = [];
+    let lastQuotaError = null;
+
+    for (const candidate of candidates) {
+      const cooldown = this.getAiCooldown(scope, candidate);
+      if (cooldown) {
+        skippedCooldowns.push(cooldown);
+        continue;
+      }
+
+      try {
+        const result = await this.aiClient.completeWithTools({
+          ...request,
+          model: candidate
+        });
+
+        return {
+          result,
+          model: candidate
+        };
+      } catch (error) {
+        if (this.isAiQuotaError(error)) {
+          lastQuotaError = error;
+          this.setAiCooldown(scope, candidate, error);
+          this.logger.warn('AI model quota exhausted, trying fallback model', {
+            scope,
+            model: candidate,
+            error: this.formatLogError(error)
+          });
+          continue;
+        }
+
+        throw error;
+      }
+    }
+
+    const retrySeconds = Math.max(
+      1,
+      ...skippedCooldowns.map((item) => Number(item.retrySeconds || 0)),
+      this.extractRetrySecondsFromError(lastQuotaError) || 60
+    );
+
+    throw new Error(`AI quota exceeded. Please retry in ${retrySeconds}s.`);
   }
 
   formatUserFacingError(error, locale = 'zh') {
@@ -2323,14 +2397,19 @@ export class TelegramAIBot {
       prompt = `Translate the content below into ${resolvedTarget}. Output the translation only. Do not add explanations.`;
     }
 
-    const result = await this.aiClient.completeWithTools({
+    const completion = await this.completeWithAiFallback({
+      scope: 'translation',
       model: this.config.translationModel || state.model || this.config.defaultModel,
-      messages: [
+      locale: state.locale || 'zh',
+      request: {
+        messages: [
         { role: 'system', content: prompt },
         { role: 'user', content: state.replyText || '' }
       ],
-      tools: []
+        tools: []
+      }
     });
+    const result = completion.result;
     return result.text || '';
   }
 
@@ -2346,25 +2425,30 @@ export class TelegramAIBot {
     }
     const user = this.db.findUser(state.userId);
     const model = user?.preferredModel || state.model || this.config.defaultModel;
-    const result = await this.aiClient.completeWithTools({
+    const completion = await this.completeWithAiFallback({
+      scope: 'chat',
       model,
-      messages: [state.systemMessage, ...(state.historyBefore || []), state.preparedMessage],
-      tools:
+      locale: state.locale || 'zh',
+      request: {
+        messages: [state.systemMessage, ...(state.historyBefore || []), state.preparedMessage],
+        tools:
         this.config.enableToolCalls && this.getProviderCapabilities().toolCalls
           ? this.toolRegistry.getDefinitions()
           : [],
-      toolRunner: async (toolCall) => {
-        const output = await this.toolRegistry.execute(toolCall, {
-          source: 'assistant_regenerate',
-          userId: state.userId,
-          chatId: state.chatId,
-          isAdmin: this.config.adminUserIds.has(String(state.userId)),
-          toolUsage: state.toolUsage || (state.toolUsage = { count: 0 })
-        });
-        await this.db.incrementStats('toolCalls');
-        return output;
+        toolRunner: async (toolCall) => {
+          const output = await this.toolRegistry.execute(toolCall, {
+            source: 'assistant_regenerate',
+            userId: state.userId,
+            chatId: state.chatId,
+            isAdmin: this.config.adminUserIds.has(String(state.userId)),
+            toolUsage: state.toolUsage || (state.toolUsage = { count: 0 })
+          });
+          await this.db.incrementStats('toolCalls');
+          return output;
+        }
       }
     });
+    const result = completion.result;
     await this.db.setConversation(
       state.sessionId,
       buildConversationHistory(
@@ -2592,25 +2676,32 @@ export class TelegramAIBot {
 
       const messages = [systemMessage, ...history, prepared.message];
       const toolUsage = { count: 0 };
-      const result = await this.aiClient.completeWithTools({
+      const completion = await this.completeWithAiFallback({
+        scope: 'chat',
         model,
-        messages,
-        tools:
+        locale,
+        request: {
+          messages,
+          tools:
           this.config.enableToolCalls && this.getProviderCapabilities().toolCalls
             ? this.toolRegistry.getDefinitions()
             : [],
-        toolRunner: async (toolCall) => {
-          const output = await this.toolRegistry.execute(toolCall, {
-            source: 'assistant_chat',
-            userId: ctx.from?.id,
-            chatId: ctx.chat?.id,
-            isAdmin: this.isAdmin(ctx),
-            toolUsage
-          });
-          await this.db.incrementStats('toolCalls');
-          return output;
+          toolRunner: async (toolCall) => {
+            const output = await this.toolRegistry.execute(toolCall, {
+              source: 'assistant_chat',
+              userId: ctx.from?.id,
+              chatId: ctx.chat?.id,
+              isAdmin: this.isAdmin(ctx),
+              toolUsage
+            });
+            await this.db.incrementStats('toolCalls');
+            return output;
+          }
         }
       });
+
+      const result = completion.result;
+      activeAiModel = completion.model || model;
 
       await this.db.incrementStats('messagesHandled');
       await this.db.incrementStats('aiCalls');
