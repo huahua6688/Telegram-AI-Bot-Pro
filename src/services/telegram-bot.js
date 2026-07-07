@@ -995,19 +995,14 @@ export class TelegramAIBot {
         : `Translate the source text into ${targetLanguage}.`;
 
     const model = this.config.translationModel || this.config.defaultModel;
-    const cooldown = this.getAiCooldown('translation', model);
-    if (cooldown) {
-      await ctx.reply(this.formatQuotaCooldownMessage(cooldown, locale));
-      return;
-    }
 
     try {
       await ctx.sendChatAction('typing');
 
       const completion = await this.completeWithAiFallback({
-        scope: 'translation',
+        scope: 'router',
         model,
-        locale,
+        locale: this.getLocale(ctx),
         request: {
           messages: [
           {
@@ -1117,10 +1112,6 @@ export class TelegramAIBot {
     if (!content) return { intent: 'chat' };
 
     const model = this.config.routerModel || this.config.translationModel || this.config.defaultModel;
-    const cooldown = this.getAiCooldown('router', model);
-    if (cooldown) {
-      return { intent: 'chat', topicId: memoryContext?.topicId || 'general' };
-    }
 
     try {
       const completion = await this.completeWithAiFallback({
