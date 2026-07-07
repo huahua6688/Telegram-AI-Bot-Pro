@@ -885,6 +885,160 @@ export class TelegramAIBot {
     );
   }
 
+  extractJsonObject(text = '') {
+    const raw = String(text || '').trim();
+    if (!raw) return null;
+
+    try {
+      return JSON.parse(raw);
+    } catch {
+      // continue
+    }
+
+    const start = raw.indexOf('{');
+    const end = raw.lastIndexOf('}');
+    if (start < 0 || end <= start) return null;
+
+    try {
+      return JSON.parse(raw.slice(start, end + 1));
+    } catch {
+      return null;
+    }
+  }
+
+  async classifyUserIntent(ctx, text = '', memoryContext = null) {
+    if (!this.config.enableAiRouter) return { intent: 'chat' };
+
+    const content = String(text || '').trim();
+    if (!content) return { intent: 'chat' };
+
+    try {
+      const model = this.config.routerModel || this.config.translationModel || this.config.defaultModel;
+
+      const result = await this.aiClient.completeWithTools({
+        model,
+        messages: [
+          {
+            role: 'system',
+            content: [
+              'You are an intent and topic router for a Telegram AI bot.',
+              'Return only valid JSON. Do not use Markdown. Do not explain.',
+              '',
+              'Allowed intents:',
+              '- chat: normal conversation or normal question',
+              '- translate: translation, rewrite into another language, or asks how to say something in another language',
+              '- web_search: latest/current information, news, prices, exchange rates, weather, schedules, or explicit search request',
+              '- reset_memory: clear/reset/delete conversation memory',
+              '- help: asks what the bot can do or how to use it',
+              '- models: asks to view/change/switch AI model',
+              '',
+              'Known topics:',
+              '- telegram_bot: Telegram AI bot, Zeabur, Gemini, Dockerfile, buttons, translation, AI router, memory',
+              '- proxy_node: proxy node, x-ui, 3x-ui, v2ray, xray, server panel',
+              '- network_router: router, SIM card, DNS, Wi-Fi, TP-Link MR505, U Mobile, CelcomDigi',
+              '- travel_malaysia: Malaysia travel/life, RM, Kuala Lumpur, AirAsia',
+              '- translation_chat: language translation, Khmer, Cantonese, Traditional Chinese',
+              '- general: anything else',
+              '',
+              'JSON schema:',
+              '{',
+              '  "intent": "chat|translate|web_search|reset_memory|help|models",',
+              '  "topicId": "telegram_bot|proxy_node|network_router|travel_malaysia|translation_chat|general",',
+              '  "isSideQuestion": true,',
+              '  "returnTopicId": "previous main topic id or empty",',
+              '  "text": "text to translate or chat text",',
+              '  "targetLanguage": "target language for translate, empty if not translate",',
+              '  "query": "search query for web_search, empty if not web_search"',
+              '}',
+              '',
+              'Rules:',
+              '1. If the user says continue, next step, go on, or 继续刚才那个, use the current main topic from memory.',
+              '2. If the user temporarily asks about a different topic, set isSideQuestion=true and returnTopicId to the previous main topic.',
+              '3. If the user asks translate to X, change to X, rewrite as X, X怎么说, or how to say in X, use translate.',
+              '4. For translate, extract source text into text and target language into targetLanguage.',
+              '5. If unsure, use chat and general.',
+              '6. Output JSON only.'
+            ].join('\n')
+          },
+          {
+            role: 'user',
+            content: [
+              memoryContext?.text ? `Memory context:\n${memoryContext.text}` : '',
+              '',
+              `User message:\n${content}`
+            ].join('\n').trim()
+          }
+        ],
+        tools: [],
+        temperature: 0
+      });
+
+      const parsed = this.extractJsonObject(result.text || '');
+      if (!parsed || typeof parsed !== 'object') return { intent: 'chat' };
+
+      const allowedIntents = new Set(['chat', 'translate', 'web_search', 'reset_memory', 'help', 'models']);
+      const allowedTopics = new Set(['telegram_bot', 'proxy_node', 'network_router', 'travel_malaysia', 'translation_chat', 'general']);
+
+      const intent = allowedIntents.has(String(parsed.intent || '').trim()) ? String(parsed.intent).trim() : 'chat';
+      const topicId = allowedTopics.has(String(parsed.topicId || '').trim()) ? String(parsed.topicId).trim() : memoryContext?.topicId || 'general';
+
+      return {
+        intent,
+        topicId,
+        isSideQuestion: Boolean(parsed.isSideQuestion),
+        returnTopicId: String(parsed.returnTopicId || '').trim(),
+        text: String(parsed.text || content).trim(),
+        targetLanguage: String(parsed.targetLanguage || '').trim(),
+        query: String(parsed.query || '').trim()
+      };
+    } catch (error) {
+      this.logger.warn('AI router failed, fallback to chat', { error: error.message });
+      return { intent: 'chat', topicId: memoryContext?.topicId || 'general' };
+    }
+  }
+
+  async handleRoutedIntent(ctx, routedIntent, locale) {
+    const intent = String(routedIntent?.intent || 'chat');
+
+    if (intent === 'translate') {
+      const sourceText = String(routedIntent.text || '').trim();
+      const targetLanguage = this.normalizeTranslationTarget(routedIntent.targetLanguage || 'auto');
+
+      if (sourceText) {
+        await this.runTranslation(ctx, sourceText, targetLanguage || 'auto');
+        return true;
+      }
+
+      return false;
+    }
+
+    if (intent === 'web_search') {
+      const query = String(routedIntent.query || routedIntent.text || '').trim();
+      if (query) {
+        await this.runWebSearch(ctx, query);
+        return true;
+      }
+      return false;
+    }
+
+    if (intent === 'reset_memory') {
+      await this.handleReset(ctx);
+      return true;
+    }
+
+    if (intent === 'help') {
+      await this.handleHelp(ctx);
+      return true;
+    }
+
+    if (intent === 'models') {
+      await this.handleModels(ctx);
+      return true;
+    }
+
+    return false;
+  }
+
   buildMemoryEnhancedSystemPrompt(basePrompt = '', memoryContext = null) {
     const prompt = String(basePrompt || '').trim();
     const memoryText = String(memoryContext?.text || '').trim();
@@ -1798,6 +1952,24 @@ export class TelegramAIBot {
       memoryContext = null;
     }
 
+    let routedIntent = null;
+    if (text && this.config.enableAiRouter) {
+      routedIntent = await this.classifyUserIntent(ctx, text, memoryContext);
+
+      if (routedIntent?.topicId && memoryContext) {
+        memoryContext.topicId = routedIntent.topicId;
+        if (routedIntent.isSideQuestion && routedIntent.returnTopicId) {
+          memoryContext.isSideQuestion = true;
+          memoryContext.returnTopicId = routedIntent.returnTopicId;
+        }
+      }
+
+      if (routedIntent?.intent && routedIntent.intent !== 'chat') {
+        const routedHandled = await this.handleRoutedIntent(ctx, routedIntent, locale);
+        if (routedHandled) return;
+      }
+    }
+
     try {
       await ctx.sendChatAction('typing');
       const prepared = await this.prepareUserMessage(ctx);
@@ -1861,6 +2033,7 @@ export class TelegramAIBot {
           historyBefore: history,
           systemMessage,
           memoryContext,
+          routedIntent,
           sourceText: typeof prepared.message?.content === 'string' ? prepared.message.content : text || caption || '',
           replyText: assistantText,
           assistantMessageId: assistantRef?.messageId || '',

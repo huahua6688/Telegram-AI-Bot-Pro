@@ -95,6 +95,8 @@ export function loadConfig() {
     geminiLiveTtsModel: process.env.GEMINI_LIVE_TTS_MODEL || process.env.TTS_MODEL || defaultModel,
     ttsVoice: process.env.TTS_VOICE || 'alloy',
     translationModel: process.env.TRANSLATION_MODEL || defaultModel,
+    routerModel: process.env.ROUTER_MODEL || process.env.TRANSLATION_MODEL || defaultModel,
+    enableAiRouter: parseBoolean(process.env.ENABLE_AI_ROUTER, true),
     imageModel: process.env.IMAGE_MODEL || 'gpt-image-1',
     imageSize: process.env.IMAGE_SIZE || '1024x1024',
     documentMaxBytes: parseInteger(process.env.DOCUMENT_MAX_BYTES, 6 * 1024 * 1024),
