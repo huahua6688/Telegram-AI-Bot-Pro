@@ -116,6 +116,14 @@ const UI_TEXT = {
     translateHint: '请直接发送要翻译的内容。我会自动判断源语言并翻译。',
     translationTargetPrompt: '请选择要翻译成哪种语言：',
     translationSendPrompt: '请发送要翻译的内容。',
+    clearPrompt: '请选择要清空的内容：',
+    clearShortMemory: '清空当前对话上下文',
+    clearLongMemory: '清空长期记忆',
+    clearAllMemory: '全部清空',
+    clearCancel: '取消',
+    clearCancelled: '已取消。',
+    shortMemoryCleared: '已清空当前对话上下文。',
+    allMemoryCleared: '已清空当前对话上下文、长期记忆和话题状态。',
     streamingPlaceholder: '正在生成回复...',
     actionRegenerate: '🔄 重生成',
     actionModel: '🧠 模型',
@@ -222,6 +230,14 @@ const UI_TEXT = {
     translateHint: 'Send the text you want to translate. I will detect the source language automatically.',
     translationTargetPrompt: 'Choose the target language:',
     translationSendPrompt: 'Send the text you want to translate.',
+    clearPrompt: 'Choose what to clear:',
+    clearShortMemory: 'Clear current chat context',
+    clearLongMemory: 'Clear long-term memory',
+    clearAllMemory: 'Clear everything',
+    clearCancel: 'Cancel',
+    clearCancelled: 'Cancelled.',
+    shortMemoryCleared: 'Current chat context cleared.',
+    allMemoryCleared: 'Current chat context, long-term memory, and topic state cleared.',
     streamingPlaceholder: 'Composing reply...',
     actionRegenerate: '🔄 Regenerate',
     actionModel: '🧠 Model',
@@ -366,6 +382,7 @@ export class TelegramAIBot {
     this.pendingMenuActions = new Map();
     this.bot = new Telegraf(config.botToken);
     this.botUsername = '';
+    this.bot.action(/^clear_pick:(.+)$/, (ctx) => this.handleClearTargetCallback(ctx));
     this.bot.action(/^translate_pick:(.+)$/, (ctx) => this.handleTranslateTargetCallback(ctx));
     this.documentParser = new DocumentParser(config, logger);
     this.multimodalActions = new MultimodalActionService({
@@ -443,26 +460,16 @@ export class TelegramAIBot {
     }
 
     if (pending.type === 'web_prompt') {
+      const locale = this.getLocale(ctx);
       if (!text) {
-        await ctx.reply('请直接发送你要搜索的内容。');
+        await ctx.reply(this.t(locale, 'webUsage'));
         return true;
       }
       return this.runWebSearch(ctx, text);
     }
 
-    if (pendingAction === 'translate_prompt') {
-      const locale = this.getLocale(ctx);
-      if (!text) {
-        await ctx.reply(this.t(locale, 'translateHint'));
-        return true;
-      }
-      await this.runTranslation(ctx, text, 'auto');
-      return true;
-    }
-
     if (pending.type === 'image_prompt') {
       if (ctx.message?.photo?.length) {
-        // 直接走普通图片识别流程，不需要用户再输入指令
         return this.handleIncomingMessage(ctx);
       }
 
@@ -472,7 +479,6 @@ export class TelegramAIBot {
 
     if (pending.type === 'voice_prompt') {
       if (ctx.message?.voice || ctx.message?.audio) {
-        // 直接走普通语音处理流程
         return this.handleIncomingMessage(ctx);
       }
 
@@ -542,6 +548,15 @@ export class TelegramAIBot {
       )
     );
     return Markup.inlineKeyboard(chunkItems(buttons, 2));
+  }
+
+  createClearMemoryKeyboard(locale = 'zh') {
+    return Markup.inlineKeyboard([
+      [Markup.button.callback(this.t(locale, 'clearShortMemory'), 'clear_pick:short')],
+      [Markup.button.callback(this.t(locale, 'clearLongMemory'), 'clear_pick:long')],
+      [Markup.button.callback(this.t(locale, 'clearAllMemory'), 'clear_pick:all')],
+      [Markup.button.callback(this.t(locale, 'clearCancel'), 'clear_pick:cancel')]
+    ]);
   }
 
   createTranslationTargetKeyboard(locale = 'zh') {
@@ -683,6 +698,22 @@ export class TelegramAIBot {
     if (/^(models?|模型(列表)?)$/i.test(content)) return { type: 'models' };
     if (/^(persona|人格)$/i.test(content)) return { type: 'persona' };
     if (/^(language|语言|語言)$/i.test(content)) return { type: 'language' };
+
+    if (/^(查看|显示|顯示|show)?(长期|長期)?记忆$/i.test(content) || /^(memory|mem)$/i.test(content)) {
+      return { type: 'memory_show' };
+    }
+    if (/^(查看|显示|顯示|show)?(当前|當前)?话题$/i.test(content) || /^(topic|current topic)$/i.test(content)) {
+      return { type: 'topic_show' };
+    }
+    if (/^(查看|显示|顯示|show)?话题列表$/i.test(content) || /^(topics)$/i.test(content)) {
+      return { type: 'topics_show' };
+    }
+    if (/^(清空|删除|刪除|clear|delete)(长期|長期)?记忆$/i.test(content) || /^(clear memory|delete memory)$/i.test(content)) {
+      return { type: 'memory_clear' };
+    }
+    if (/^(清空|删除|刪除|clear|delete)话题状态$/i.test(content) || /^(clear topics)$/i.test(content)) {
+      return { type: 'topics_clear' };
+    }
 
     if (/^(查看|显示|顯示|show)?(长期|長期)?记忆$/i.test(content) || /^(memory|mem)$/i.test(content)) {
       return { type: 'memory_show' };
@@ -1273,6 +1304,7 @@ export class TelegramAIBot {
     return shortMessage ? `${t.generic}\n${shortMessage}` : t.generic;
   }
 
+
   buildMemoryEnhancedSystemPrompt(basePrompt = '', memoryContext = null) {
     const prompt = String(basePrompt || '').trim();
     const memoryText = String(memoryContext?.text || '').trim();
@@ -1492,6 +1524,49 @@ export class TelegramAIBot {
     await sendTextReply(ctx, helpText, this.config.maxOutputChars, this.createMenuKeyboard(locale));
   }
 
+  async handleClearPrompt(ctx) {
+    const locale = this.getLocale(ctx);
+    await ctx.reply(this.t(locale, 'clearPrompt'), this.createClearMemoryKeyboard(locale));
+  }
+
+  async handleClearTargetCallback(ctx) {
+    const locale = this.getLocale(ctx);
+    const target = String(ctx.match?.[1] || '').trim();
+
+    await ctx.answerCbQuery();
+
+    if (target === 'cancel') {
+      await ctx.reply(this.t(locale, 'clearCancelled'), this.createMenuKeyboard(locale));
+      return;
+    }
+
+    if (target === 'short') {
+      await this.db.clearConversation(createSessionId(ctx));
+      await ctx.reply(this.t(locale, 'shortMemoryCleared'), this.createMenuKeyboard(locale));
+      return;
+    }
+
+    if (target === 'long') {
+      await this.handleMemoryClear(ctx);
+      return;
+    }
+
+    if (target === 'all') {
+      const userId = ctx.from.id;
+      const chatId = ctx.chat.id;
+
+      await this.db.clearConversation(createSessionId(ctx));
+      this.db.deleteMemoryItems?.({ userId, chatId });
+      this.db.clearTopicStates?.({ userId, chatId });
+      this.db.clearActiveContext?.({ userId, chatId });
+
+      await ctx.reply(this.t(locale, 'allMemoryCleared'), this.createMenuKeyboard(locale));
+      return;
+    }
+
+    await ctx.reply(this.t(locale, 'clearPrompt'), this.createClearMemoryKeyboard(locale));
+  }
+
   async handleMemoryShow(ctx) {
     const userId = ctx.from.id;
     const chatId = ctx.chat.id;
@@ -1582,13 +1657,20 @@ export class TelegramAIBot {
   async handleMemoryClear(ctx) {
     const userId = ctx.from.id;
     const chatId = ctx.chat.id;
+    const locale = this.getLocale(ctx);
 
     const memoryCount = this.db.deleteMemoryItems?.({ userId, chatId }) || 0;
     const topicCount = this.db.clearTopicStates?.({ userId, chatId }) || 0;
     this.db.clearActiveContext?.({ userId, chatId });
 
-    await ctx.reply(`已清空长期记忆和话题状态。\n删除记忆：${memoryCount}\n删除话题：${topicCount}`);
+    if (locale === 'en') {
+      await ctx.reply(`Long-term memory and topic state cleared.\nDeleted memory items: ${memoryCount}\nDeleted topics: ${topicCount}`, this.createMenuKeyboard(locale));
+      return;
+    }
+
+    await ctx.reply(`已清空长期记忆和话题状态。\n删除记忆：${memoryCount}\n删除话题：${topicCount}`, this.createMenuKeyboard(locale));
   }
+
 
   async handleTopicsClear(ctx) {
     const userId = ctx.from.id;
@@ -1603,8 +1685,9 @@ export class TelegramAIBot {
   async handleReset(ctx) {
     await this.db.clearConversation(createSessionId(ctx));
     const locale = this.getLocale(ctx);
-    await ctx.reply(this.t(locale, 'memoryCleared'), this.createMenuKeyboard(locale));
+    await ctx.reply(this.t(locale, 'shortMemoryCleared'), this.createMenuKeyboard(locale));
   }
+
 
   async handleMenu(ctx) {
     const locale = this.getLocale(ctx);
@@ -2121,6 +2204,7 @@ export class TelegramAIBot {
     return result.text || '';
   }
 
+
   async regenerateAssistantReply(state) {
     if (!state?.systemMessage || !state?.preparedMessage || !state?.sessionId) {
       this.logger.warn('Skip regenerate: incomplete state payload', {
@@ -2231,14 +2315,14 @@ export class TelegramAIBot {
         return ctx.reply(this.t(locale, 'translationTargetPrompt'), this.createTranslationTargetKeyboard(locale));
       }
       if (naturalAction.type === 'help') return this.handleHelp(ctx);
-      if (naturalAction.type === 'reset') return this.handleReset(ctx);
+      if (naturalAction.type === 'reset') return this.handleClearPrompt(ctx);
       if (naturalAction.type === 'models') return this.handleModels(ctx);
       if (naturalAction.type === 'persona') return this.handlePersona(ctx);
       if (naturalAction.type === 'language') return this.handleLanguage(ctx);
       if (naturalAction.type === 'memory_show') return this.handleMemoryShow(ctx);
       if (naturalAction.type === 'topic_show') return this.handleTopicShow(ctx);
       if (naturalAction.type === 'topics_show') return this.handleTopicsShow(ctx);
-      if (naturalAction.type === 'memory_clear') return this.handleMemoryClear(ctx);
+      if (naturalAction.type === 'memory_clear') return this.handleClearPrompt(ctx);
       if (naturalAction.type === 'topics_clear') return this.handleTopicsClear(ctx);
 
       if (naturalAction.type === 'web_prompt') {
@@ -2255,7 +2339,7 @@ export class TelegramAIBot {
 
       if (naturalAction.type === 'tts_prompt') {
         this.setPendingMenuAction(ctx, 'voice_prompt');
-        await ctx.reply('🎤 语音消息\n\n请直接发送 Telegram 语音消息。\n\n说明：TTS 朗读和 Gemini Live 还没真正接好，后面单独做。');
+        await ctx.reply('🎤 语音消息\n\n请直接发送 Telegram 语音消息。\n\n说明：TTS 朗读和 Gemini Live 后面再单独接。');
         return;
       }
 
