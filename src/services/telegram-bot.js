@@ -2020,6 +2020,19 @@ export class TelegramAIBot {
       const assistantRef = this.db.getLatestAssistantMessageReference(sessionId);
 
       const assistantText = result.text || this.t(locale, 'noReply');
+
+      try {
+        await this.memoryManager.updateAfterAssistantReply({
+          userId: ctx.from.id,
+          chatId: ctx.chat.id,
+          memoryContext,
+          userText: text || caption,
+          assistantText
+        });
+      } catch (error) {
+        this.logger.warn('Failed to update memory after reply', { error: error.message });
+      }
+
       const reply = await this.sendAssistantReply(ctx, assistantText);
       if (reply?.lastMessageId) {
         const state = this.createAssistantActionState({

@@ -280,6 +280,167 @@ export class MemoryManager {
     }
   }
 
+  extractJsonObject(text = '') {
+    const raw = String(text || '').trim();
+    if (!raw) return null;
+
+    try {
+      return JSON.parse(raw);
+    } catch {
+      // continue
+    }
+
+    const start = raw.indexOf('{');
+    const end = raw.lastIndexOf('}');
+    if (start < 0 || end <= start) return null;
+
+    try {
+      return JSON.parse(raw.slice(start, end + 1));
+    } catch {
+      return null;
+    }
+  }
+
+  async summarizeTopicState({
+    userId = '',
+    chatId = '',
+    topicId = DEFAULT_TOPIC,
+    title = '',
+    userText = '',
+    assistantText = '',
+    previousState = null
+  } = {}) {
+    if (!this.aiClient) return null;
+
+    const sourceUserText = truncate(userText, 1200);
+    const sourceAssistantText = truncate(assistantText, 1600);
+
+    if (!sourceUserText && !sourceAssistantText) return null;
+
+    try {
+      const model = this.config.routerModel || this.config.translationModel || this.config.defaultModel;
+
+      const result = await this.aiClient.completeWithTools({
+        model,
+        messages: [
+          {
+            role: 'system',
+            content: [
+              'You update a Telegram bot topic memory.',
+              'Return only valid JSON. Do not use Markdown. Do not explain.',
+              '',
+              'JSON schema:',
+              '{',
+              '  "title": "short topic title",',
+              '  "summary": "compact summary of the topic so far",',
+              '  "currentGoal": "what the user is trying to achieve",',
+              '  "lastStep": "what just happened or was completed",',
+              '  "nextStep": "best next step",',
+              '  "importantMemory": [',
+              '    { "key": "short_key", "value": "stable fact worth remembering", "memoryType": "fact|preference|project|task" }',
+              '  ]',
+              '}',
+              '',
+              'Rules:',
+              '1. Keep summary short but useful.',
+              '2. Only include stable useful memories, not every small message.',
+              '3. For code/deployment projects, remember repo, platform, error, fix tried, next action.',
+              '4. If no important memory, use empty array.',
+              '5. Output JSON only.'
+            ].join('\n')
+          },
+          {
+            role: 'user',
+            content: [
+              `Topic ID: ${topicId}`,
+              `Existing title: ${previousState?.title || title || ''}`,
+              `Existing summary: ${previousState?.summary || ''}`,
+              `Existing current goal: ${previousState?.currentGoal || ''}`,
+              `Existing last step: ${previousState?.lastStep || ''}`,
+              `Existing next step: ${previousState?.nextStep || ''}`,
+              '',
+              `Latest user message:\n${sourceUserText}`,
+              '',
+              `Latest assistant reply:\n${sourceAssistantText}`
+            ].join('\n')
+          }
+        ],
+        tools: [],
+        temperature: 0
+      });
+
+      const parsed = this.extractJsonObject(result.text || '');
+      if (!parsed || typeof parsed !== 'object') return null;
+
+      return {
+        title: String(parsed.title || title || previousState?.title || topicId).trim(),
+        summary: String(parsed.summary || previousState?.summary || '').trim(),
+        currentGoal: String(parsed.currentGoal || previousState?.currentGoal || '').trim(),
+        lastStep: String(parsed.lastStep || previousState?.lastStep || '').trim(),
+        nextStep: String(parsed.nextStep || previousState?.nextStep || '').trim(),
+        importantMemory: Array.isArray(parsed.importantMemory) ? parsed.importantMemory : []
+      };
+    } catch (error) {
+      this.logger.warn('Topic memory summarization failed', { topicId, error: error.message });
+      return null;
+    }
+  }
+
+  async updateAfterAssistantReply({
+    userId = '',
+    chatId = '',
+    memoryContext = null,
+    userText = '',
+    assistantText = ''
+  } = {}) {
+    if (!memoryContext?.topicId) return;
+
+    const topicId = memoryContext.topicId || DEFAULT_TOPIC;
+    const previousState = this.db.getTopicState?.({ userId, chatId, topicId });
+
+    const updated = await this.summarizeTopicState({
+      userId,
+      chatId,
+      topicId,
+      title: memoryContext.title || previousState?.title || topicId,
+      userText,
+      assistantText,
+      previousState
+    });
+
+    if (!updated) return;
+
+    this.db.upsertTopicState?.({
+      userId,
+      chatId,
+      topicId,
+      title: updated.title,
+      summary: updated.summary,
+      currentGoal: updated.currentGoal,
+      lastStep: updated.lastStep,
+      nextStep: updated.nextStep,
+      status: 'active'
+    });
+
+    for (const item of updated.importantMemory || []) {
+      const key = String(item?.key || '').trim();
+      const value = String(item?.value || '').trim();
+      if (!key || !value) continue;
+
+      this.db.upsertMemoryItem?.({
+        userId,
+        chatId,
+        topicId,
+        memoryType: String(item.memoryType || 'fact').trim(),
+        key,
+        value,
+        confidence: 0.85,
+        source: 'ai_summary'
+      });
+    }
+  }
+
+
   updateAfterUserMessage({ userId = '', chatId = '', memoryContext = null, userText = '' } = {}) {
     if (!memoryContext?.topicId) return;
 
