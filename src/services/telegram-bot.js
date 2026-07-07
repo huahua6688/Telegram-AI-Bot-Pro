@@ -866,7 +866,7 @@ export class TelegramAIBot {
       await sendTextReply(ctx, result.text || this.t(locale, 'noReply'), this.config.maxOutputChars);
     } catch (error) {
       this.logger.error('Translation failed', { error: error.message });
-      await ctx.reply(`翻译失败：${error.message}`);
+      await ctx.reply(this.formatUserFacingError(error, locale));
     }
   }
 
@@ -1053,6 +1053,105 @@ export class TelegramAIBot {
     }
 
     return false;
+  }
+
+  formatUserFacingError(error, locale = 'zh') {
+    const raw = String(error?.message || error || '').trim();
+    const lower = raw.toLowerCase();
+
+    const retryMatch = raw.match(/retry in\s+([\d.]+)s/i);
+    const retrySeconds = retryMatch ? Math.ceil(Number(retryMatch[1])) : 0;
+
+    const messages = {
+      zh: {
+        retry: retrySeconds > 0 ? `请大约 ${retrySeconds} 秒后再试。` : '请稍后再试。',
+        quota: '请求太频繁了，当前 AI 额度暂时用完。',
+        auth: 'AI 服务认证失败。可能是 API Key 无效、额度权限不足，或环境变量配置错误。',
+        timeout: 'AI 服务响应超时。可能是网络不稳定或模型响应太慢，请稍后再试。',
+        model: '当前模型不可用。可能是模型名称写错、API Key 不支持这个模型，或模型已经下线。',
+        safety: '这条请求可能触发了安全限制，暂时无法处理。',
+        network: '网络请求失败。请稍后再试。',
+        generic: '处理失败，请稍后再试。'
+      },
+      en: {
+        retry: retrySeconds > 0 ? `Please try again in about ${retrySeconds} seconds.` : 'Please try again later.',
+        quota: 'Too many requests. The current AI quota is temporarily exhausted.',
+        auth: 'AI service authentication failed. The API key may be invalid, unauthorized, or misconfigured.',
+        timeout: 'The AI service timed out. The network may be unstable or the model may be responding too slowly.',
+        model: 'The current model is unavailable. The model name may be wrong, unsupported, or deprecated.',
+        safety: 'This request may have triggered a safety restriction and cannot be processed.',
+        network: 'The network request failed. Please try again later.',
+        generic: 'Something went wrong. Please try again later.'
+      }
+    };
+
+    const lang = messages[locale] ? locale : 'zh';
+    const t = messages[lang];
+
+    if (
+      raw.includes('429') ||
+      raw.includes('RESOURCE_EXHAUSTED') ||
+      lower.includes('quota') ||
+      lower.includes('rate limit') ||
+      lower.includes('rate-limit') ||
+      lower.includes('generate_content_free_tier_requests')
+    ) {
+      return `${t.quota}\n${t.retry}`;
+    }
+
+    if (
+      raw.includes('401') ||
+      raw.includes('403') ||
+      lower.includes('api key') ||
+      lower.includes('permission') ||
+      lower.includes('unauthorized') ||
+      lower.includes('forbidden')
+    ) {
+      return t.auth;
+    }
+
+    if (
+      lower.includes('timeout') ||
+      lower.includes('timed out') ||
+      lower.includes('etimedout') ||
+      lower.includes('abort')
+    ) {
+      return t.timeout;
+    }
+
+    if (
+      raw.includes('404') ||
+      lower.includes('model not found') ||
+      lower.includes('not found')
+    ) {
+      return t.model;
+    }
+
+    if (
+      lower.includes('safety') ||
+      lower.includes('blocked') ||
+      lower.includes('prohibited')
+    ) {
+      return t.safety;
+    }
+
+    if (
+      lower.includes('network') ||
+      lower.includes('fetch failed') ||
+      lower.includes('econnreset') ||
+      lower.includes('enotfound') ||
+      lower.includes('eai_again')
+    ) {
+      return t.network;
+    }
+
+    const shortMessage = raw
+      .replace(/\{[\s\S]*\}/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 120);
+
+    return shortMessage ? `${t.generic}\n${shortMessage}` : t.generic;
   }
 
   buildMemoryEnhancedSystemPrompt(basePrompt = '', memoryContext = null) {
@@ -1515,7 +1614,7 @@ export class TelegramAIBot {
       try {
         const parsed = JSON.parse(raw);
         if (parsed?.error) {
-          await ctx.reply(this.t(locale, 'searchFailed', { error: parsed.message || parsed.error }));
+          await ctx.reply(this.formatUserFacingError(parsed.message || parsed.error, locale));
           return;
         }
       } catch {
@@ -1524,7 +1623,7 @@ export class TelegramAIBot {
       await this.db.incrementStats('toolCalls');
       await sendTextReply(ctx, this.t(locale, 'webResult', { result: raw }), this.config.maxOutputChars);
     } catch (error) {
-      await ctx.reply(this.t(locale, 'searchFailed', { error: error.message }));
+      await ctx.reply(this.formatUserFacingError(error, locale));
     }
   }
 
@@ -1557,7 +1656,7 @@ export class TelegramAIBot {
       }
       await ctx.reply(this.t(locale, 'imageEmpty'));
     } catch (error) {
-      await ctx.reply(this.t(locale, 'imageFailed', { error: error.message }));
+      await ctx.reply(this.formatUserFacingError(error, locale));
     }
   }
 
@@ -1593,7 +1692,7 @@ export class TelegramAIBot {
       }
       await ctx.reply(this.t(locale, 'imageEmpty'));
     } catch (error) {
-      await ctx.reply(this.t(locale, 'imageFailed', { error: error.message }));
+      await ctx.reply(this.formatUserFacingError(error, locale));
     }
   }
 
@@ -1614,13 +1713,13 @@ export class TelegramAIBot {
       await ctx.sendChatAction('record_voice');
       const result = await this.audioOrchestrator.textToSpeech({ input: text });
       if (!result.ok) {
-        await ctx.reply(this.t(locale, 'ttsFailed', { error: result.error || 'unknown error' }));
+        await ctx.reply(this.formatUserFacingError(result.error || 'unknown error', locale));
         return;
       }
       await this.db.incrementStats('aiCalls');
       await ctx.replyWithAudio({ source: result.audio, filename: 'speech.mp3' });
     } catch (error) {
-      await ctx.reply(this.t(locale, 'ttsFailed', { error: error.message }));
+      await ctx.reply(this.formatUserFacingError(error, locale));
     }
   }
 
@@ -1851,7 +1950,7 @@ export class TelegramAIBot {
       await ctx.answerCbQuery();
     } catch (error) {
       this.logger.warn('Assistant callback action failed', { chatId: ctx.chat?.id, action, error: error.message });
-      await ctx.answerCbQuery(error.message.slice(0, 180));
+      await ctx.answerCbQuery(this.formatUserFacingError(error, locale).slice(0, 180));
     }
   }
 
@@ -2190,7 +2289,7 @@ export class TelegramAIBot {
       }
     } catch (error) {
       this.logger.error('Failed to handle message', error);
-      await ctx.reply(this.t(locale, 'messageFailed', { error: error.message }));
+      await ctx.reply(this.formatUserFacingError(error, locale));
     }
   }
 
