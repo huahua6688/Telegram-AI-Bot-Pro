@@ -1088,9 +1088,13 @@ export class TelegramAIBot {
     const content = String(text || '').trim();
     if (!content) return { intent: 'chat' };
 
-    try {
-      const model = this.config.routerModel || this.config.translationModel || this.config.defaultModel;
+    const model = this.config.routerModel || this.config.translationModel || this.config.defaultModel;
+    const cooldown = this.getAiCooldown('router', model);
+    if (cooldown) {
+      return { intent: 'chat', topicId: memoryContext?.topicId || 'general' };
+    }
 
+    try {
       const result = await this.aiClient.completeWithTools({
         model,
         messages: [
@@ -1168,6 +1172,10 @@ export class TelegramAIBot {
         query: String(parsed.query || '').trim()
       };
     } catch (error) {
+      if (this.isAiQuotaError(error)) {
+        this.setAiCooldown('router', model, error);
+      }
+
       this.logger.warn('AI router failed, fallback to chat', { error: this.formatLogError(error) });
       return { intent: 'chat', topicId: memoryContext?.topicId || 'general' };
     }
@@ -2250,6 +2258,13 @@ export class TelegramAIBot {
       }
       if (action === 'translate_pick') {
         const targetLanguage = this.resolveTranslationTargetCode(parts[3] || 'auto');
+        const translationModel = this.config.translationModel || state.model || this.config.defaultModel;
+        const translationCooldown = this.getAiCooldown('translation', translationModel);
+        if (translationCooldown) {
+          await ctx.answerCbQuery(this.formatQuotaCooldownMessage(translationCooldown, state.locale).slice(0, 180));
+          return;
+        }
+
         await ctx.answerCbQuery(this.t(state.locale, 'actionWorking'));
         const translated = await this.translateAssistantReply(state, targetLanguage);
         if (!translated) return;
@@ -2258,6 +2273,14 @@ export class TelegramAIBot {
         return;
       }
       if (action === 'regen') {
+        const user = this.db.findUser(state.userId);
+        const regenModel = user?.preferredModel || state.model || this.config.defaultModel;
+        const regenCooldown = this.getAiCooldown('chat', regenModel);
+        if (regenCooldown) {
+          await ctx.answerCbQuery(this.formatQuotaCooldownMessage(regenCooldown, state.locale).slice(0, 180));
+          return;
+        }
+
         await ctx.answerCbQuery(this.t(state.locale, 'actionWorking'));
         const regenerated = await this.regenerateAssistantReply(state);
         if (!regenerated?.text) return;
@@ -2269,8 +2292,20 @@ export class TelegramAIBot {
       }
       await ctx.answerCbQuery();
     } catch (error) {
-      this.logger.warn('Assistant callback action failed', { chatId: ctx.chat?.id, action, error: error.message });
-      await ctx.answerCbQuery(this.formatUserFacingError(error, locale).slice(0, 180));
+      if (this.isAiQuotaError(error)) {
+        const scope = action === 'translate_pick' || action === 'translate' ? 'translation' : 'chat';
+        const model = scope === 'translation'
+          ? this.config.translationModel || state?.model || this.config.defaultModel
+          : state?.model || this.config.defaultModel;
+        this.setAiCooldown(scope, model, error);
+      }
+
+      this.logger.warn('Assistant callback action failed', {
+        chatId: ctx.chat?.id,
+        action,
+        error: this.formatLogError(error)
+      });
+      await ctx.answerCbQuery(this.formatUserFacingError(error, state?.locale || locale).slice(0, 180));
     }
   }
 
@@ -2289,7 +2324,7 @@ export class TelegramAIBot {
     }
 
     const result = await this.aiClient.completeWithTools({
-      model: state.model || this.config.translationModel || this.config.defaultModel,
+      model: this.config.translationModel || state.model || this.config.defaultModel,
       messages: [
         { role: 'system', content: prompt },
         { role: 'user', content: state.replyText || '' }
@@ -2531,10 +2566,18 @@ export class TelegramAIBot {
       }
     }
 
+    let activeAiModel = user?.preferredModel || chat?.defaultModel || this.config.defaultModel;
+
     try {
+      const model = activeAiModel;
+      const chatCooldown = this.getAiCooldown('chat', model);
+      if (chatCooldown) {
+        await ctx.reply(this.formatQuotaCooldownMessage(chatCooldown, locale));
+        return;
+      }
+
       await ctx.sendChatAction('typing');
       const prepared = await this.prepareUserMessage(ctx);
-      const model = user?.preferredModel || chat?.defaultModel || this.config.defaultModel;
       const sessionId = createSessionId(ctx);
       const storedContext = this.db.getConversationForContext(sessionId, {
         maxMessages: this.config.maxHistoryMessages,
@@ -2621,6 +2664,10 @@ export class TelegramAIBot {
         );
       }
     } catch (error) {
+      if (this.isAiQuotaError(error)) {
+        this.setAiCooldown('chat', activeAiModel, error);
+      }
+
       this.logger.error('Failed to handle message', { error: this.formatLogError(error) });
       await ctx.reply(this.formatUserFacingError(error, locale));
     }
