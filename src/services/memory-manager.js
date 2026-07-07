@@ -112,6 +112,7 @@ export class MemoryManager {
     this.aiClient = aiClient;
     this.config = config;
     this.logger = logger;
+    this.summaryCounters = new Map();
   }
 
   detectTopic({ text = '', activeTopicId = '' } = {}) {
@@ -386,6 +387,24 @@ export class MemoryManager {
     }
   }
 
+  shouldSummarizeTopic({ userId = '', chatId = '', topicId = DEFAULT_TOPIC } = {}) {
+    if (this.config.enableMemorySummary === false) return false;
+
+    const interval = Math.max(1, Number(this.config.memorySummaryInterval || 5));
+    if (interval <= 1) return true;
+
+    const key = `${String(userId || '')}:${String(chatId || '')}:${String(topicId || DEFAULT_TOPIC)}`;
+    const current = (this.summaryCounters.get(key) || 0) + 1;
+
+    if (current >= interval) {
+      this.summaryCounters.set(key, 0);
+      return true;
+    }
+
+    this.summaryCounters.set(key, current);
+    return false;
+  }
+
   async updateAfterAssistantReply({
     userId = '',
     chatId = '',
@@ -397,6 +416,17 @@ export class MemoryManager {
 
     const topicId = memoryContext.topicId || DEFAULT_TOPIC;
     const previousState = this.db.getTopicState?.({ userId, chatId, topicId });
+
+    if (!this.shouldSummarizeTopic({ userId, chatId, topicId })) {
+      this.touchTopic({
+        userId,
+        chatId,
+        topicId,
+        title: memoryContext.title || previousState?.title || topicId,
+        userText
+      });
+      return;
+    }
 
     const updated = await this.summarizeTopicState({
       userId,

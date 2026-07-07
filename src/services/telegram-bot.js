@@ -922,6 +922,19 @@ export class TelegramAIBot {
     }
   }
 
+  shouldUseAiRouter(text = '') {
+    if (!this.config.enableAiRouter) return false;
+
+    const mode = String(this.config.aiRouterMode || 'smart').toLowerCase();
+    if (mode === 'always') return true;
+    if (mode === 'off' || mode === 'false') return false;
+
+    const content = String(text || '').trim();
+    if (!content) return false;
+
+    return /(?:继续|接着|刚才|剛才|上一步|下一步|下一步是什么|翻译|翻譯|怎么说|怎麼說|translate|搜索|搜一下|联网|聯網|最新|今天|现在|現在|汇率|匯率|天气|天氣|新闻|新聞|模型|model|帮助|help|清空|删除|刪除|记忆|記憶|话题|話題)/i.test(content);
+  }
+
   async classifyUserIntent(ctx, text = '', memoryContext = null) {
     if (!this.config.enableAiRouter) return { intent: 'chat' };
 
@@ -2181,7 +2194,7 @@ export class TelegramAIBot {
     }
 
     let routedIntent = null;
-    if (text && this.config.enableAiRouter) {
+    if (text && this.shouldUseAiRouter(text)) {
       routedIntent = await this.classifyUserIntent(ctx, text, memoryContext);
 
       if (routedIntent?.topicId && memoryContext) {
