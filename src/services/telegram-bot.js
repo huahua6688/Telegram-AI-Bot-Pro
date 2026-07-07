@@ -1612,6 +1612,7 @@ export class TelegramAIBot {
       { command: 'menu', description: 'Show main menu' },
       { command: 'help', description: 'Show help' },
       { command: 'status', description: 'Admin: show bot status' },
+      { command: 'whoami', description: 'Show your Telegram ID' },
       { command: 'models', description: 'Show AI models' },
       { command: 'memory', description: 'Open memory panel' },
       { command: 'reset', description: 'Clear context or memory' },
@@ -1638,6 +1639,7 @@ export class TelegramAIBot {
     this.bot.command('topics', (ctx) => this.handleTopicsShow(ctx));
     this.bot.command('help', (ctx) => this.handleHelp(ctx));
     this.bot.command('status', (ctx) => this.handleStatus(ctx));
+    this.bot.command('whoami', (ctx) => this.handleWhoami(ctx));
     this.bot.command('translate', (ctx) => this.runTranslation(ctx, extractCommandArgs(ctx.message.text || ''), 'auto'));
     this.bot.command('tr', (ctx) => this.runTranslation(ctx, extractCommandArgs(ctx.message.text || ''), 'auto'));
     this.bot.command('block', (ctx) => this.handleBlock(ctx, true));
@@ -1707,6 +1709,41 @@ export class TelegramAIBot {
       this.config.maxOutputChars,
       this.createMenuKeyboard(locale)
     );
+  }
+
+  async handleWhoami(ctx) {
+    const locale = this.getLocale(ctx);
+    const userId = String(ctx.from?.id || '');
+    const chatId = String(ctx.chat?.id || '');
+    const username = ctx.from?.username ? `@${ctx.from.username}` : '-';
+    const isAdmin = this.isAdmin(ctx) ? 'yes' : 'no';
+
+    const text =
+      locale === 'en'
+        ? [
+            '👤 Your Telegram info',
+            '',
+            `User ID: ${userId}`,
+            `Chat ID: ${chatId}`,
+            `Username: ${username}`,
+            `Admin: ${isAdmin}`,
+            '',
+            'For Zeabur ADMIN_USER_IDS, use:',
+            userId
+          ].join('\n')
+        : [
+            '👤 你的 Telegram 信息',
+            '',
+            `用户 ID：${userId}`,
+            `聊天 ID：${chatId}`,
+            `用户名：${username}`,
+            `管理员：${isAdmin}`,
+            '',
+            'Zeabur 的 ADMIN_USER_IDS 填这个：',
+            userId
+          ].join('\n');
+
+    await sendTextReply(ctx, text, this.config.maxOutputChars, this.createMenuKeyboard(locale));
   }
 
   async handleHelp(ctx) {
