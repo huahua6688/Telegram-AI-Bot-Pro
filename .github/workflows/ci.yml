@@ -49,3 +49,16 @@ jobs:
           PORT: 8080
           HEALTH_PORT: 8080
         run: npm run doctor
+
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t telegram-ai-bot-pro:test .
