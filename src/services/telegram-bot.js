@@ -1611,7 +1611,7 @@ export class TelegramAIBot {
       { command: 'start', description: 'Start the bot' },
       { command: 'menu', description: 'Show main menu' },
       { command: 'help', description: 'Show help' },
-      { command: 'status', description: 'Show bot status' },
+      { command: 'status', description: 'Admin: show bot status' },
       { command: 'models', description: 'Show AI models' },
       { command: 'memory', description: 'Open memory panel' },
       { command: 'reset', description: 'Clear context or memory' },
@@ -2249,6 +2249,12 @@ export class TelegramAIBot {
 
   async handleStatus(ctx) {
     const locale = this.getLocale(ctx);
+
+    if (!this.isAdmin(ctx)) {
+      await ctx.reply(this.t(locale, 'adminOnly'), this.createMenuKeyboard(locale));
+      return;
+    }
+
     const user = this.db.findUser(ctx.from.id);
     const stats = this.db.getStats?.() || {};
     const cooldowns = this.listActiveAiCooldowns();
