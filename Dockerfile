@@ -1,19 +1,22 @@
-FROM node:22-alpine
+FROM node:22-bookworm-slim
 
 WORKDIR /app
 
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+ENV NODE_ENV=production
+
+COPY package*.json ./
+
+RUN if [ -f package-lock.json ]; then \
+      npm ci --omit=dev; \
+    else \
+      npm install --omit=dev; \
+    fi
 
 COPY . .
 
-RUN mkdir -p /data
+RUN mkdir -p /data && chown -R node:node /app /data
 
-ENV NODE_ENV=production
-ENV PORT=8080
-ENV HEALTH_PORT=8080
-ENV DATABASE_FILE=/data/bot-data.db
-ENV DATA_FILE=/data/bot-data.json
+USER node
 
 EXPOSE 8080
 
