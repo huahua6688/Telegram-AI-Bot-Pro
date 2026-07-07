@@ -19,7 +19,7 @@
     "doctor": "node scripts/doctor.js",
     "check:syntax": "find src test scripts -name \"*.js\" -print0 | xargs -0 -n1 node --check",
     "verify": "npm run check:secrets && npm run check:syntax && npm run test:quick",
-    "predeploy": "npm run doctor && npm run verify",
+    "predeploy": "npm run doctor && npm run verify && npm run docker:verify",
     "docker:build": "docker build -t telegram-ai-bot-pro:test .",
     "docker:doctor": "bash scripts/docker-doctor.sh",
     "docker:verify": "npm run docker:build && npm run docker:doctor",
