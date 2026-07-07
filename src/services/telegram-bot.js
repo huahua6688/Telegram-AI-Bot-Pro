@@ -593,125 +593,48 @@ export class TelegramAIBot {
 
 
   normalizeTranslationTarget(value = '') {
-    const raw = String(value || '').trim();
-    const normalized = raw
-      .toLowerCase()
-      .replace(/[()（）]/g, '')
-      .replace(/\s+/g, '');
+    const normalized = String(value || '').trim().toLowerCase();
 
     if (!normalized) return 'auto';
+    if (['中文', '简体中文', '汉语', 'chinese', 'zh', 'zh-cn'].includes(normalized)) {
+      return 'Simplified Chinese';
+    }
+    if (['英文', '英语', 'english', 'en'].includes(normalized)) {
+      return 'English';
+    }
+    if (['高棉语', '柬埔寨语', '柬语', 'khmer', 'km'].includes(normalized)) {
+      return 'Khmer';
+    }
+    if (['粤语', '粵語', '广东话', '廣東話', '香港粤语', '香港粵語', '香港廣東話', 'cantonese', 'yue'].includes(normalized)) {
+      return 'Cantonese, using natural Hong Kong Cantonese expressions and Traditional Chinese characters';
+    }
+    if (['日语', '日本语', 'japanese', 'ja'].includes(normalized)) {
+      return 'Japanese';
+    }
+    if (['韩语', '韩国语', 'korean', 'ko'].includes(normalized)) {
+      return 'Korean';
+    }
+    if (['泰语', 'thai', 'th'].includes(normalized)) {
+      return 'Thai';
+    }
+    if (['马来语', 'malay', 'ms'].includes(normalized)) {
+      return 'Malay';
+    }
 
-    const aliases = new Map([
-      ['中文', 'Simplified Chinese'],
-      ['简体中文', 'Simplified Chinese'],
-      ['簡體中文', 'Simplified Chinese'],
-      ['汉语', 'Simplified Chinese'],
-      ['漢語', 'Simplified Chinese'],
-      ['chinese', 'Simplified Chinese'],
-      ['zh', 'Simplified Chinese'],
-      ['zhcn', 'Simplified Chinese'],
-
-      ['繁体', 'Traditional Chinese'],
-      ['繁體', 'Traditional Chinese'],
-      ['繁体中文', 'Traditional Chinese'],
-      ['繁體中文', 'Traditional Chinese'],
-      ['traditionalchinese', 'Traditional Chinese'],
-      ['zhtw', 'Traditional Chinese'],
-      ['zhhk', 'Traditional Chinese'],
-
-      ['英文', 'English'],
-      ['英语', 'English'],
-      ['英語', 'English'],
-      ['english', 'English'],
-      ['en', 'English'],
-
-      ['粤语', 'Hong Kong Cantonese written in natural Traditional Chinese Cantonese characters'],
-      ['粵語', 'Hong Kong Cantonese written in natural Traditional Chinese Cantonese characters'],
-      ['广东话', 'Hong Kong Cantonese written in natural Traditional Chinese Cantonese characters'],
-      ['廣東話', 'Hong Kong Cantonese written in natural Traditional Chinese Cantonese characters'],
-      ['香港粤语', 'Hong Kong Cantonese written in natural Traditional Chinese Cantonese characters'],
-      ['香港粵語', 'Hong Kong Cantonese written in natural Traditional Chinese Cantonese characters'],
-      ['粤语香港', 'Hong Kong Cantonese written in natural Traditional Chinese Cantonese characters'],
-      ['粵語香港', 'Hong Kong Cantonese written in natural Traditional Chinese Cantonese characters'],
-      ['cantonese', 'Hong Kong Cantonese written in natural Traditional Chinese Cantonese characters'],
-      ['hongkongcantonese', 'Hong Kong Cantonese written in natural Traditional Chinese Cantonese characters'],
-      ['yue', 'Hong Kong Cantonese written in natural Traditional Chinese Cantonese characters'],
-
-      ['高棉语', 'Khmer'],
-      ['高棉語', 'Khmer'],
-      ['柬埔寨语', 'Khmer'],
-      ['柬埔寨語', 'Khmer'],
-      ['柬语', 'Khmer'],
-      ['柬語', 'Khmer'],
-      ['khmer', 'Khmer'],
-      ['km', 'Khmer'],
-
-      ['日语', 'Japanese'],
-      ['日語', 'Japanese'],
-      ['日本语', 'Japanese'],
-      ['日本語', 'Japanese'],
-      ['japanese', 'Japanese'],
-
-      ['韩语', 'Korean'],
-      ['韓語', 'Korean'],
-      ['韩国语', 'Korean'],
-      ['韓國語', 'Korean'],
-      ['korean', 'Korean'],
-
-      ['泰语', 'Thai'],
-      ['泰語', 'Thai'],
-      ['thai', 'Thai'],
-
-      ['马来语', 'Malay'],
-      ['馬來語', 'Malay'],
-      ['malay', 'Malay'],
-
-      ['越南语', 'Vietnamese'],
-      ['越南語', 'Vietnamese'],
-      ['vietnamese', 'Vietnamese'],
-
-      ['法语', 'French'],
-      ['法語', 'French'],
-      ['french', 'French'],
-
-      ['西班牙语', 'Spanish'],
-      ['西班牙語', 'Spanish'],
-      ['spanish', 'Spanish'],
-
-      ['阿拉伯语', 'Arabic'],
-      ['阿拉伯語', 'Arabic'],
-      ['arabic', 'Arabic'],
-
-      ['印地语', 'Hindi'],
-      ['印地語', 'Hindi'],
-      ['hindi', 'Hindi']
-    ]);
-
-    return aliases.get(normalized) || raw;
+    return value;
   }
 
   parseTranslationRequest(text = '') {
     const content = String(text || '').trim();
     if (!content) return null;
 
-    let match = content.match(/^(?:中译英|中譯英|中文翻英文|中文翻译成英文|中文翻譯成英文)\s*[:：]?\s*([\s\S]+)$/i);
+    let match = content.match(/^(?:中译英|中文翻英文|中文翻译成英文)\s*[:：]?\s*([\s\S]+)$/i);
     if (match) return { text: match[1].trim(), targetLanguage: 'English' };
 
-    match = content.match(/^(?:英译中|英譯中|英文翻中文|英文翻译成中文|英文翻譯成中文)\s*[:：]?\s*([\s\S]+)$/i);
+    match = content.match(/^(?:英译中|英文翻中文|英文翻译成中文)\s*[:：]?\s*([\s\S]+)$/i);
     if (match) return { text: match[1].trim(), targetLanguage: 'Simplified Chinese' };
 
-    match = content.match(/^(?:粤译中|粵譯中|粤语翻中文|粵語翻中文|广东话翻中文|廣東話翻中文)\s*[:：]?\s*([\s\S]+)$/i);
-    if (match) return { text: match[1].trim(), targetLanguage: 'Simplified Chinese' };
-
-    match = content.match(/^(?:简译繁|簡譯繁|简体转繁体|簡體轉繁體)\s*[:：]?\s*([\s\S]+)$/i);
-    if (match) return { text: match[1].trim(), targetLanguage: 'Traditional Chinese' };
-
-    match = content.match(/^(?:繁译简|繁譯簡|繁体转简体|繁體轉簡體)\s*[:：]?\s*([\s\S]+)$/i);
-    if (match) return { text: match[1].trim(), targetLanguage: 'Simplified Chinese' };
-
-    // 翻译成粤语（香港） 你今天吃饭了吗？
-    // 翻译成法语: 我想你
-    match = content.match(/^(?:翻译成|翻譯成|翻译为|翻譯為|译成|譯成|翻成)\s*([^\s:：]+(?:[（(][^）)]+[）)])?)\s*[:：]?\s*([\s\S]+)$/i);
+    match = content.match(/^(?:翻译成|翻譯成|译成|譯成)\s*(中文|简体中文|英文|英语|高棉语|柬埔寨语|柬语|khmer|日语|韩语|泰语|马来语|english|chinese|japanese|korean|thai|malay)\s*[:：]?\s*([\s\S]+)$/i);
     if (match) {
       return {
         targetLanguage: this.normalizeTranslationTarget(match[1]),
@@ -719,26 +642,6 @@ export class TelegramAIBot {
       };
     }
 
-    // 把你今天吃饭了吗？翻译成粤语（香港）
-    // 将 I miss you 翻译成中文
-    match = content.match(/^(?:把|将|將)?\s*["“]?([\s\S]+?)["”]?\s*(?:翻译成|翻譯成|翻译为|翻譯為|译成|譯成|翻成)\s*([^\s:：]+(?:[（(][^）)]+[）)])?\s*$/i);
-    if (match) {
-      return {
-        targetLanguage: this.normalizeTranslationTarget(match[2]),
-        text: match[1].trim()
-      };
-    }
-
-    // translate to Cantonese: I miss you
-    match = content.match(/^(?:translate|tr)\s+(?:to|into)\s+([^:：]+)\s*[:：]\s*([\s\S]+)$/i);
-    if (match) {
-      return {
-        targetLanguage: this.normalizeTranslationTarget(match[1]),
-        text: match[2].trim()
-      };
-    }
-
-    // 翻译 I miss you
     match = content.match(/^(?:翻译|翻譯|translate|tr)\s*[:：]?\s*([\s\S]+)$/i);
     if (match) {
       return {
@@ -755,13 +658,13 @@ export class TelegramAIBot {
     const sourceText = String(text || '').trim();
 
     if (!sourceText) {
-      await ctx.reply('请输入要翻译的内容，例如：\n翻译成粤语（香港） 你今天吃饭了吗？\n把 I miss you 翻译成中文\n翻译成高棉语 我很担心你');
+      await ctx.reply('请输入要翻译的内容，例如：\n翻译 I miss you so much\n英译中 I miss you so much\n翻译成高棉语 我很担心你');
       return;
     }
 
     const targetInstruction =
       targetLanguage === 'auto'
-        ? 'Detect the source language. If the source text is Chinese, translate it into natural English. Otherwise translate it into natural Simplified Chinese.'
+        ? 'If the source text is Chinese, translate it into natural English. Otherwise translate it into natural Simplified Chinese.'
         : `Translate the source text into ${targetLanguage}.`;
 
     try {
@@ -777,11 +680,8 @@ export class TelegramAIBot {
             content: [
               'You are a professional translation engine.',
               'Translate accurately and naturally.',
-              'Strictly follow the requested target language.',
-              'Detect the source language automatically.',
-              'If the target is Hong Kong Cantonese, use natural Hong Kong Cantonese wording and Traditional Chinese characters, such as 咗、嘅、唔、冇、佢、喺 when appropriate.',
               'Preserve meaning, tone, names, numbers, emojis, and line breaks.',
-              'Do not add explanations unless the user explicitly asks.',
+              'Do not add explanations unless the source text is ambiguous.',
               'Output only the translation.'
             ].join('\n')
           },
@@ -791,7 +691,7 @@ export class TelegramAIBot {
           }
         ],
         tools: [],
-        temperature: 0.1
+        temperature: 0.2
       });
 
       await sendTextReply(ctx, result.text || this.t(locale, 'noReply'), this.config.maxOutputChars);
