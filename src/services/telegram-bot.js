@@ -565,6 +565,113 @@ export class TelegramAIBot {
     return null;
   }
 
+
+  normalizeTranslationTarget(value = '') {
+    const normalized = String(value || '').trim().toLowerCase();
+
+    if (!normalized) return 'auto';
+    if (['中文', '简体中文', '汉语', 'chinese', 'zh', 'zh-cn'].includes(normalized)) {
+      return 'Simplified Chinese';
+    }
+    if (['英文', '英语', 'english', 'en'].includes(normalized)) {
+      return 'English';
+    }
+    if (['高棉语', '柬埔寨语', '柬语', 'khmer', 'km'].includes(normalized)) {
+      return 'Khmer';
+    }
+    if (['日语', '日本语', 'japanese', 'ja'].includes(normalized)) {
+      return 'Japanese';
+    }
+    if (['韩语', '韩国语', 'korean', 'ko'].includes(normalized)) {
+      return 'Korean';
+    }
+    if (['泰语', 'thai', 'th'].includes(normalized)) {
+      return 'Thai';
+    }
+    if (['马来语', 'malay', 'ms'].includes(normalized)) {
+      return 'Malay';
+    }
+
+    return value;
+  }
+
+  parseTranslationRequest(text = '') {
+    const content = String(text || '').trim();
+    if (!content) return null;
+
+    let match = content.match(/^(?:中译英|中文翻英文|中文翻译成英文)\s*[:：]?\s*([\s\S]+)$/i);
+    if (match) return { text: match[1].trim(), targetLanguage: 'English' };
+
+    match = content.match(/^(?:英译中|英文翻中文|英文翻译成中文)\s*[:：]?\s*([\s\S]+)$/i);
+    if (match) return { text: match[1].trim(), targetLanguage: 'Simplified Chinese' };
+
+    match = content.match(/^(?:翻译成|翻譯成|译成|譯成)\s*(中文|简体中文|英文|英语|高棉语|柬埔寨语|柬语|khmer|日语|韩语|泰语|马来语|english|chinese|japanese|korean|thai|malay)\s*[:：]?\s*([\s\S]+)$/i);
+    if (match) {
+      return {
+        targetLanguage: this.normalizeTranslationTarget(match[1]),
+        text: match[2].trim()
+      };
+    }
+
+    match = content.match(/^(?:翻译|翻譯|translate|tr)\s*[:：]?\s*([\s\S]+)$/i);
+    if (match) {
+      return {
+        targetLanguage: 'auto',
+        text: match[1].trim()
+      };
+    }
+
+    return null;
+  }
+
+  async runTranslation(ctx, text = '', targetLanguage = 'auto') {
+    const locale = this.getLocale(ctx);
+    const sourceText = String(text || '').trim();
+
+    if (!sourceText) {
+      await ctx.reply('请输入要翻译的内容，例如：\n翻译 I miss you so much\n英译中 I miss you so much\n翻译成高棉语 我很担心你');
+      return;
+    }
+
+    const targetInstruction =
+      targetLanguage === 'auto'
+        ? 'If the source text is Chinese, translate it into natural English. Otherwise translate it into natural Simplified Chinese.'
+        : `Translate the source text into ${targetLanguage}.`;
+
+    try {
+      await ctx.sendChatAction('typing');
+
+      const model = this.config.translationModel || this.config.defaultModel;
+
+      const result = await this.aiClient.completeWithTools({
+        model,
+        messages: [
+          {
+            role: 'system',
+            content: [
+              'You are a professional translation engine.',
+              'Translate accurately and naturally.',
+              'Preserve meaning, tone, names, numbers, emojis, and line breaks.',
+              'Do not add explanations unless the source text is ambiguous.',
+              'Output only the translation.'
+            ].join('\n')
+          },
+          {
+            role: 'user',
+            content: `${targetInstruction}\n\nSource text:\n${sourceText}`
+          }
+        ],
+        tools: [],
+        temperature: 0.2
+      });
+
+      await sendTextReply(ctx, result.text || this.t(locale, 'noReply'), this.config.maxOutputChars);
+    } catch (error) {
+      this.logger.error('Translation failed', { error: error.message });
+      await ctx.reply(`翻译失败：${error.message}`);
+    }
+  }
+
   normalizeLanguageInput(value = '') {
     const normalized = String(value).trim().toLowerCase();
     const baseLanguage = normalizeLanguageCode(normalized, '');
@@ -702,6 +809,8 @@ export class TelegramAIBot {
 
   registerCommands() {
     this.bot.command('start', (ctx) => this.handleStart(ctx));
+    this.bot.command('translate', (ctx) => this.runTranslation(ctx, extractCommandArgs(ctx.message.text || ''), 'auto'));
+    this.bot.command('tr', (ctx) => this.runTranslation(ctx, extractCommandArgs(ctx.message.text || ''), 'auto'));
     this.bot.command('block', (ctx) => this.handleBlock(ctx, true));
     this.bot.command('unblock', (ctx) => this.handleBlock(ctx, false));
     this.bot.command('allow', (ctx) => this.handleAllow(ctx, true));
@@ -1382,6 +1491,12 @@ export class TelegramAIBot {
     const user = this.db.findUser(ctx.from.id);
     const chat = this.db.findChat(ctx.chat.id);
     const locale = this.getLocale(ctx, user);
+
+    const translationRequest = text ? this.parseTranslationRequest(text) : null;
+    if (translationRequest) {
+      return this.runTranslation(ctx, translationRequest.text, translationRequest.targetLanguage);
+    }
+
     const naturalAction = text ? this.parseNaturalLanguageAction(text, locale) : null;
 
     // 先处理按钮本身，避免“上一个按钮”等待输入时把新按钮当成内容

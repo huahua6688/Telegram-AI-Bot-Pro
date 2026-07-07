@@ -94,6 +94,7 @@ export function loadConfig() {
     geminiLiveTranscriptionModel: process.env.GEMINI_LIVE_TRANSCRIPTION_MODEL || process.env.TRANSCRIPTION_MODEL || defaultModel,
     geminiLiveTtsModel: process.env.GEMINI_LIVE_TTS_MODEL || process.env.TTS_MODEL || defaultModel,
     ttsVoice: process.env.TTS_VOICE || 'alloy',
+    translationModel: process.env.TRANSLATION_MODEL || defaultModel,
     imageModel: process.env.IMAGE_MODEL || 'gpt-image-1',
     imageSize: process.env.IMAGE_SIZE || '1024x1024',
     documentMaxBytes: parseInteger(process.env.DOCUMENT_MAX_BYTES, 6 * 1024 * 1024),
