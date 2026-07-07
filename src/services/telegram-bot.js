@@ -124,6 +124,12 @@ const UI_TEXT = {
     clearCancelled: '已取消。',
     shortMemoryCleared: '已清空当前对话上下文。',
     allMemoryCleared: '已清空当前对话上下文、长期记忆和话题状态。',
+    memoryPrompt: '请选择记忆管理操作：',
+    memoryViewCurrent: '查看当前记忆',
+    memoryViewTopic: '查看当前话题',
+    memoryViewTopics: '查看话题列表',
+    memoryClearAction: '清空记忆',
+    memoryCancel: '取消',
     streamingPlaceholder: '正在生成回复...',
     actionRegenerate: '🔄 重生成',
     actionModel: '🧠 模型',
@@ -238,6 +244,12 @@ const UI_TEXT = {
     clearCancelled: 'Cancelled.',
     shortMemoryCleared: 'Current chat context cleared.',
     allMemoryCleared: 'Current chat context, long-term memory, and topic state cleared.',
+    memoryPrompt: 'Choose a memory action:',
+    memoryViewCurrent: 'View current memory',
+    memoryViewTopic: 'View current topic',
+    memoryViewTopics: 'View topic list',
+    memoryClearAction: 'Clear memory',
+    memoryCancel: 'Cancel',
     streamingPlaceholder: 'Composing reply...',
     actionRegenerate: '🔄 Regenerate',
     actionModel: '🧠 Model',
@@ -383,6 +395,7 @@ export class TelegramAIBot {
     this.aiCooldowns = new Map();
     this.bot = new Telegraf(config.botToken);
     this.botUsername = '';
+    this.bot.action(/^memory_pick:(.+)$/, (ctx) => this.handleMemoryTargetCallback(ctx));
     this.bot.action(/^clear_pick:(.+)$/, (ctx) => this.handleClearTargetCallback(ctx));
     this.bot.action(/^translate_pick:(.+)$/, (ctx) => this.handleTranslateTargetCallback(ctx));
     this.documentParser = new DocumentParser(config, logger);
@@ -551,6 +564,16 @@ export class TelegramAIBot {
     return Markup.inlineKeyboard(chunkItems(buttons, 2));
   }
 
+  createMemoryPanelKeyboard(locale = 'zh') {
+    return Markup.inlineKeyboard([
+      [Markup.button.callback(this.t(locale, 'memoryViewCurrent'), 'memory_pick:current')],
+      [Markup.button.callback(this.t(locale, 'memoryViewTopic'), 'memory_pick:topic')],
+      [Markup.button.callback(this.t(locale, 'memoryViewTopics'), 'memory_pick:topics')],
+      [Markup.button.callback(this.t(locale, 'memoryClearAction'), 'memory_pick:clear')],
+      [Markup.button.callback(this.t(locale, 'memoryCancel'), 'memory_pick:cancel')]
+    ]);
+  }
+
   createClearMemoryKeyboard(locale = 'zh') {
     return Markup.inlineKeyboard([
       [Markup.button.callback(this.t(locale, 'clearShortMemory'), 'clear_pick:short')],
@@ -680,7 +703,7 @@ export class TelegramAIBot {
     const buttonMap = new Map([
       [menuLabels.chat, { type: 'chat_hint' }],
       [menuLabels.translate, { type: 'translate_prompt' }],
-      [menuLabels.memory, { type: 'memory_show' }],
+      [menuLabels.memory, { type: 'memory_prompt' }],
       [menuLabels.help, { type: 'help' }],
       [menuLabels.reset, { type: 'reset' }],
       [menuLabels.models, { type: 'models' }],
@@ -1746,6 +1769,45 @@ export class TelegramAIBot {
     await ctx.reply(this.t(locale, 'clearPrompt'), this.createClearMemoryKeyboard(locale));
   }
 
+  async handleMemoryPrompt(ctx) {
+    const locale = this.getLocale(ctx);
+    await ctx.reply(this.t(locale, 'memoryPrompt'), this.createMemoryPanelKeyboard(locale));
+  }
+
+  async handleMemoryTargetCallback(ctx) {
+    const locale = this.getLocale(ctx);
+    const target = String(ctx.match?.[1] || '').trim();
+
+    await ctx.answerCbQuery();
+
+    if (target === 'cancel') {
+      await ctx.reply(this.t(locale, 'clearCancelled'), this.createMenuKeyboard(locale));
+      return;
+    }
+
+    if (target === 'current') {
+      await this.handleMemoryShow(ctx);
+      return;
+    }
+
+    if (target === 'topic') {
+      await this.handleTopicShow(ctx);
+      return;
+    }
+
+    if (target === 'topics') {
+      await this.handleTopicsShow(ctx);
+      return;
+    }
+
+    if (target === 'clear') {
+      await this.handleClearPrompt(ctx);
+      return;
+    }
+
+    await this.handleMemoryPrompt(ctx);
+  }
+
   async handleMemoryShow(ctx) {
     const userId = ctx.from.id;
     const chatId = ctx.chat.id;
@@ -2627,6 +2689,7 @@ export class TelegramAIBot {
       if (naturalAction.type === 'models') return this.handleModels(ctx);
       if (naturalAction.type === 'persona') return this.handlePersona(ctx);
       if (naturalAction.type === 'language') return this.handleLanguage(ctx);
+      if (naturalAction.type === 'memory_prompt') return this.handleMemoryPrompt(ctx);
       if (naturalAction.type === 'memory_show') return this.handleMemoryShow(ctx);
       if (naturalAction.type === 'topic_show') return this.handleTopicShow(ctx);
       if (naturalAction.type === 'topics_show') return this.handleTopicsShow(ctx);
