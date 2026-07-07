@@ -578,6 +578,22 @@ export class TelegramAIBot {
     if (/^(persona|人格)$/i.test(content)) return { type: 'persona' };
     if (/^(language|语言|語言)$/i.test(content)) return { type: 'language' };
 
+    if (/^(查看|显示|顯示|show)?(长期|長期)?记忆$/i.test(content) || /^(memory|mem)$/i.test(content)) {
+      return { type: 'memory_show' };
+    }
+    if (/^(查看|显示|顯示|show)?(当前|當前)?话题$/i.test(content) || /^(topic|current topic)$/i.test(content)) {
+      return { type: 'topic_show' };
+    }
+    if (/^(查看|显示|顯示|show)?话题列表$/i.test(content) || /^(topics)$/i.test(content)) {
+      return { type: 'topics_show' };
+    }
+    if (/^(清空|删除|刪除|clear|delete)(长期|長期)?记忆$/i.test(content) || /^(clear memory|delete memory)$/i.test(content)) {
+      return { type: 'memory_clear' };
+    }
+    if (/^(清空|删除|刪除|clear|delete)话题状态$/i.test(content) || /^(clear topics)$/i.test(content)) {
+      return { type: 'topics_clear' };
+    }
+
     const actionPatterns = [
       { type: 'web', regex: /^(?:web|search|搜索|联网搜索|上网搜)\s+(.+)$/i },
       { type: 'image', regex: /^(?:image|draw|paint|生成图片|生成圖像|画|畫)\s+(.+)$/i },
@@ -1258,6 +1274,114 @@ export class TelegramAIBot {
     await sendTextReply(ctx, helpText, this.config.maxOutputChars, this.createMenuKeyboard(locale));
   }
 
+  async handleMemoryShow(ctx) {
+    const userId = ctx.from.id;
+    const chatId = ctx.chat.id;
+    const active = this.db.getActiveContext?.({ userId, chatId });
+    const topicId = active?.activeTopicId || 'general';
+    const items = this.db.getMemoryItems?.({ userId, chatId, topicId, limit: 20 }) || [];
+    const topic = this.db.getTopicState?.({ userId, chatId, topicId });
+
+    const lines = [];
+    lines.push(`当前主线话题：${topicId}`);
+
+    if (topic) {
+      lines.push('');
+      lines.push('话题状态：');
+      if (topic.title) lines.push(`- 标题：${topic.title}`);
+      if (topic.summary) lines.push(`- 总结：${topic.summary}`);
+      if (topic.currentGoal) lines.push(`- 当前目标：${topic.currentGoal}`);
+      if (topic.lastStep) lines.push(`- 上一步：${topic.lastStep}`);
+      if (topic.nextStep) lines.push(`- 下一步：${topic.nextStep}`);
+    }
+
+    lines.push('');
+    lines.push('长期记忆：');
+    if (items.length === 0) {
+      lines.push('- 暂无');
+    } else {
+      for (const item of items) {
+        lines.push(`- ${item.key ? `${item.key}: ` : ''}${item.value}`);
+      }
+    }
+
+    await sendTextReply(ctx, lines.join('\n'), this.config.maxOutputChars, this.createMenuKeyboard(this.getLocale(ctx)));
+  }
+
+  async handleTopicShow(ctx) {
+    const userId = ctx.from.id;
+    const chatId = ctx.chat.id;
+    const active = this.db.getActiveContext?.({ userId, chatId });
+
+    if (!active?.activeTopicId) {
+      await ctx.reply('当前还没有主线话题。');
+      return;
+    }
+
+    const topic = this.db.getTopicState?.({
+      userId,
+      chatId,
+      topicId: active.activeTopicId
+    });
+
+    const lines = [
+      `当前主线话题：${active.activeTopicId}`,
+      active.returnTopicId ? `返回话题：${active.returnTopicId}` : ''
+    ].filter(Boolean);
+
+    if (topic) {
+      if (topic.title) lines.push(`标题：${topic.title}`);
+      if (topic.summary) lines.push(`总结：${topic.summary}`);
+      if (topic.currentGoal) lines.push(`当前目标：${topic.currentGoal}`);
+      if (topic.lastStep) lines.push(`上一步：${topic.lastStep}`);
+      if (topic.nextStep) lines.push(`下一步：${topic.nextStep}`);
+      if (topic.lastAccessedAt) lines.push(`最后访问：${topic.lastAccessedAt}`);
+    }
+
+    await sendTextReply(ctx, lines.join('\n'), this.config.maxOutputChars, this.createMenuKeyboard(this.getLocale(ctx)));
+  }
+
+  async handleTopicsShow(ctx) {
+    const userId = ctx.from.id;
+    const chatId = ctx.chat.id;
+    const topics = this.db.listRecentTopicStates?.({ userId, chatId, limit: 10 }) || [];
+
+    if (topics.length === 0) {
+      await ctx.reply('还没有话题记录。');
+      return;
+    }
+
+    const lines = ['最近话题：'];
+    for (const topic of topics) {
+      lines.push(`- ${topic.topicId}${topic.title ? `：${topic.title}` : ''}`);
+      if (topic.currentGoal) lines.push(`  当前目标：${topic.currentGoal}`);
+      if (topic.nextStep) lines.push(`  下一步：${topic.nextStep}`);
+    }
+
+    await sendTextReply(ctx, lines.join('\n'), this.config.maxOutputChars, this.createMenuKeyboard(this.getLocale(ctx)));
+  }
+
+  async handleMemoryClear(ctx) {
+    const userId = ctx.from.id;
+    const chatId = ctx.chat.id;
+
+    const memoryCount = this.db.deleteMemoryItems?.({ userId, chatId }) || 0;
+    const topicCount = this.db.clearTopicStates?.({ userId, chatId }) || 0;
+    this.db.clearActiveContext?.({ userId, chatId });
+
+    await ctx.reply(`已清空长期记忆和话题状态。\n删除记忆：${memoryCount}\n删除话题：${topicCount}`);
+  }
+
+  async handleTopicsClear(ctx) {
+    const userId = ctx.from.id;
+    const chatId = ctx.chat.id;
+
+    const topicCount = this.db.clearTopicStates?.({ userId, chatId }) || 0;
+    this.db.clearActiveContext?.({ userId, chatId });
+
+    await ctx.reply(`已清空话题状态。\n删除话题：${topicCount}`);
+  }
+
   async handleReset(ctx) {
     await this.db.clearConversation(createSessionId(ctx));
     const locale = this.getLocale(ctx);
@@ -1858,6 +1982,11 @@ export class TelegramAIBot {
       if (naturalAction.type === 'models') return this.handleModels(ctx);
       if (naturalAction.type === 'persona') return this.handlePersona(ctx);
       if (naturalAction.type === 'language') return this.handleLanguage(ctx);
+      if (naturalAction.type === 'memory_show') return this.handleMemoryShow(ctx);
+      if (naturalAction.type === 'topic_show') return this.handleTopicShow(ctx);
+      if (naturalAction.type === 'topics_show') return this.handleTopicsShow(ctx);
+      if (naturalAction.type === 'memory_clear') return this.handleMemoryClear(ctx);
+      if (naturalAction.type === 'topics_clear') return this.handleTopicsClear(ctx);
 
       if (naturalAction.type === 'web_prompt') {
         this.setPendingMenuAction(ctx, 'web_prompt');

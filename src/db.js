@@ -2303,4 +2303,53 @@ export class BotDatabase {
   }
 
 
+  deleteMemoryItems({ userId = '', chatId = '', topicId = '' } = {}) {
+    const timestamp = now();
+
+    const conditions = ['user_id = ?', 'chat_id = ?'];
+    const args = [String(userId || ''), String(chatId || '')];
+
+    if (topicId) {
+      conditions.push('topic_id = ?');
+      args.push(String(topicId));
+    }
+
+    const result = this.db
+      .prepare(`DELETE FROM memory_items WHERE ${conditions.join(' AND ')}`)
+      .run(...args);
+
+    this.setMeta('updatedAt', timestamp);
+    return result.changes || 0;
+  }
+
+  clearTopicStates({ userId = '', chatId = '', topicId = '' } = {}) {
+    const timestamp = now();
+
+    const conditions = ['user_id = ?', 'chat_id = ?'];
+    const args = [String(userId || ''), String(chatId || '')];
+
+    if (topicId) {
+      conditions.push('topic_id = ?');
+      args.push(String(topicId));
+    }
+
+    const result = this.db
+      .prepare(`DELETE FROM topic_states WHERE ${conditions.join(' AND ')}`)
+      .run(...args);
+
+    this.setMeta('updatedAt', timestamp);
+    return result.changes || 0;
+  }
+
+  clearActiveContext({ userId = '', chatId = '' } = {}) {
+    const timestamp = now();
+    const result = this.db
+      .prepare('DELETE FROM active_contexts WHERE user_id = ? AND chat_id = ?')
+      .run(String(userId || ''), String(chatId || ''));
+
+    this.setMeta('updatedAt', timestamp);
+    return result.changes || 0;
+  }
+
+
 }
