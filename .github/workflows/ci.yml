@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  test:
+    name: Syntax and quick tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Syntax check
+        run: |
+          find src test scripts -name "*.js" -print0 | xargs -0 -n1 node --check
+
+      - name: Quick tests
+        run: npm run test:quick
+
+      - name: Deployment doctor
+        env:
+          BOT_TOKEN: dummy_bot_token
+          AI_PROVIDER: gemini
+          GEMINI_API_KEY: dummy_gemini_key
+          AI_MODEL: gemini-2.5-flash
+          AI_FALLBACK_MODELS: gemini-2.0-flash,gemini-2.5-flash-lite
+          TRANSLATION_MODEL: gemini-2.5-flash-lite
+          ROUTER_MODEL: gemini-2.5-flash-lite
+          DATABASE_FILE: /tmp/bot-data.db
+          DATA_FILE: /tmp/bot-data.json
+          PORT: 8080
+          HEALTH_PORT: 8080
+        run: npm run doctor
