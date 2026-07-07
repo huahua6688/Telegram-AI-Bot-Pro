@@ -380,6 +380,7 @@ export class TelegramAIBot {
     this.assistantActionStates = new Map();
     this.assistantActionStatesByMessage = new Map();
     this.pendingMenuActions = new Map();
+    this.aiCooldowns = new Map();
     this.bot = new Telegraf(config.botToken);
     this.botUsername = '';
     this.bot.action(/^clear_pick:(.+)$/, (ctx) => this.handleClearTargetCallback(ctx));
@@ -970,10 +971,15 @@ export class TelegramAIBot {
         ? 'Detect the source language. If the source text is Chinese, translate it into natural English. Otherwise translate it into natural Simplified Chinese.'
         : `Translate the source text into ${targetLanguage}.`;
 
+    const model = this.config.translationModel || this.config.defaultModel;
+    const cooldown = this.getAiCooldown('translation', model);
+    if (cooldown) {
+      await ctx.reply(this.formatQuotaCooldownMessage(cooldown, locale));
+      return;
+    }
+
     try {
       await ctx.sendChatAction('typing');
-
-      const model = this.config.translationModel || this.config.defaultModel;
 
       const result = await this.aiClient.completeWithTools({
         model,
@@ -1002,7 +1008,11 @@ export class TelegramAIBot {
 
       await sendTextReply(ctx, result.text || this.t(locale, 'noReply'), this.config.maxOutputChars);
     } catch (error) {
-      this.logger.error('Translation failed', { error: error.message });
+      if (this.isAiQuotaError(error)) {
+        this.setAiCooldown('translation', model, error);
+      }
+
+      this.logger.error('Translation failed', { error: this.formatLogError(error) });
       await ctx.reply(this.formatUserFacingError(error, locale));
     }
   }
@@ -1158,7 +1168,7 @@ export class TelegramAIBot {
         query: String(parsed.query || '').trim()
       };
     } catch (error) {
-      this.logger.warn('AI router failed, fallback to chat', { error: error.message });
+      this.logger.warn('AI router failed, fallback to chat', { error: this.formatLogError(error) });
       return { intent: 'chat', topicId: memoryContext?.topicId || 'general' };
     }
   }
@@ -1203,6 +1213,91 @@ export class TelegramAIBot {
     }
 
     return false;
+  }
+
+  extractRetrySecondsFromError(error) {
+    const raw = String(error?.message || error || '');
+    const retryMatch = raw.match(/retry in\s+([\d.]+)s/i);
+    if (!retryMatch) return 0;
+    return Math.max(0, Math.ceil(Number(retryMatch[1]) || 0));
+  }
+
+  isAiQuotaError(error) {
+    const raw = String(error?.message || error || '').toLowerCase();
+    return (
+      raw.includes('429') ||
+      raw.includes('resource_exhausted') ||
+      raw.includes('quota') ||
+      raw.includes('rate limit') ||
+      raw.includes('rate-limit') ||
+      raw.includes('generate_content_free_tier_requests')
+    );
+  }
+
+  getAiCooldownKey(scope = 'ai', model = '') {
+    return `${String(scope || 'ai')}:${String(model || this.config.defaultModel || 'default')}`;
+  }
+
+  getAiCooldown(scope = 'ai', model = '') {
+    const key = this.getAiCooldownKey(scope, model);
+    const expiresAt = this.aiCooldowns.get(key) || 0;
+
+    if (!expiresAt) return null;
+
+    const remainingMs = expiresAt - Date.now();
+    if (remainingMs <= 0) {
+      this.aiCooldowns.delete(key);
+      return null;
+    }
+
+    return {
+      key,
+      scope,
+      model,
+      retrySeconds: Math.ceil(remainingMs / 1000)
+    };
+  }
+
+  setAiCooldown(scope = 'ai', model = '', error = null) {
+    const retrySeconds = this.extractRetrySecondsFromError(error) || 60;
+    const safeSeconds = Math.max(10, Math.min(retrySeconds, 300));
+    const key = this.getAiCooldownKey(scope, model);
+
+    this.aiCooldowns.set(key, Date.now() + safeSeconds * 1000);
+
+    return {
+      key,
+      scope,
+      model,
+      retrySeconds: safeSeconds
+    };
+  }
+
+  formatQuotaCooldownMessage(cooldown, locale = 'zh') {
+    const retrySeconds = Math.max(1, Number(cooldown?.retrySeconds || 0));
+
+    if (locale === 'en') {
+      return `AI quota is cooling down. Please try again in about ${retrySeconds} seconds.`;
+    }
+
+    return `AI 额度正在冷却中，请大约 ${retrySeconds} 秒后再试。`;
+  }
+
+  formatLogError(error) {
+    const raw = String(error?.message || error || '').trim();
+    const cleaned = raw
+      .replace(/\{[\s\S]*\}/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 180);
+
+    return {
+      name: error?.name || 'Error',
+      quota: this.isAiQuotaError(error),
+      retrySeconds: this.extractRetrySecondsFromError(error),
+      message: this.formatUserFacingError(error, 'zh').split('\n')[0],
+      detail: cleaned || undefined
+    };
   }
 
   formatUserFacingError(error, locale = 'zh') {
@@ -1391,7 +1486,7 @@ export class TelegramAIBot {
 
   async init() {
     this.bot.catch((error, ctx) => {
-      this.logger.error('Telegram handler error', { chatId: ctx.chat?.id, error });
+      this.logger.error('Telegram handler error', { chatId: ctx.chat?.id, error: this.formatLogError(error) });
     });
 
     this.bot.use(async (ctx, next) => {
@@ -2496,7 +2591,7 @@ export class TelegramAIBot {
           assistantText
         });
       } catch (error) {
-        this.logger.warn('Failed to update memory after reply', { error: error.message });
+        this.logger.warn('Failed to update memory after reply', { error: this.formatLogError(error) });
       }
 
       const reply = await this.sendAssistantReply(ctx, assistantText);
@@ -2526,7 +2621,7 @@ export class TelegramAIBot {
         );
       }
     } catch (error) {
-      this.logger.error('Failed to handle message', error);
+      this.logger.error('Failed to handle message', { error: this.formatLogError(error) });
       await ctx.reply(this.formatUserFacingError(error, locale));
     }
   }
