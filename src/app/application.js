@@ -34,7 +34,7 @@ export async function createApplication() {
     const runtimeConfig = configCenter.raw;
 
     ensureRuntimeFileDirectory(runtimeConfig.databaseFile, 'DATABASE_FILE');
-    ensureRuntimeFileDirectory(runtimeConfig.dataFile, 'DATA_FILE');
+    ensureRuntimeFileDirectory(runtimeConfig.legacyDataFile, 'DATA_FILE');
 
     const db = await createDatabase(runtimeConfig);
     const accessControl = new AccessControlService({ config: runtimeConfig, db, logger });
