@@ -1618,8 +1618,17 @@ export class TelegramAIBot {
     this.botUsername = me.username || '';
     await this.bot.telegram.setMyCommands([
       { command: 'start', description: 'Start the bot' },
+      { command: 'menu', description: 'Show main menu' },
       { command: 'help', description: 'Show help' },
       { command: 'status', description: 'Show bot status' },
+      { command: 'models', description: 'Show AI models' },
+      { command: 'memory', description: 'Open memory panel' },
+      { command: 'reset', description: 'Clear context or memory' },
+      { command: 'clear', description: 'Clear context or memory' },
+      { command: 'topic', description: 'Show current topic' },
+      { command: 'topics', description: 'Show recent topics' },
+      { command: 'translate', description: 'Translate text' },
+      { command: 'tr', description: 'Translate text' },
       { command: 'block', description: 'Admin: block user by ID' },
       { command: 'unblock', description: 'Admin: unblock user by ID' },
       { command: 'allow', description: 'Admin: allow user by ID' },
@@ -1629,6 +1638,13 @@ export class TelegramAIBot {
 
   registerCommands() {
     this.bot.command('start', (ctx) => this.handleStart(ctx));
+    this.bot.command('menu', (ctx) => this.handleMenu(ctx));
+    this.bot.command('models', (ctx) => this.handleModels(ctx));
+    this.bot.command('memory', (ctx) => this.handleMemoryPrompt(ctx));
+    this.bot.command('reset', (ctx) => this.handleClearPrompt(ctx));
+    this.bot.command('clear', (ctx) => this.handleClearPrompt(ctx));
+    this.bot.command('topic', (ctx) => this.handleTopicShow(ctx));
+    this.bot.command('topics', (ctx) => this.handleTopicsShow(ctx));
     this.bot.command('help', (ctx) => this.handleHelp(ctx));
     this.bot.command('status', (ctx) => this.handleStatus(ctx));
     this.bot.command('translate', (ctx) => this.runTranslation(ctx, extractCommandArgs(ctx.message.text || ''), 'auto'));
