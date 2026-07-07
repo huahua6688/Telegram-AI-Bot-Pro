@@ -25,6 +25,34 @@ function hasEnv(...names) {
   return names.some((name) => Boolean(String(process.env[name] || '').trim()));
 }
 
+function checkWritableFileDirectory(filePath = '', label = 'FILE', warnings = [], errors = []) {
+  const raw = String(filePath || '').trim();
+  if (!raw) {
+    errors.push(`${label} 未配置。`);
+    return;
+  }
+
+  ok(`${label}: ${raw}`);
+
+  const dir = path.dirname(raw);
+  if (!dir || dir === '.') return;
+
+  if (!fs.existsSync(dir)) {
+    warnings.push(`${label} 目录不存在：${dir}。应用启动时会尝试自动创建；如果在 Zeabur 上使用挂载盘，请确认已挂载到这个目录。`);
+    return;
+  }
+
+  try {
+    fs.accessSync(dir, fs.constants.W_OK);
+    const testFile = path.join(dir, `.doctor-write-test-${process.pid}`);
+    fs.writeFileSync(testFile, 'ok');
+    fs.unlinkSync(testFile);
+    ok(`${label} directory writable: ${dir}`);
+  } catch (error) {
+    errors.push(`${label} 目录不可写：${dir}。错误：${error.message}`);
+  }
+}
+
 const config = loadConfig();
 const errors = [];
 const warnings = [];
@@ -92,17 +120,8 @@ if (provider === 'doubao' && !hasEnv('DOUBAO_API_KEY', 'AI_API_KEY')) {
   errors.push('Doubao 模式需要 DOUBAO_API_KEY，或用 AI_API_KEY 复用。');
 }
 
-const dbPath = config.databaseFile || '';
-if (!dbPath) {
-  errors.push('DATABASE_FILE 未配置。');
-} else {
-  ok(`DATABASE_FILE: ${dbPath}`);
-
-  const dir = path.dirname(dbPath);
-  if (!fs.existsSync(dir)) {
-    warnings.push(`数据库目录不存在：${dir}。如果在 Zeabur 上使用挂载盘，确认已挂载到这个目录。`);
-  }
-}
+checkWritableFileDirectory(config.databaseFile, 'DATABASE_FILE', warnings, errors);
+checkWritableFileDirectory(config.legacyDataFile, 'DATA_FILE', warnings, errors);
 
 ok(`HEALTH_PORT: ${config.healthPort}`);
 
