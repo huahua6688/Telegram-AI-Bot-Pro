@@ -113,6 +113,7 @@ const UI_TEXT = {
     buttonDocument: '📎 文件',
     buttonTts: '🎤 语音',
     buttonLanguage: '🌍 语言',
+    buttonAdmin: '🛠 管理',
     chatHint: '直接发送你想问的内容就行，我会自动判断怎么处理。',
     translateHint: '请直接发送要翻译的内容。我会自动判断源语言并翻译。',
     translationTargetPrompt: '请选择要翻译成哪种语言：',
@@ -233,6 +234,7 @@ const UI_TEXT = {
     buttonImage: '🖼️ Image Understanding',
     buttonTts: '🎤 Voice',
     buttonLanguage: '🌍 Language',
+    buttonAdmin: '🛠 Admin',
     chatHint: 'Send me anything directly. I will decide how to handle it.',
     translateHint: 'Send the text you want to translate. I will detect the source language automatically.',
     translationTargetPrompt: 'Choose the target language:',
@@ -597,9 +599,11 @@ export class TelegramAIBot {
       image: this.t(locale, 'buttonImage'),
       document: this.t(locale, 'buttonDocument'),
       tts: this.t(locale, 'buttonTts'),
-      language: this.t(locale, 'buttonLanguage')
+      language: this.t(locale, 'buttonLanguage'),
+      admin: this.t(locale, 'buttonAdmin')
     };
   }
+
 
 
 
@@ -623,10 +627,48 @@ export class TelegramAIBot {
         Markup.button.callback(labels.tts, 'menu:tts')
       ],
       [
+        Markup.button.callback(labels.admin, 'menu:admin'),
+        Markup.button.callback(labels.language, 'menu:language')
+      ],
+      [
         Markup.button.callback(labels.reset, 'menu:reset'),
         Markup.button.callback(labels.help, 'menu:help')
+      ]
+    ]);
+  }
+
+
+  createAdminActionKeyboard(locale = 'zh') {
+    const labels =
+      locale === 'en'
+        ? {
+            status: '🤖 Bot status',
+            whoami: '👤 My ID',
+            models: '🧠 Models',
+            quota: '📊 Quota',
+            docs: '📚 Deploy docs',
+            cancel: 'Cancel'
+          }
+        : {
+            status: '🤖 Bot 状态',
+            whoami: '👤 我的 ID',
+            models: '🧠 模型列表',
+            quota: '📊 额度状态',
+            docs: '📚 部署文档',
+            cancel: '取消'
+          };
+
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback(labels.status, 'admin_pick:status'),
+        Markup.button.callback(labels.whoami, 'admin_pick:whoami')
       ],
-      [Markup.button.callback(labels.language, 'menu:language')]
+      [
+        Markup.button.callback(labels.models, 'admin_pick:models'),
+        Markup.button.callback(labels.quota, 'admin_pick:quota')
+      ],
+      [Markup.button.callback(labels.docs, 'admin_pick:docs')],
+      [Markup.button.callback(labels.cancel, 'admin_pick:cancel')]
     ]);
   }
 
@@ -884,7 +926,8 @@ export class TelegramAIBot {
       [menuLabels.image, { type: 'image_menu' }],
       [menuLabels.document, { type: 'file_menu' }],
       [menuLabels.tts, { type: 'voice_menu' }],
-      [menuLabels.language, { type: 'language' }]
+      [menuLabels.language, { type: 'language' }],
+      [menuLabels.admin, { type: 'admin_menu' }]
     ]);
     if (buttonMap.has(content)) {
       return buttonMap.get(content);
@@ -895,6 +938,7 @@ export class TelegramAIBot {
     if (/^(models?|模型(列表)?)$/i.test(content)) return { type: 'models' };
     if (/^(persona|人格)$/i.test(content)) return { type: 'persona' };
     if (/^(language|语言|語言)$/i.test(content)) return { type: 'language' };
+    if (/^(admin|管理|管理员|管理面板|后台)$/i.test(content)) return { type: 'admin_menu' };
     if (/^(files?|documents?|文档|文件|文件处理|文档处理)$/i.test(content)) return { type: 'file_menu' };
 
     if (/^(查看|显示|顯示|show)?(长期|長期)?记忆$/i.test(content) || /^(memory|mem)$/i.test(content)) {
@@ -1808,6 +1852,7 @@ export class TelegramAIBot {
     this.bot.action(/^set_persona:(.+)$/, (ctx) => this.handlePersonaCallback(ctx));
     this.bot.action(/^set_language:(.+)$/, (ctx) => this.handleLanguageCallback(ctx));
     this.bot.action(/^menu:(.+)$/, (ctx) => this.handleMenuCallback(ctx));
+    this.bot.action(/^admin_pick:(.+)$/, (ctx) => this.handleAdminActionCallback(ctx));
     this.bot.action(/^act:/, (ctx) => this.handleAssistantActionCallback(ctx));
   }
 
@@ -2678,6 +2723,64 @@ export class TelegramAIBot {
     await ctx.reply(lines.join('\n'), this.createMenuKeyboard(locale));
   }
 
+
+  async handleAdminQuota(ctx) {
+    const locale = this.getLocale(ctx);
+    const user = this.db.findUser(ctx.from.id);
+    const stats = this.db.getStats?.() || {};
+    const cooldowns = Array.from(this.aiCooldowns.entries()).map(([key, expiresAt]) => ({
+      key,
+      retrySeconds: Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000))
+    })).filter((item) => item.retrySeconds > 0);
+
+    if (locale === 'en') {
+      const lines = [
+        '📊 Quota status',
+        '',
+        `Today used: ${user?.dailyUsageCount || 0}/${this.config.dailyQuota}`,
+        `Total messages: ${user?.totalMessages || 0}`,
+        '',
+        'AI cooldown:',
+        cooldowns.length
+          ? cooldowns.map((item) => `- ${item.key}: ${item.retrySeconds}s`).join('\n')
+          : '- none',
+        '',
+        'Global stats:',
+        `- messagesHandled: ${stats.messagesHandled || 0}`,
+        `- aiCalls: ${stats.aiCalls || 0}`,
+        `- toolCalls: ${stats.toolCalls || 0}`,
+        `- voiceTranscriptions: ${stats.voiceTranscriptions || 0}`,
+        `- imageGenerations: ${stats.imageGenerations || 0}`,
+        `- ttsGenerations: ${stats.ttsGenerations || 0}`
+      ];
+
+      await ctx.reply(lines.join('\n'), this.createAdminActionKeyboard(locale));
+      return;
+    }
+
+    const lines = [
+      '📊 额度状态',
+      '',
+      `今日用量：${user?.dailyUsageCount || 0}/${this.config.dailyQuota}`,
+      `总消息数：${user?.totalMessages || 0}`,
+      '',
+      'AI 冷却：',
+      cooldowns.length
+        ? cooldowns.map((item) => `- ${item.key}：${item.retrySeconds}s`).join('\n')
+        : '- 无',
+      '',
+      '全局统计：',
+      `- messagesHandled：${stats.messagesHandled || 0}`,
+      `- aiCalls：${stats.aiCalls || 0}`,
+      `- toolCalls：${stats.toolCalls || 0}`,
+      `- voiceTranscriptions：${stats.voiceTranscriptions || 0}`,
+      `- imageGenerations：${stats.imageGenerations || 0}`,
+      `- ttsGenerations：${stats.ttsGenerations || 0}`
+    ];
+
+    await ctx.reply(lines.join('\n'), this.createAdminActionKeyboard(locale));
+  }
+
   async handleStats(ctx) {
     const stats = this.db.getStats();
     const user = this.db.findUser(ctx.from.id);
@@ -2794,6 +2897,75 @@ export class TelegramAIBot {
 
 
 
+
+
+  async handleAdminActionCallback(ctx) {
+    const locale = this.getLocale(ctx);
+    const target = String(ctx.match?.[1] || '').trim();
+
+    await ctx.answerCbQuery();
+
+    if (target === 'cancel') {
+      await this.handleMenu(ctx);
+      return;
+    }
+
+    if (!this.isAdmin(ctx)) {
+      await ctx.reply(this.t(locale, 'adminOnly'));
+      await this.handleWhoami(ctx);
+      return;
+    }
+
+    if (target === 'status') {
+      await this.handleStatus(ctx);
+      return;
+    }
+
+    if (target === 'whoami') {
+      await this.handleWhoami(ctx);
+      return;
+    }
+
+    if (target === 'models') {
+      await this.handleModels(ctx);
+      return;
+    }
+
+    if (target === 'quota') {
+      await this.handleAdminQuota(ctx);
+      return;
+    }
+
+    if (target === 'docs') {
+      const text =
+        locale === 'en'
+          ? [
+              '📚 Deploy docs',
+              '',
+              'docs/ZEABUR.md',
+              'docs/ENVIRONMENT.md',
+              'docs/DEPLOY_CHECKLIST.md',
+              'docs/TROUBLESHOOTING.md',
+              'docs/COMMANDS.md',
+              'SECURITY.md'
+            ].join('\n')
+          : [
+              '📚 部署文档',
+              '',
+              'docs/ZEABUR.md',
+              'docs/ENVIRONMENT.md',
+              'docs/DEPLOY_CHECKLIST.md',
+              'docs/TROUBLESHOOTING.md',
+              'docs/COMMANDS.md',
+              'SECURITY.md'
+            ].join('\n');
+
+      await ctx.reply(text, this.createAdminActionKeyboard(locale));
+      return;
+    }
+
+    await ctx.reply('🛠 管理员面板', this.createAdminActionKeyboard(locale));
+  }
 
   async handleFileActionCallback(ctx) {
     const locale = this.getLocale(ctx);
@@ -3208,7 +3380,8 @@ export class TelegramAIBot {
       image: { type: 'image_menu' },
       file: { type: 'file_menu' },
       tts: { type: 'voice_menu' },
-      language: { type: 'language' }
+      language: { type: 'language' },
+      admin: { type: 'admin_menu' }
     };
 
     await ctx.answerCbQuery();
@@ -3330,6 +3503,17 @@ export class TelegramAIBot {
 
     if (naturalAction.type === 'file_menu') {
       await ctx.reply('📎 请选择文件功能：', this.createFileActionKeyboard(locale));
+      return true;
+    }
+
+    if (naturalAction.type === 'admin_menu') {
+      if (!this.isAdmin(ctx)) {
+        await ctx.reply(this.t(locale, 'adminOnly'));
+        await this.handleWhoami(ctx);
+        return true;
+      }
+
+      await ctx.reply('🛠 管理员面板', this.createAdminActionKeyboard(locale));
       return true;
     }
 
