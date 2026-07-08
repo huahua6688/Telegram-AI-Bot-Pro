@@ -3819,7 +3819,20 @@ export class TelegramAIBot {
 
 
   async handleMenuCallback(ctx) {
-    const action = String(ctx.match?.[1] || '').trim();
+    const locale = this.getLocale(ctx);
+    const target = String(ctx.match?.[1] || '').trim();
+
+    await ctx.answerCbQuery();
+
+    if (target === 'close') {
+      try {
+        await ctx.deleteMessage();
+      } catch {
+        await ctx.reply(locale === 'en' ? 'Menu closed.' : '菜单已关闭。');
+      }
+      return;
+    }
+
     const actionMap = {
       chat: { type: 'chat_hint' },
       translate: { type: 'translate_prompt' },
@@ -3838,59 +3851,54 @@ export class TelegramAIBot {
       back: { type: 'main_menu' }
     };
 
-    await ctx.answerCbQuery();
-
-    if (target === 'close') {
-      try {
-        await ctx.deleteMessage();
-      } catch {
-        await ctx.reply(locale === 'en' ? 'Menu closed.' : '菜单已关闭。');
-      }
-      return;
-    }
-
-
-    const handled = await this.handleMenuAction(ctx, actionMap[action]);
-    if (!handled) {
-      await this.handleMenu(ctx);
-    }
+    const action = actionMap[target] || { type: 'main_menu' };
+    await this.handleMenuAction(ctx, action);
   }
 
-  async handleMenuAction(ctx, naturalAction, locale = this.getLocale(ctx)) {
+
+  async handleMenuAction(ctx, naturalAction) {
     if (!naturalAction) return false;
 
-    if (naturalAction.type === 'main_menu') {
+    const locale = this.getLocale(ctx);
+    const type = String(naturalAction.type || '');
+
+    if (type === 'main_menu') {
       await this.handleMenu(ctx);
       return true;
     }
 
-    if (naturalAction.type === 'chat_hint') {
+    if (type === 'chat_hint') {
       await ctx.reply(this.t(locale, 'chatHint'), this.createMenuKeyboard(locale));
       return true;
     }
 
-    if (naturalAction.type === 'translate_prompt') {
+    if (type === 'translate_prompt') {
       await ctx.reply(this.t(locale, 'translationTargetPrompt'), this.createTranslationTargetKeyboard(locale));
       return true;
     }
 
-    if (naturalAction.type === 'help') {
+    if (type === 'memory_prompt') {
+      await this.handleMemoryPrompt(ctx);
+      return true;
+    }
+
+    if (type === 'help') {
       await this.handleHelp(ctx);
       return true;
     }
 
-    if (naturalAction.type === 'reset') {
+    if (type === 'reset') {
       await this.handleClearPrompt(ctx);
       return true;
     }
 
-    if (naturalAction.type === 'models') {
+    if (type === 'models') {
       await this.handleModels(ctx);
       return true;
     }
 
-    if (naturalAction.type === 'persona') {
-      const user = this.db.findUser(ctx.from.id);
+    if (type === 'persona') {
+      const user = this.db.findUser(ctx.from?.id);
       await ctx.reply(
         this.t(locale, 'currentPersona', {
           persona: user?.persona || 'default',
@@ -3901,142 +3909,96 @@ export class TelegramAIBot {
       return true;
     }
 
-    if (naturalAction.type === 'language') {
-      const user = this.db.findUser(ctx.from.id);
-      await ctx.reply(
-        this.t(locale, 'currentLanguage', { language: LANGUAGE_NAMES[user?.preferredLanguage || locale] || locale }),
-        this.createLanguageKeyboard(user?.preferredLanguage || locale)
-      );
+    if (type === 'language') {
+      await ctx.reply(this.t(locale, 'languagePrompt'), this.createLanguageKeyboard(locale));
       return true;
     }
 
-    if (naturalAction.type === 'memory_prompt') {
-      await this.handleMemoryPrompt(ctx);
+    if (type === 'web_prompt') {
+      this.setPendingMenuAction(ctx, 'web_prompt');
+      await ctx.reply(locale === 'en' ? 'Send the search keywords.' : '请发送要搜索的关键词。', this.createMenuKeyboard(locale));
       return true;
     }
 
-    if (naturalAction.type === 'memory_show') {
-      await this.handleMemoryShow(ctx);
+    if (type === 'image_menu') {
+      await ctx.reply(locale === 'en' ? 'Choose an image action:' : '请选择图片功能：', this.createImageActionKeyboard(locale));
       return true;
     }
 
-    if (naturalAction.type === 'topic_show') {
-      await this.handleTopicShow(ctx);
+    if (type === 'file_menu') {
+      await ctx.reply(locale === 'en' ? 'Choose a file action:' : '请选择文件功能：', this.createFileActionKeyboard(locale));
       return true;
     }
 
-    if (naturalAction.type === 'topics_show') {
-      await this.handleTopicsShow(ctx);
+    if (type === 'voice_menu') {
+      await ctx.reply(locale === 'en' ? 'Choose a voice action:' : '请选择语音功能：', this.createVoiceActionKeyboard(locale));
       return true;
     }
 
-    if (naturalAction.type === 'memory_clear') {
-      await this.handleClearPrompt(ctx);
-      return true;
-    }
-
-    if (naturalAction.type === 'topics_clear') {
-      await this.handleTopicsClear(ctx);
-      return true;
-    }
-
-    if (naturalAction.type === 'web') {
-      await this.runWebSearch(ctx, naturalAction.value);
-      return true;
-    }
-
-    if (naturalAction.type === 'image') {
-      await this.runImageGeneration(ctx, naturalAction.value, 'generate');
-      return true;
-    }
-
-    if (naturalAction.type === 'image_edit') {
-      await this.runImageEdit(ctx, naturalAction.value);
-      return true;
-    }
-
-    if (naturalAction.type === 'tts') {
-      await this.runTextToSpeech(ctx, naturalAction.value);
-      return true;
-    }
-
-    if (naturalAction.type === 'image_menu') {
-      await ctx.reply('🖼️ 请选择图片功能：', this.createImageActionKeyboard(locale));
-      return true;
-    }
-
-    if (naturalAction.type === 'voice_menu') {
-      await ctx.reply('🎤 请选择语音功能：', this.createVoiceActionKeyboard(locale));
-      return true;
-    }
-
-    if (naturalAction.type === 'file_menu') {
-      await ctx.reply('📎 请选择文件功能：', this.createFileActionKeyboard(locale));
-      return true;
-    }
-
-    if (naturalAction.type === 'toolbox_menu') {
-      const locale = this.getLocale(ctx);
-      await ctx.reply(locale === 'en' ? '🧰 Toolbox' : '🧰 工具箱', this.createToolboxKeyboard(locale));
-      return true;
-    }
-
-    if (naturalAction.type === 'admin_menu') {
+    if (type === 'admin_menu') {
       if (!this.isAdmin(ctx)) {
         await ctx.reply(this.t(locale, 'adminOnly'));
         await this.handleWhoami(ctx);
         return true;
       }
 
-      await ctx.reply('🛠 管理员面板', this.createAdminActionKeyboard(locale));
+      await ctx.reply(locale === 'en' ? '🛠 Admin panel' : '🛠 管理员面板', this.createAdminActionKeyboard(locale));
       return true;
     }
 
-    if (naturalAction.type === 'web_prompt') {
-      this.setPendingMenuAction(ctx, 'web_prompt');
-      await ctx.reply('🌐 联网搜索\n\n请直接发送你要搜索的内容，不需要输入“搜索”两个字。', this.createMenuKeyboard(locale));
+    if (type === 'toolbox_menu') {
+      await ctx.reply(locale === 'en' ? '🧰 Toolbox' : '🧰 工具箱', this.createToolboxKeyboard(locale));
       return true;
     }
 
-    if (naturalAction.type === 'image_prompt') {
-      this.setPendingMenuAction(ctx, 'image_prompt');
-      await ctx.reply('🖼️ 图片识别\n\n请直接发送图片，不需要输入指令。', this.createMenuKeyboard(locale));
+    if (type === 'memory_show') {
+      await this.handleMemoryShow(ctx);
       return true;
     }
 
-    if (naturalAction.type === 'tts_prompt') {
-      this.setPendingMenuAction(ctx, 'voice_prompt');
-      await ctx.reply('🎤 语音消息\n\n请直接发送 Telegram 语音消息。\n\n说明：TTS 朗读和 Gemini Live 后面再单独接。', this.createMenuKeyboard(locale));
+    if (type === 'topic_show') {
+      await this.handleTopicShow(ctx);
       return true;
     }
 
-    if (naturalAction.type === 'model') {
-      ctx.message = ctx.message || {};
-      ctx.message.text = `/model ${naturalAction.value}`;
-      await this.handleModel(ctx);
+    if (type === 'topics_show') {
+      await this.handleTopicsShow(ctx);
       return true;
     }
 
-    if (naturalAction.type === 'persona_set') {
-      ctx.message = ctx.message || {};
-      ctx.message.text = `/persona ${naturalAction.value}`;
-      await this.handlePersona(ctx);
+    if (type === 'memory_clear') {
+      await this.handleMemoryClear(ctx);
       return true;
     }
 
-    if (naturalAction.type === 'language_set') {
-      ctx.message = ctx.message || {};
-      ctx.message.text = `/language ${naturalAction.value}`;
-      await this.handleLanguage(ctx);
+    if (type === 'topics_clear') {
+      await this.handleTopicsClear(ctx);
       return true;
     }
 
-    if (await this.pluginManager.runNaturalAction(naturalAction, { bot: this, ctx, locale })) {
+    if (type === 'web') {
+      await this.runWebSearch(ctx, naturalAction.value || '');
+      return true;
+    }
+
+    if (type === 'image') {
+      await this.runImageGeneration(ctx, naturalAction.value || '', 'generate');
+      return true;
+    }
+
+    if (type === 'image_edit') {
+      await this.runImageEdit(ctx, naturalAction.value || '');
+      return true;
+    }
+
+    if (type === 'tts') {
+      await this.runTextToSpeech(ctx, naturalAction.value || '');
       return true;
     }
 
     return false;
   }
+
 
   async handleIncomingMessage(ctx) {
     const text = ctx.message.text || '';

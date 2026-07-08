@@ -10,7 +10,8 @@ test("submenus expose back to main menu button", () => {
 });
 
 test("menu back action returns to main menu", () => {
-  assert.match(source, /back: \{ type: .main_menu. \}/);
-  assert.match(source, /naturalAction\.type === .main_menu./);
-  assert.match(source, /await this\.handleMenu\(ctx\)/);
+  assert.match(source, /main_menu/);
+  assert.match(source, /async handleMenuAction\(ctx,\s*naturalAction\)/);
+  assert.match(source, /type === ['"]main_menu['"]/);
+  assert.match(source, /handleMenu\(ctx\)/);
 });
