@@ -44,3 +44,9 @@
     docs/COMMANDS.md
 
 解释 npm start、npm run verify、npm run doctor、npm run predeploy、npm run docker:verify 等命令。
+
+## 安全说明
+
+    SECURITY.md
+
+说明 Token、API Key、数据库、Zeabur 环境变量和管理员权限的安全注意事项。

@@ -29,6 +29,10 @@ Zeabur 环境变量模板：
 
     docs/COMMANDS.md
 
+安全说明：
+
+    SECURITY.md
+
 Copilot 交接说明：
 
     docs/COPILOT_HANDOFF.md
