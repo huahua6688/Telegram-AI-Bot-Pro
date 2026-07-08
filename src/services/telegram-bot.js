@@ -668,7 +668,8 @@ export class TelegramAIBot {
         Markup.button.callback(labels.quota, 'admin_pick:quota')
       ],
       [Markup.button.callback(labels.docs, 'admin_pick:docs')],
-      [Markup.button.callback(labels.cancel, 'admin_pick:cancel')]
+      [Markup.button.callback(labels.cancel, 'admin_pick:cancel')],
+      [Markup.button.callback(locale === 'en' ? '⬅️ Main menu' : '⬅️ 返回主菜单', 'menu:back')]
     ]);
   }
 
@@ -741,7 +742,8 @@ export class TelegramAIBot {
         Markup.button.callback(labels.tts, 'voice_pick:tts')
       ],
       [Markup.button.callback(labels.live, 'voice_pick:live')],
-      [Markup.button.callback(labels.cancel, 'voice_pick:cancel')]
+      [Markup.button.callback(labels.cancel, 'voice_pick:cancel')],
+      [Markup.button.callback(locale === 'en' ? '⬅️ Main menu' : '⬅️ 返回主菜单', 'menu:back')]
     ]);
   }
 
@@ -766,7 +768,8 @@ export class TelegramAIBot {
       [Markup.button.callback(labels.summarize, 'file_pick:summarize')],
       [Markup.button.callback(labels.keypoints, 'file_pick:keypoints')],
       [Markup.button.callback(labels.translate, 'file_pick:translate')],
-      [Markup.button.callback(labels.cancel, 'file_pick:cancel')]
+      [Markup.button.callback(labels.cancel, 'file_pick:cancel')],
+      [Markup.button.callback(locale === 'en' ? '⬅️ Main menu' : '⬅️ 返回主菜单', 'menu:back')]
     ]);
   }
 
@@ -810,7 +813,8 @@ export class TelegramAIBot {
         Markup.button.callback(labels.generate, 'image_pick:generate')
       ],
       [Markup.button.callback(labels.edit, 'image_pick:edit')],
-      [Markup.button.callback(labels.cancel, 'image_pick:cancel')]
+      [Markup.button.callback(labels.cancel, 'image_pick:cancel')],
+      [Markup.button.callback(locale === 'en' ? '⬅️ Main menu' : '⬅️ 返回主菜单', 'menu:back')]
     ]);
   }
 
@@ -933,7 +937,8 @@ export class TelegramAIBot {
       return buttonMap.get(content);
     }
 
-    if (/^(help|menu|帮助|幫助|菜单|選單)$/i.test(content)) return { type: 'help' };
+    if (/^(help|帮助|幫助)$/i.test(content)) return { type: 'help' };
+    if (/^(main menu|menu|主菜单|主選單|菜单|選單)$/i.test(content)) return { type: 'main_menu' };
     if (/^(reset|clear|清空|重置)(对话|對話|会话|會話|记忆|記憶)?$/i.test(content)) return { type: 'reset' };
     if (/^(models?|模型(列表)?)$/i.test(content)) return { type: 'models' };
     if (/^(persona|人格)$/i.test(content)) return { type: 'persona' };
@@ -3381,7 +3386,8 @@ export class TelegramAIBot {
       file: { type: 'file_menu' },
       tts: { type: 'voice_menu' },
       language: { type: 'language' },
-      admin: { type: 'admin_menu' }
+      admin: { type: 'admin_menu' },
+      back: { type: 'main_menu' }
     };
 
     await ctx.answerCbQuery();
@@ -3394,6 +3400,11 @@ export class TelegramAIBot {
 
   async handleMenuAction(ctx, naturalAction, locale = this.getLocale(ctx)) {
     if (!naturalAction) return false;
+
+    if (naturalAction.type === 'main_menu') {
+      await this.handleMenu(ctx);
+      return true;
+    }
 
     if (naturalAction.type === 'chat_hint') {
       await ctx.reply(this.t(locale, 'chatHint'), this.createMenuKeyboard(locale));
