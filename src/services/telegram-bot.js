@@ -109,8 +109,9 @@ const UI_TEXT = {
     buttonModels: '🤖 模型',
     buttonPersona: '🎭 人格',
     buttonWeb: '🌐 联网搜索',
-    buttonImage: '🖼️ 图片识别',
-    buttonTts: '🎤 语音消息',
+    buttonImage: '🖼️ 图片',
+    buttonDocument: '📎 文件',
+    buttonTts: '🎤 语音',
     buttonLanguage: '🌍 语言',
     chatHint: '直接发送你想问的内容就行，我会自动判断怎么处理。',
     translateHint: '请直接发送要翻译的内容。我会自动判断源语言并翻译。',
@@ -398,6 +399,7 @@ export class TelegramAIBot {
     this.bot.action(/^memory_pick:(.+)$/, (ctx) => this.handleMemoryTargetCallback(ctx));
     this.bot.action(/^clear_pick:(.+)$/, (ctx) => this.handleClearTargetCallback(ctx));
     this.bot.action(/^translate_pick:(.+)$/, (ctx) => this.handleTranslateTargetCallback(ctx));
+    this.bot.action(/^file_pick:(.+)$/, (ctx) => this.handleFileActionCallback(ctx));
     this.bot.action(/^voice_pick:(.+)$/, (ctx) => this.handleVoiceActionCallback(ctx));
     this.bot.action(/^image_pick:(.+)$/, (ctx) => this.handleImageActionCallback(ctx));
     this.documentParser = new DocumentParser(config, logger);
@@ -548,6 +550,28 @@ export class TelegramAIBot {
       return true;
     }
 
+
+    if (
+      pending.type === 'file_summarize_prompt' ||
+      pending.type === 'file_keypoints_prompt' ||
+      pending.type === 'file_translate_prompt'
+    ) {
+      if (!ctx.message?.document) {
+        await ctx.reply('请直接发送 PDF、DOCX、XLSX、TXT、MD、JSON、CSV 或 XML 文件。', this.createFileActionKeyboard(locale));
+        return true;
+      }
+
+      const mode =
+        pending.type === 'file_keypoints_prompt'
+          ? 'keypoints'
+          : pending.type === 'file_translate_prompt'
+            ? 'translate'
+            : 'summarize';
+
+      await this.runDocumentAction(ctx, mode);
+      return true;
+    }
+
     return false;
   }
 
@@ -571,10 +595,12 @@ export class TelegramAIBot {
       persona: this.t(locale, 'buttonPersona'),
       web: this.t(locale, 'buttonWeb'),
       image: this.t(locale, 'buttonImage'),
+      document: this.t(locale, 'buttonDocument'),
       tts: this.t(locale, 'buttonTts'),
       language: this.t(locale, 'buttonLanguage')
     };
   }
+
 
 
   createMenuKeyboard(locale) {
@@ -589,17 +615,18 @@ export class TelegramAIBot {
         Markup.button.callback(labels.models, 'menu:models')
       ],
       [
+        Markup.button.callback(labels.document, 'menu:file'),
+        Markup.button.callback(labels.web, 'menu:web')
+      ],
+      [
+        Markup.button.callback(labels.image, 'menu:image'),
+        Markup.button.callback(labels.tts, 'menu:tts')
+      ],
+      [
         Markup.button.callback(labels.reset, 'menu:reset'),
         Markup.button.callback(labels.help, 'menu:help')
       ],
-      [
-        Markup.button.callback(labels.web, 'menu:web'),
-        Markup.button.callback(labels.image, 'menu:image')
-      ],
-      [
-        Markup.button.callback(labels.tts, 'menu:tts'),
-        Markup.button.callback(labels.language, 'menu:language')
-      ]
+      [Markup.button.callback(labels.language, 'menu:language')]
     ]);
   }
 
@@ -673,6 +700,31 @@ export class TelegramAIBot {
       ],
       [Markup.button.callback(labels.live, 'voice_pick:live')],
       [Markup.button.callback(labels.cancel, 'voice_pick:cancel')]
+    ]);
+  }
+
+
+  createFileActionKeyboard(locale = 'zh') {
+    const labels =
+      locale === 'en'
+        ? {
+            summarize: '📄 Summarize file',
+            keypoints: '🎯 Extract key points',
+            translate: '🌍 Translate file',
+            cancel: 'Cancel'
+          }
+        : {
+            summarize: '📄 总结文件',
+            keypoints: '🎯 提取重点',
+            translate: '🌍 翻译文件',
+            cancel: '取消'
+          };
+
+    return Markup.inlineKeyboard([
+      [Markup.button.callback(labels.summarize, 'file_pick:summarize')],
+      [Markup.button.callback(labels.keypoints, 'file_pick:keypoints')],
+      [Markup.button.callback(labels.translate, 'file_pick:translate')],
+      [Markup.button.callback(labels.cancel, 'file_pick:cancel')]
     ]);
   }
 
@@ -830,6 +882,7 @@ export class TelegramAIBot {
       [menuLabels.persona, { type: 'persona' }],
       [menuLabels.web, { type: 'web_prompt' }],
       [menuLabels.image, { type: 'image_menu' }],
+      [menuLabels.document, { type: 'file_menu' }],
       [menuLabels.tts, { type: 'voice_menu' }],
       [menuLabels.language, { type: 'language' }]
     ]);
@@ -842,6 +895,7 @@ export class TelegramAIBot {
     if (/^(models?|模型(列表)?)$/i.test(content)) return { type: 'models' };
     if (/^(persona|人格)$/i.test(content)) return { type: 'persona' };
     if (/^(language|语言|語言)$/i.test(content)) return { type: 'language' };
+    if (/^(files?|documents?|文档|文件|文件处理|文档处理)$/i.test(content)) return { type: 'file_menu' };
 
     if (/^(查看|显示|顯示|show)?(长期|長期)?记忆$/i.test(content) || /^(memory|mem)$/i.test(content)) {
       return { type: 'memory_show' };
@@ -2232,6 +2286,122 @@ export class TelegramAIBot {
     });
   }
 
+
+  async runDocumentAction(ctx, mode = 'summarize') {
+    const locale = this.getLocale(ctx);
+    const document = ctx.message?.document;
+
+    if (!document) {
+      await ctx.reply('请直接发送 PDF、DOCX、XLSX、TXT、MD、JSON、CSV 或 XML 文件。', this.createFileActionKeyboard(locale));
+      return;
+    }
+
+    try {
+      await ctx.sendChatAction('typing');
+
+      const file = await readTelegramFile(
+        ctx,
+        document.file_id,
+        document.file_name || 'document.txt',
+        document.mime_type || 'application/octet-stream'
+      );
+
+      const parsed = await this.documentParser.parse({
+        buffer: file.buffer,
+        filename: file.filename,
+        mimeType: file.mimeType
+      });
+
+      if (!parsed.ok) {
+        const key =
+          parsed.error?.code === 'DOCUMENT_TOO_LARGE'
+            ? 'documentTooLarge'
+            : parsed.error?.code === 'DOCUMENT_PARSE_FAILED'
+              ? 'documentParseFailed'
+              : 'unsupportedDocument';
+
+        await ctx.reply(this.t(locale, key, {
+          filename: document.file_name || 'document',
+          mimeType: document.mime_type || 'unknown',
+          error: parsed.error?.message || ''
+        }));
+
+        return;
+      }
+
+      const extracted = truncateText(parsed.text || '', this.config.maxInputChars);
+      if (!extracted) {
+        await ctx.reply('文件里没有提取到可处理的文字内容。');
+        return;
+      }
+
+      const instructions = {
+        summarize:
+          locale === 'en'
+            ? 'Summarize the file clearly. Include the main topic, important details, and conclusion.'
+            : '请清楚总结这个文件。包括主题、重要内容、结论和需要注意的地方。',
+        keypoints:
+          locale === 'en'
+            ? 'Extract the key points from the file. Use concise bullet points and keep important numbers, names, dates, and action items.'
+            : '请提取这个文件的重点。用简洁条目列出，保留重要数字、名称、日期和待办事项。',
+        translate:
+          locale === 'en'
+            ? 'Translate the file content into Simplified Chinese. Output only the translation unless a short note is necessary.'
+            : '请把这个文件内容翻译成简体中文。如果原文已经是中文，请翻译成自然英文。除非必要，不要额外解释。'
+      };
+
+      const completion = await this.completeWithAiFallback({
+        scope: mode === 'translate' ? 'translation' : 'chat',
+        model: mode === 'translate'
+          ? this.config.translationModel || this.config.defaultModel
+          : this.config.defaultModel,
+        locale,
+        request: {
+          messages: [
+            {
+              role: 'system',
+              content: instructions[mode] || instructions.summarize
+            },
+            {
+              role: 'user',
+              content: `File name: ${file.filename}\nMIME type: ${file.mimeType}\n\nFile text:\n${extracted}`
+            }
+          ],
+          tools: [],
+          temperature: 0.2
+        }
+      });
+
+      await this.db.incrementStats('aiCalls');
+
+      const title =
+        mode === 'keypoints'
+          ? '🎯 文件重点'
+          : mode === 'translate'
+            ? '🌍 文件翻译'
+            : '📄 文件总结';
+
+      await sendTextReply(
+        ctx,
+        `${title}\n\n${completion.result.text || this.t(locale, 'noReply')}`,
+        this.config.maxOutputChars,
+        this.createMenuKeyboard(locale)
+      );
+    } catch (error) {
+      if (this.isAiQuotaError(error)) {
+        this.setAiCooldown(mode === 'translate' ? 'translation' : 'chat', this.config.defaultModel, error);
+      }
+
+      this.logger.warn('Document action failed', {
+        chatId: ctx.chat?.id,
+        mode,
+        error: this.formatLogError(error)
+      });
+
+      await ctx.reply(this.formatUserFacingError(error, locale));
+    }
+  }
+
   async runWebSearch(ctx, query = extractCommandArgs(ctx.message.text || '')) {
     const locale = this.getLocale(ctx);
     if (!query) {
@@ -2624,6 +2794,51 @@ export class TelegramAIBot {
 
 
 
+
+  async handleFileActionCallback(ctx) {
+    const locale = this.getLocale(ctx);
+    const target = String(ctx.match?.[1] || '').trim();
+
+    await ctx.answerCbQuery();
+
+    if (target === 'cancel') {
+      await this.handleMenu(ctx);
+      return;
+    }
+
+    const pendingMap = {
+      summarize: 'file_summarize_prompt',
+      keypoints: 'file_keypoints_prompt',
+      translate: 'file_translate_prompt'
+    };
+
+    const titleMap =
+      locale === 'en'
+        ? {
+            summarize: '📄 Summarize file',
+            keypoints: '🎯 Extract key points',
+            translate: '🌍 Translate file'
+          }
+        : {
+            summarize: '📄 总结文件',
+            keypoints: '🎯 提取重点',
+            translate: '🌍 翻译文件'
+          };
+
+    const pending = pendingMap[target];
+    if (!pending) {
+      await ctx.reply('📎 请选择文件功能：', this.createFileActionKeyboard(locale));
+      return;
+    }
+
+    this.setPendingMenuAction(ctx, pending);
+
+    await ctx.reply(
+      `${titleMap[target]}\n\n请直接发送 PDF、DOCX、XLSX、TXT、MD、JSON、CSV 或 XML 文件。`,
+      this.createMenuKeyboard(locale)
+    );
+  }
+
   async handleVoiceActionCallback(ctx) {
     const locale = this.getLocale(ctx);
     const target = String(ctx.match?.[1] || '').trim();
@@ -2991,6 +3206,7 @@ export class TelegramAIBot {
       persona: { type: 'persona' },
       web: { type: 'web_prompt' },
       image: { type: 'image_menu' },
+      file: { type: 'file_menu' },
       tts: { type: 'voice_menu' },
       language: { type: 'language' }
     };
@@ -3109,6 +3325,11 @@ export class TelegramAIBot {
 
     if (naturalAction.type === 'voice_menu') {
       await ctx.reply('🎤 请选择语音功能：', this.createVoiceActionKeyboard(locale));
+      return true;
+    }
+
+    if (naturalAction.type === 'file_menu') {
+      await ctx.reply('📎 请选择文件功能：', this.createFileActionKeyboard(locale));
       return true;
     }
 
