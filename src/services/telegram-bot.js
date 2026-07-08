@@ -114,6 +114,7 @@ const UI_TEXT = {
     buttonTts: '🎤 语音',
     buttonLanguage: '🌍 语言',
     buttonAdmin: '🛠 管理',
+    buttonToolbox: '🧰 工具箱',
     chatHint: '直接发送你想问的内容就行，我会自动判断怎么处理。',
     translateHint: '请直接发送要翻译的内容。我会自动判断源语言并翻译。',
     translationTargetPrompt: '请选择要翻译成哪种语言：',
@@ -235,6 +236,7 @@ const UI_TEXT = {
     buttonTts: '🎤 Voice',
     buttonLanguage: '🌍 Language',
     buttonAdmin: '🛠 Admin',
+    buttonToolbox: '🧰 Toolbox',
     chatHint: 'Send me anything directly. I will decide how to handle it.',
     translateHint: 'Send the text you want to translate. I will detect the source language automatically.',
     translationTargetPrompt: 'Choose the target language:',
@@ -600,7 +602,8 @@ export class TelegramAIBot {
       document: this.t(locale, 'buttonDocument'),
       tts: this.t(locale, 'buttonTts'),
       language: this.t(locale, 'buttonLanguage'),
-      admin: this.t(locale, 'buttonAdmin')
+      admin: this.t(locale, 'buttonAdmin'),
+      toolbox: this.t(locale, 'buttonToolbox')
     };
   }
 
@@ -628,7 +631,7 @@ export class TelegramAIBot {
       ],
       [
         Markup.button.callback(labels.admin, 'menu:admin'),
-        Markup.button.callback(labels.language, 'menu:language')
+        Markup.button.callback(labels.toolbox, 'menu:toolbox')
       ],
       [
         Markup.button.callback(labels.reset, 'menu:reset'),
@@ -638,6 +641,58 @@ export class TelegramAIBot {
     ]);
   }
 
+
+  createToolboxKeyboard(locale = 'zh') {
+    const labels =
+      locale === 'en'
+        ? {
+            web: '🌐 Web search',
+            translate: '🌍 Translate',
+            memory: '🧠 Memory',
+            clear: '🧹 Clear memory',
+            image: '🖼 Image',
+            voice: '🎤 Voice',
+            file: '📎 File',
+            admin: '🛠 Admin',
+            main: '⬅️ Main menu',
+            close: '❌ Close'
+          }
+        : {
+            web: '🌐 联网搜索',
+            translate: '🌍 翻译',
+            memory: '🧠 记忆管理',
+            clear: '🧹 清空记忆',
+            image: '🖼 图片',
+            voice: '🎤 语音',
+            file: '📎 文件',
+            admin: '🛠 管理',
+            main: '⬅️ 返回主菜单',
+            close: '❌ 关闭'
+          };
+
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback(labels.web, 'toolbox:web'),
+        Markup.button.callback(labels.translate, 'toolbox:translate')
+      ],
+      [
+        Markup.button.callback(labels.image, 'toolbox:image'),
+        Markup.button.callback(labels.voice, 'toolbox:voice')
+      ],
+      [
+        Markup.button.callback(labels.file, 'toolbox:file'),
+        Markup.button.callback(labels.memory, 'toolbox:memory')
+      ],
+      [
+        Markup.button.callback(labels.clear, 'toolbox:clear'),
+        Markup.button.callback(labels.admin, 'toolbox:admin')
+      ],
+      [
+        Markup.button.callback(labels.main, 'menu:back'),
+        Markup.button.callback(labels.close, 'menu:close')
+      ]
+    ]);
+  }
 
   createAdminActionKeyboard(locale = 'zh') {
     const labels =
@@ -970,7 +1025,8 @@ export class TelegramAIBot {
       [menuLabels.document, { type: 'file_menu' }],
       [menuLabels.tts, { type: 'voice_menu' }],
       [menuLabels.language, { type: 'language' }],
-      [menuLabels.admin, { type: 'admin_menu' }]
+      [menuLabels.admin, { type: 'admin_menu' }],
+      [menuLabels.toolbox, { type: 'toolbox_menu' }]
     ]);
     if (buttonMap.has(content)) {
       return buttonMap.get(content);
@@ -1935,6 +1991,7 @@ export class TelegramAIBot {
     this.bot.action(/^set_language:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleLanguageCallback(ctx)));
     this.bot.action(/^menu:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleMenuCallback(ctx)));
     this.bot.action(/^admin_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleAdminActionCallback(ctx)));
+    this.bot.action(/^toolbox:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleToolboxCallback(ctx)));
     this.bot.action(/^act:/, (ctx) => this.handleAssistantActionCallback(ctx));
   }
 
@@ -3237,6 +3294,56 @@ export class TelegramAIBot {
 
 
 
+  async handleToolboxCallback(ctx) {
+    const locale = this.getLocale(ctx);
+    const target = String(ctx.match?.[1] || '').trim();
+
+    await ctx.answerCbQuery();
+
+    if (target === 'web') {
+      this.setPendingMenuAction(ctx, 'web_prompt');
+      await ctx.reply(locale === 'en' ? 'Send the search keywords.' : '请发送要搜索的关键词。', this.createToolboxKeyboard(locale));
+      return;
+    }
+
+    if (target === 'translate') {
+      await ctx.reply(this.t(locale, 'translationTargetPrompt'), this.createTranslationTargetKeyboard(locale));
+      return;
+    }
+
+    if (target === 'image') {
+      await ctx.reply(locale === 'en' ? 'Choose an image action:' : '请选择图片功能：', this.createImageActionKeyboard(locale));
+      return;
+    }
+
+    if (target === 'voice') {
+      await ctx.reply(locale === 'en' ? 'Choose a voice action:' : '请选择语音功能：', this.createVoiceActionKeyboard(locale));
+      return;
+    }
+
+    if (target === 'file') {
+      await ctx.reply(locale === 'en' ? 'Choose a file action:' : '请选择文件功能：', this.createFileActionKeyboard(locale));
+      return;
+    }
+
+    if (target === 'memory') {
+      await this.handleMemoryPrompt(ctx);
+      return;
+    }
+
+    if (target === 'clear') {
+      await this.handleClearPrompt(ctx);
+      return;
+    }
+
+    if (target === 'admin') {
+      await ctx.reply(locale === 'en' ? '🛠 Admin panel' : '🛠 管理员面板', this.createAdminActionKeyboard(locale));
+      return;
+    }
+
+    await ctx.reply(locale === 'en' ? '🧰 Toolbox' : '🧰 工具箱', this.createToolboxKeyboard(locale));
+  }
+
   async handleAdminActionCallback(ctx) {
     const locale = this.getLocale(ctx);
     const target = String(ctx.match?.[1] || '').trim();
@@ -3727,6 +3834,7 @@ export class TelegramAIBot {
       tts: { type: 'voice_menu' },
       language: { type: 'language' },
       admin: { type: 'admin_menu' },
+      toolbox: { type: 'toolbox_menu' },
       back: { type: 'main_menu' }
     };
 
@@ -3864,6 +3972,12 @@ export class TelegramAIBot {
 
     if (naturalAction.type === 'file_menu') {
       await ctx.reply('📎 请选择文件功能：', this.createFileActionKeyboard(locale));
+      return true;
+    }
+
+    if (naturalAction.type === 'toolbox_menu') {
+      const locale = this.getLocale(ctx);
+      await ctx.reply(locale === 'en' ? '🧰 Toolbox' : '🧰 工具箱', this.createToolboxKeyboard(locale));
       return true;
     }
 
