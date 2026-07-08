@@ -398,6 +398,7 @@ export class TelegramAIBot {
     this.bot.action(/^memory_pick:(.+)$/, (ctx) => this.handleMemoryTargetCallback(ctx));
     this.bot.action(/^clear_pick:(.+)$/, (ctx) => this.handleClearTargetCallback(ctx));
     this.bot.action(/^translate_pick:(.+)$/, (ctx) => this.handleTranslateTargetCallback(ctx));
+    this.bot.action(/^voice_pick:(.+)$/, (ctx) => this.handleVoiceActionCallback(ctx));
     this.bot.action(/^image_pick:(.+)$/, (ctx) => this.handleImageActionCallback(ctx));
     this.documentParser = new DocumentParser(config, logger);
     this.multimodalActions = new MultimodalActionService({
@@ -519,12 +520,31 @@ export class TelegramAIBot {
       return true;
     }
 
-    if (pending.type === 'voice_prompt') {
+    if (pending.type === 'voice_prompt' || pending.type === 'voice_transcribe_prompt') {
       if (ctx.message?.voice || ctx.message?.audio) {
-        return this.handleIncomingMessage(ctx);
+        await this.runVoiceTranscription(ctx);
+        return true;
       }
 
-      await ctx.reply('请直接发送 Telegram 语音消息。文字转语音和 Gemini Live 后面再单独接。');
+      await ctx.reply('请直接发送 Telegram 语音消息或音频文件。', this.createVoiceActionKeyboard(locale));
+      return true;
+    }
+
+    if (pending.type === 'voice_tts_prompt') {
+      if (!text) {
+        await ctx.reply('请直接发送要朗读的文字。', this.createVoiceActionKeyboard(locale));
+        return true;
+      }
+
+      await this.runTextToSpeech(ctx, text);
+      return true;
+    }
+
+    if (pending.type === 'voice_live_prompt') {
+      await ctx.reply(
+        '🎧 Gemini Live 入口已预留。\n\n当前 Telegram Bot API 里先保留入口，后续会接入 Gemini Live / Native Audio Dialog 的实时语音流程。\n\n现在可以先使用：\n- 🎙 语音转文字\n- 🔊 文字转语音',
+        this.createVoiceActionKeyboard(locale)
+      );
       return true;
     }
 
@@ -626,6 +646,33 @@ export class TelegramAIBot {
       [Markup.button.callback(this.t(locale, 'clearLongMemory'), 'clear_pick:long')],
       [Markup.button.callback(this.t(locale, 'clearAllMemory'), 'clear_pick:all')],
       [Markup.button.callback(this.t(locale, 'clearCancel'), 'clear_pick:cancel')]
+    ]);
+  }
+
+
+  createVoiceActionKeyboard(locale = 'zh') {
+    const labels =
+      locale === 'en'
+        ? {
+            transcribe: '🎙 Voice to text',
+            tts: '🔊 Text to speech',
+            live: '🎧 Gemini Live',
+            cancel: 'Cancel'
+          }
+        : {
+            transcribe: '🎙 语音转文字',
+            tts: '🔊 文字转语音',
+            live: '🎧 Gemini Live',
+            cancel: '取消'
+          };
+
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback(labels.transcribe, 'voice_pick:transcribe'),
+        Markup.button.callback(labels.tts, 'voice_pick:tts')
+      ],
+      [Markup.button.callback(labels.live, 'voice_pick:live')],
+      [Markup.button.callback(labels.cancel, 'voice_pick:cancel')]
     ]);
   }
 
@@ -783,7 +830,7 @@ export class TelegramAIBot {
       [menuLabels.persona, { type: 'persona' }],
       [menuLabels.web, { type: 'web_prompt' }],
       [menuLabels.image, { type: 'image_menu' }],
-      [menuLabels.tts, { type: 'tts_prompt' }],
+      [menuLabels.tts, { type: 'voice_menu' }],
       [menuLabels.language, { type: 'language' }]
     ]);
     if (buttonMap.has(content)) {
@@ -2291,6 +2338,51 @@ export class TelegramAIBot {
     }
   }
 
+
+  async runVoiceTranscription(ctx) {
+    const locale = this.getLocale(ctx);
+    const voice = ctx.message?.voice || ctx.message?.audio;
+
+    if (!voice) {
+      await ctx.reply('请直接发送 Telegram 语音消息或音频文件。', this.createVoiceActionKeyboard(locale));
+      return;
+    }
+
+    try {
+      await ctx.sendChatAction('typing');
+
+      const file = await readTelegramFile(
+        ctx,
+        voice.file_id,
+        voice.file_name || 'audio.ogg',
+        voice.mime_type || 'audio/ogg'
+      );
+
+      const result = await this.audioOrchestrator.transcribeIncomingAudio({
+        file,
+        locale,
+        userText: '',
+        prompt: 'Transcribe the user audio accurately. Output only the transcription text.'
+      });
+
+      if (!result.ok) {
+        await ctx.reply(this.formatUserFacingError(result.error || 'voice transcription failed', locale));
+        return;
+      }
+
+      await this.db.incrementStats('voiceTranscriptions');
+
+      const title = locale === 'en' ? '🎙 Transcription:' : '🎙 语音转文字结果：';
+      await sendTextReply(ctx, `${title}\n\n${result.text || this.t(locale, 'noReply')}`, this.config.maxOutputChars, this.createMenuKeyboard(locale));
+    } catch (error) {
+      this.logger.warn('Voice transcription failed', {
+        chatId: ctx.chat?.id,
+        error: this.formatLogError(error)
+      });
+      await ctx.reply(this.formatUserFacingError(error, locale));
+    }
+  }
+
   async runTextToSpeech(ctx, text = extractCommandArgs(ctx.message.text || '')) {
     const locale = this.getLocale(ctx);
     if (!text) {
@@ -2530,6 +2622,42 @@ export class TelegramAIBot {
     );
   }
 
+
+
+  async handleVoiceActionCallback(ctx) {
+    const locale = this.getLocale(ctx);
+    const target = String(ctx.match?.[1] || '').trim();
+
+    await ctx.answerCbQuery();
+
+    if (target === 'cancel') {
+      await this.handleMenu(ctx);
+      return;
+    }
+
+    if (target === 'transcribe') {
+      this.setPendingMenuAction(ctx, 'voice_transcribe_prompt');
+      await ctx.reply('🎙 语音转文字\n\n请直接发送 Telegram 语音消息或音频文件。', this.createMenuKeyboard(locale));
+      return;
+    }
+
+    if (target === 'tts') {
+      this.setPendingMenuAction(ctx, 'voice_tts_prompt');
+      await ctx.reply('🔊 文字转语音\n\n请直接发送要朗读的文字，不需要输入指令。', this.createMenuKeyboard(locale));
+      return;
+    }
+
+    if (target === 'live') {
+      this.setPendingMenuAction(ctx, 'voice_live_prompt');
+      await ctx.reply(
+        '🎧 Gemini Live\n\n这个入口已预留。后续会接 Gemini Live / Native Audio Dialog。\n\n现在可先使用语音转文字和文字转语音。',
+        this.createVoiceActionKeyboard(locale)
+      );
+      return;
+    }
+
+    await ctx.reply('🎤 请选择语音功能：', this.createVoiceActionKeyboard(locale));
+  }
 
   async handleImageActionCallback(ctx) {
     const locale = this.getLocale(ctx);
@@ -2863,7 +2991,7 @@ export class TelegramAIBot {
       persona: { type: 'persona' },
       web: { type: 'web_prompt' },
       image: { type: 'image_menu' },
-      tts: { type: 'tts_prompt' },
+      tts: { type: 'voice_menu' },
       language: { type: 'language' }
     };
 
@@ -2976,6 +3104,11 @@ export class TelegramAIBot {
 
     if (naturalAction.type === 'image_menu') {
       await ctx.reply('🖼️ 请选择图片功能：', this.createImageActionKeyboard(locale));
+      return true;
+    }
+
+    if (naturalAction.type === 'voice_menu') {
+      await ctx.reply('🎤 请选择语音功能：', this.createVoiceActionKeyboard(locale));
       return true;
     }
 
