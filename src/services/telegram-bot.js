@@ -398,6 +398,7 @@ export class TelegramAIBot {
     this.assistantActionStatesByMessage = new Map();
     this.pendingMenuActions = new Map();
     this.aiCooldowns = new Map();
+    this.activeModes = new Map();
     this.bot = new Telegraf(config.botToken);
     this.botUsername = '';
     this.bot.action(/^memory_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleMemoryTargetCallback(ctx)));
@@ -467,8 +468,79 @@ export class TelegramAIBot {
     return state.action;
   }
 
+
+  getActiveModeKey(ctx) {
+    return this.getPendingMenuKey(ctx);
+  }
+
+  setActiveMode(ctx, mode) {
+    this.activeModes.set(this.getActiveModeKey(ctx), {
+      ...mode,
+      createdAt: Date.now()
+    });
+  }
+
+  getActiveMode(ctx) {
+    return this.activeModes.get(this.getActiveModeKey(ctx)) || null;
+  }
+
+  clearActiveMode(ctx) {
+    this.activeModes.delete(this.getActiveModeKey(ctx));
+  }
+
+  createModeKeyboard(locale = 'zh') {
+    return Markup.inlineKeyboard([
+      [Markup.button.callback(locale === 'en' ? '❌ Exit current mode' : '❌ 退出当前模式', 'mode:clear')],
+      [Markup.button.callback(locale === 'en' ? '⬅️ Main menu' : '⬅️ 返回主菜单', 'menu:back')]
+    ]);
+  }
+
+  async handleModeCallback(ctx) {
+    const locale = this.getLocale(ctx);
+    const target = String(ctx.match?.[1] || '').trim();
+
+    await ctx.answerCbQuery();
+
+    if (target === 'clear') {
+      this.clearActiveMode(ctx);
+      await ctx.reply(locale === 'en' ? 'Exited current mode.' : '已退出当前模式。', this.createMenuKeyboard(locale));
+      return;
+    }
+
+    await ctx.reply(locale === 'en' ? 'Current mode menu.' : '当前模式菜单。', this.createModeKeyboard(locale));
+  }
+
+  async handleActiveMode(ctx, mode) {
+    const locale = this.getLocale(ctx);
+    const text = String(ctx.message?.text || ctx.message?.caption || '').trim();
+
+    if (/^(退出|退出模式|结束|结束模式|关闭|关闭模式|stop|exit|cancel)$/i.test(text)) {
+      this.clearActiveMode(ctx);
+      await ctx.reply(locale === 'en' ? 'Exited current mode.' : '已退出当前模式。', this.createMenuKeyboard(locale));
+      return true;
+    }
+
+    if (mode?.type === 'translate') {
+      if (!text) {
+        await ctx.reply(
+          locale === 'en'
+            ? 'Translation mode is on. Send text to translate, or tap exit.'
+            : '翻译模式已开启。请发送要翻译的文字，或点击退出。',
+          this.createModeKeyboard(locale)
+        );
+        return true;
+      }
+
+      await this.runTranslation(ctx, text, mode.targetLanguage || 'auto');
+      return true;
+    }
+
+    return false;
+  }
+
   async handlePendingMenuAction(ctx, pendingAction) {
     const text = String(ctx.message?.text || ctx.message?.caption || '').trim();
+    const locale = this.getLocale(ctx);
     const pending = this.normalizePendingAction(pendingAction);
 
     if (pending.type === 'translate_prompt') {
@@ -991,7 +1063,6 @@ export class TelegramAIBot {
         Markup.button.callback(this.t(locale, 'actionTranslate'), `act:translate:${token}`)
       ],
       [
-        Markup.button.callback(this.t(locale, 'actionFavorite'), `act:favorite:${token}`),
         Markup.button.callback(this.t(locale, 'actionClearContext'), `act:clear:${token}`),
         Markup.button.callback(this.t(locale, 'actionMore'), `act:more:${token}`)
       ]
@@ -2045,6 +2116,7 @@ export class TelegramAIBot {
     this.bot.action(/^admin_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleAdminActionCallback(ctx)));
     this.bot.action(/^toolbox:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleToolboxCallback(ctx)));
     this.bot.action(/^settings_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleSettingsCallback(ctx)));
+    this.bot.action(/^mode:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleModeCallback(ctx)));
     this.bot.action(/^act:/, (ctx) => this.handleAssistantActionCallback(ctx));
   }
 
@@ -2461,6 +2533,37 @@ export class TelegramAIBot {
     await ctx.reply(this.t(locale, 'modelSwitched', { model: arg }), this.createModelKeyboard(arg));
   }
 
+
+  formatPersonaOverview(currentPersona = 'default', locale = 'zh') {
+    const descriptions =
+      locale === 'en'
+        ? {
+            default: 'General assistant: accurate, practical, concise.',
+            coder: 'Coding/debugging: better for code, deployment, errors, logs.',
+            translator: 'Translation: better at preserving tone, format, and meaning.',
+            teacher: 'Teaching: explains step by step.',
+            writer: 'Writing: improves wording, structure, and tone.'
+          }
+        : {
+            default: '通用助手：准确、实用、简洁。',
+            coder: '程序员：更适合代码、部署、报错、日志分析。',
+            translator: '翻译官：更适合保留语气、格式和原意。',
+            teacher: '老师：更适合一步步解释。',
+            writer: '写作助手：更适合润色、改写、整理表达。'
+          };
+
+    const lines =
+      locale === 'en'
+        ? ['🎭 Persona', '', 'Current: ' + currentPersona, '', 'What it changes:', 'It changes the bot system prompt, not the model.', '']
+        : ['🎭 人格', '', '当前：' + currentPersona, '', '它的作用：', '人格会改变 Bot 的系统提示词，不是换模型。', ''];
+
+    for (const name of Object.keys(personaPresets)) {
+      lines.push((name === currentPersona ? '✅ ' : '- ') + name + '：' + (descriptions[name] || ''));
+    }
+
+    return lines.join('\n');
+  }
+
   async handlePersona(ctx) {
     const arg = extractCommandArgs(ctx.message.text || '');
     const user = this.db.findUser(ctx.from.id);
@@ -2468,10 +2571,7 @@ export class TelegramAIBot {
 
     if (!arg) {
       await ctx.reply(
-        this.t(locale, 'currentPersona', {
-          persona: user?.persona || 'default',
-          options: Object.keys(personaPresets).join(', ')
-        }),
+        this.formatPersonaOverview(user?.persona || 'default', locale),
         this.createPersonaKeyboard(user?.persona || 'default')
       );
       return;
@@ -2486,7 +2586,7 @@ export class TelegramAIBot {
     }
 
     await this.db.setUserSettings(ctx.from.id, { persona: arg, customSystemPrompt: '' });
-    await ctx.reply(this.t(locale, 'personaSwitched', { persona: arg }), this.createPersonaKeyboard(arg));
+    await ctx.reply(this.formatPersonaOverview(arg, locale), this.createPersonaKeyboard(arg));
   }
 
   async handleLanguage(ctx) {
@@ -3331,15 +3431,17 @@ export class TelegramAIBot {
     const code = String(ctx.match?.[1] || 'auto');
     const targetLanguage = this.resolveTranslationTargetCode(code);
 
-    this.setPendingMenuAction(ctx, {
-      type: 'translate_prompt',
+    this.setActiveMode(ctx, {
+      type: 'translate',
       targetLanguage
     });
 
     await ctx.answerCbQuery();
     await ctx.reply(
-      `${this.t(locale, 'translationSendPrompt')}\n目标语言：${targetLanguage === 'auto' ? 'auto' : targetLanguage}`,
-      this.createMenuKeyboard(locale)
+      locale === 'en'
+        ? `🌍 Translation mode is on. Target: ${targetLanguage === 'auto' ? 'auto' : targetLanguage}.\n\nEvery text message will be translated until you exit this mode.`
+        : `🌍 翻译模式已开启。目标语言：${targetLanguage === 'auto' ? 'auto' : targetLanguage}\n\n之后你发的每一句文字都会自动翻译，直到退出当前模式。`,
+      this.createModeKeyboard(locale)
     );
   }
 
@@ -4169,6 +4271,12 @@ export class TelegramAIBot {
     const translationRequest = text ? this.parseTranslationRequest(text) : null;
     if (translationRequest) {
       return this.runTranslation(ctx, translationRequest.text, translationRequest.targetLanguage);
+    }
+
+    const activeMode = this.getActiveMode(ctx);
+    if (activeMode) {
+      const handled = await this.handleActiveMode(ctx, activeMode);
+      if (handled) return;
     }
 
     const naturalAction = text ? this.parseNaturalLanguageAction(text, locale) : null;
