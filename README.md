@@ -17,6 +17,10 @@ Zeabur 环境变量模板：
 
     docs/ZEABUR.md
 
+部署前检查清单：
+
+    docs/DEPLOY_CHECKLIST.md
+
 最少需要在 Zeabur 填写：
 
     BOT_TOKEN
