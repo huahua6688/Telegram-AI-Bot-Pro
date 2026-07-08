@@ -633,6 +633,7 @@ export class TelegramAIBot {
         Markup.button.callback(labels.admin, 'menu:admin'),
         Markup.button.callback(labels.toolbox, 'menu:toolbox')
       ],
+      [Markup.button.callback(locale === 'en' ? '⚙️ Settings' : '⚙️ 设置中心', 'menu:settings')],
       [
         Markup.button.callback(labels.reset, 'menu:reset'),
         Markup.button.callback(labels.help, 'menu:help')
@@ -641,6 +642,56 @@ export class TelegramAIBot {
     ]);
   }
 
+
+  createSettingsKeyboard(locale = 'zh') {
+    const labels =
+      locale === 'en'
+        ? {
+            overview: '📊 Current settings',
+            model: '🤖 Model',
+            persona: '🎭 Persona',
+            language: '🌍 Language',
+            memory: '🧠 Memory',
+            clear: '🧹 Clear',
+            toolbox: '🧰 Toolbox',
+            admin: '🛠 Admin',
+            main: '⬅️ Main menu',
+            close: '❌ Close'
+          }
+        : {
+            overview: '📊 当前设置',
+            model: '🤖 模型',
+            persona: '🎭 人格',
+            language: '🌍 语言',
+            memory: '🧠 记忆',
+            clear: '🧹 清空',
+            toolbox: '🧰 工具箱',
+            admin: '🛠 管理',
+            main: '⬅️ 返回主菜单',
+            close: '❌ 关闭'
+          };
+
+    return Markup.inlineKeyboard([
+      [Markup.button.callback(labels.overview, 'settings_pick:overview')],
+      [
+        Markup.button.callback(labels.model, 'settings_pick:model'),
+        Markup.button.callback(labels.persona, 'settings_pick:persona')
+      ],
+      [
+        Markup.button.callback(labels.language, 'settings_pick:language'),
+        Markup.button.callback(labels.memory, 'settings_pick:memory')
+      ],
+      [
+        Markup.button.callback(labels.clear, 'settings_pick:clear'),
+        Markup.button.callback(labels.toolbox, 'settings_pick:toolbox')
+      ],
+      [
+        Markup.button.callback(labels.admin, 'settings_pick:admin'),
+        Markup.button.callback(labels.main, 'menu:back')
+      ],
+      [Markup.button.callback(labels.close, 'menu:close')]
+    ]);
+  }
 
   createToolboxKeyboard(locale = 'zh') {
     const labels =
@@ -687,6 +738,7 @@ export class TelegramAIBot {
         Markup.button.callback(labels.clear, 'toolbox:clear'),
         Markup.button.callback(labels.admin, 'toolbox:admin')
       ],
+      [Markup.button.callback(locale === 'en' ? '⚙️ Settings' : '⚙️ 设置中心', 'settings_pick:overview')],
       [
         Markup.button.callback(labels.main, 'menu:back'),
         Markup.button.callback(labels.close, 'menu:close')
@@ -1992,6 +2044,7 @@ export class TelegramAIBot {
     this.bot.action(/^menu:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleMenuCallback(ctx)));
     this.bot.action(/^admin_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleAdminActionCallback(ctx)));
     this.bot.action(/^toolbox:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleToolboxCallback(ctx)));
+    this.bot.action(/^settings_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleSettingsCallback(ctx)));
     this.bot.action(/^act:/, (ctx) => this.handleAssistantActionCallback(ctx));
   }
 
@@ -3294,6 +3347,101 @@ export class TelegramAIBot {
 
 
 
+  async handleSettingsOverview(ctx) {
+    const user = this.db.findUser(ctx.from?.id);
+    const locale = this.getLocale(ctx, user);
+    const languageName = LANGUAGE_NAMES[locale] || locale;
+    const currentModel = user?.preferredModel || this.config.defaultModel || '-';
+    const persona = user?.persona || 'default';
+    const dailyUsed = user?.dailyUsageCount || 0;
+    const totalMessages = user?.totalMessages || 0;
+    const isAdmin = this.isAdmin(ctx);
+
+    const lines =
+      locale === 'en'
+        ? [
+            '⚙️ Settings center',
+            '',
+            `Model: ${currentModel}`,
+            `Persona: ${persona}`,
+            `Language: ${languageName}`,
+            `Daily usage: ${dailyUsed}/${this.config.dailyQuota}`,
+            `Total messages: ${totalMessages}`,
+            `Admin: ${isAdmin ? 'yes' : 'no'}`,
+            '',
+            'Use the buttons below to change settings quickly.'
+          ]
+        : [
+            '⚙️ 设置中心',
+            '',
+            `模型：${currentModel}`,
+            `人格：${persona}`,
+            `语言：${languageName}`,
+            `今日用量：${dailyUsed}/${this.config.dailyQuota}`,
+            `总消息数：${totalMessages}`,
+            `管理员：${isAdmin ? '是' : '否'}`,
+            '',
+            '用下面按钮快速切换设置。'
+          ];
+
+    await ctx.reply(lines.join('\n'), this.createSettingsKeyboard(locale));
+  }
+
+  async handleSettingsCallback(ctx) {
+    const locale = this.getLocale(ctx);
+    const target = String(ctx.match?.[1] || '').trim();
+
+    await ctx.answerCbQuery();
+
+    if (target === 'overview') {
+      await this.handleSettingsOverview(ctx);
+      return;
+    }
+
+    if (target === 'model') {
+      await this.handleModels(ctx);
+      return;
+    }
+
+    if (target === 'persona') {
+      await this.handlePersona(ctx);
+      return;
+    }
+
+    if (target === 'language') {
+      await this.handleLanguage(ctx);
+      return;
+    }
+
+    if (target === 'memory') {
+      await this.handleMemoryPrompt(ctx);
+      return;
+    }
+
+    if (target === 'clear') {
+      await this.handleClearPrompt(ctx);
+      return;
+    }
+
+    if (target === 'toolbox') {
+      await ctx.reply(locale === 'en' ? '🧰 Toolbox' : '🧰 工具箱', this.createToolboxKeyboard(locale));
+      return;
+    }
+
+    if (target === 'admin') {
+      if (!this.isAdmin(ctx)) {
+        await ctx.reply(this.t(locale, 'adminOnly'));
+        await this.handleWhoami(ctx);
+        return;
+      }
+
+      await ctx.reply(locale === 'en' ? '🛠 Admin panel' : '🛠 管理员面板', this.createAdminActionKeyboard(locale));
+      return;
+    }
+
+    await this.handleSettingsOverview(ctx);
+  }
+
   async handleToolboxCallback(ctx) {
     const locale = this.getLocale(ctx);
     const target = String(ctx.match?.[1] || '').trim();
@@ -3848,6 +3996,7 @@ export class TelegramAIBot {
       language: { type: 'language' },
       admin: { type: 'admin_menu' },
       toolbox: { type: 'toolbox_menu' },
+      settings: { type: 'settings_menu' },
       back: { type: 'main_menu' }
     };
 
@@ -3943,6 +4092,11 @@ export class TelegramAIBot {
       }
 
       await ctx.reply(locale === 'en' ? '🛠 Admin panel' : '🛠 管理员面板', this.createAdminActionKeyboard(locale));
+      return true;
+    }
+
+    if (type === 'settings_menu') {
+      await this.handleSettingsOverview(ctx);
       return true;
     }
 
