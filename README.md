@@ -21,6 +21,10 @@ Zeabur 环境变量模板：
 
     docs/ZEABUR.md
 
+文档索引：
+
+    docs/README.md
+
 部署前检查清单：
 
     docs/DEPLOY_CHECKLIST.md
