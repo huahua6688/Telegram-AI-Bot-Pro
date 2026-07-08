@@ -25,6 +25,10 @@ Zeabur 环境变量模板：
 
     docs/DEPLOY_CHECKLIST.md
 
+故障排查：
+
+    docs/TROUBLESHOOTING.md
+
 最少需要在 Zeabur 填写：
 
     BOT_TOKEN
