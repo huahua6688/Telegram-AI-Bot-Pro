@@ -528,13 +528,31 @@ export class TelegramAIBot {
     };
   }
 
+
   createMenuKeyboard(locale) {
     const labels = this.getMenuLabels(locale);
-    return Markup.keyboard([
-      [labels.chat, labels.translate],
-      [labels.memory, labels.models],
-      [labels.reset, labels.help]
-    ]).resize();
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback(labels.chat, 'menu:chat'),
+        Markup.button.callback(labels.translate, 'menu:translate')
+      ],
+      [
+        Markup.button.callback(labels.memory, 'menu:memory'),
+        Markup.button.callback(labels.models, 'menu:models')
+      ],
+      [
+        Markup.button.callback(labels.reset, 'menu:reset'),
+        Markup.button.callback(labels.help, 'menu:help')
+      ],
+      [
+        Markup.button.callback(labels.web, 'menu:web'),
+        Markup.button.callback(labels.image, 'menu:image')
+      ],
+      [
+        Markup.button.callback(labels.tts, 'menu:tts'),
+        Markup.button.callback(labels.language, 'menu:language')
+      ]
+    ]);
   }
 
   createModelKeyboard(currentModel) {
@@ -1633,6 +1651,7 @@ export class TelegramAIBot {
     this.bot.action(/^set_model:(.+)$/, (ctx) => this.handleModelCallback(ctx));
     this.bot.action(/^set_persona:(.+)$/, (ctx) => this.handlePersonaCallback(ctx));
     this.bot.action(/^set_language:(.+)$/, (ctx) => this.handleLanguageCallback(ctx));
+    this.bot.action(/^menu:(.+)$/, (ctx) => this.handleMenuCallback(ctx));
     this.bot.action(/^act:/, (ctx) => this.handleAssistantActionCallback(ctx));
   }
 
@@ -2743,6 +2762,156 @@ export class TelegramAIBot {
     );
   }
 
+
+  async handleMenuCallback(ctx) {
+    const action = String(ctx.match?.[1] || '').trim();
+    const actionMap = {
+      chat: { type: 'chat_hint' },
+      translate: { type: 'translate_prompt' },
+      memory: { type: 'memory_prompt' },
+      help: { type: 'help' },
+      reset: { type: 'reset' },
+      models: { type: 'models' },
+      persona: { type: 'persona' },
+      web: { type: 'web_prompt' },
+      image: { type: 'image_prompt' },
+      tts: { type: 'tts_prompt' },
+      language: { type: 'language' }
+    };
+
+    await ctx.answerCbQuery();
+
+    const handled = await this.handleMenuAction(ctx, actionMap[action]);
+    if (!handled) {
+      await this.handleMenu(ctx);
+    }
+  }
+
+  async handleMenuAction(ctx, naturalAction, locale = this.getLocale(ctx)) {
+    if (!naturalAction) return false;
+
+    if (naturalAction.type === 'chat_hint') {
+      await ctx.reply(this.t(locale, 'chatHint'), this.createMenuKeyboard(locale));
+      return true;
+    }
+
+    if (naturalAction.type === 'translate_prompt') {
+      await ctx.reply(this.t(locale, 'translationTargetPrompt'), this.createTranslationTargetKeyboard(locale));
+      return true;
+    }
+
+    if (naturalAction.type === 'help') {
+      await this.handleHelp(ctx);
+      return true;
+    }
+
+    if (naturalAction.type === 'reset') {
+      await this.handleClearPrompt(ctx);
+      return true;
+    }
+
+    if (naturalAction.type === 'models') {
+      await this.handleModels(ctx);
+      return true;
+    }
+
+    if (naturalAction.type === 'persona') {
+      const user = this.db.findUser(ctx.from.id);
+      await ctx.reply(
+        this.t(locale, 'currentPersona', {
+          persona: user?.persona || 'default',
+          options: Object.keys(personaPresets).join(', ')
+        }),
+        this.createPersonaKeyboard(user?.persona || 'default')
+      );
+      return true;
+    }
+
+    if (naturalAction.type === 'language') {
+      const user = this.db.findUser(ctx.from.id);
+      await ctx.reply(
+        this.t(locale, 'currentLanguage', { language: LANGUAGE_NAMES[user?.preferredLanguage || locale] || locale }),
+        this.createLanguageKeyboard(user?.preferredLanguage || locale)
+      );
+      return true;
+    }
+
+    if (naturalAction.type === 'memory_prompt') {
+      await this.handleMemoryPrompt(ctx);
+      return true;
+    }
+
+    if (naturalAction.type === 'memory_show') {
+      await this.handleMemoryShow(ctx);
+      return true;
+    }
+
+    if (naturalAction.type === 'topic_show') {
+      await this.handleTopicShow(ctx);
+      return true;
+    }
+
+    if (naturalAction.type === 'topics_show') {
+      await this.handleTopicsShow(ctx);
+      return true;
+    }
+
+    if (naturalAction.type === 'memory_clear') {
+      await this.handleClearPrompt(ctx);
+      return true;
+    }
+
+    if (naturalAction.type === 'topics_clear') {
+      await this.handleTopicsClear(ctx);
+      return true;
+    }
+
+    if (naturalAction.type === 'web_prompt') {
+      this.setPendingMenuAction(ctx, 'web_prompt');
+      await ctx.reply('🌐 联网搜索\n\n请直接发送你要搜索的内容，不需要输入“搜索”两个字。', this.createMenuKeyboard(locale));
+      return true;
+    }
+
+    if (naturalAction.type === 'image_prompt') {
+      this.setPendingMenuAction(ctx, 'image_prompt');
+      await ctx.reply('🖼️ 图片识别\n\n请直接发送图片，不需要输入指令。', this.createMenuKeyboard(locale));
+      return true;
+    }
+
+    if (naturalAction.type === 'tts_prompt') {
+      this.setPendingMenuAction(ctx, 'voice_prompt');
+      await ctx.reply('🎤 语音消息\n\n请直接发送 Telegram 语音消息。\n\n说明：TTS 朗读和 Gemini Live 后面再单独接。', this.createMenuKeyboard(locale));
+      return true;
+    }
+
+    if (naturalAction.type === 'model') {
+      ctx.message = ctx.message || {};
+      ctx.message.text = `/model ${naturalAction.value}`;
+      await this.handleModel(ctx);
+      return true;
+    }
+
+    if (naturalAction.type === 'persona_set') {
+      ctx.message = ctx.message || {};
+      ctx.message.text = `/persona ${naturalAction.value}`;
+      await this.handlePersona(ctx);
+      return true;
+    }
+
+    if (naturalAction.type === 'language_set') {
+      ctx.message = ctx.message || {};
+      ctx.message.text = `/language ${naturalAction.value}`;
+      await this.handleLanguage(ctx);
+      return true;
+    }
+
+    if (await this.pluginManager.runNaturalAction(naturalAction, { bot: this, ctx, locale })) {
+      return true;
+    }
+
+    return false;
+  }
+
   async handleIncomingMessage(ctx) {
     const text = ctx.message.text || '';
     const caption = ctx.message.caption || '';
@@ -2764,55 +2933,7 @@ export class TelegramAIBot {
 
     // 先处理按钮本身，避免“上一个按钮”等待输入时把新按钮当成内容
     if (naturalAction) {
-      if (naturalAction.type === 'chat_hint') return ctx.reply(this.t(locale, 'chatHint'), this.createMenuKeyboard(locale));
-      if (naturalAction.type === 'translate_prompt') {
-        return ctx.reply(this.t(locale, 'translationTargetPrompt'), this.createTranslationTargetKeyboard(locale));
-      }
-      if (naturalAction.type === 'help') return this.handleHelp(ctx);
-      if (naturalAction.type === 'reset') return this.handleClearPrompt(ctx);
-      if (naturalAction.type === 'models') return this.handleModels(ctx);
-      if (naturalAction.type === 'persona') return this.handlePersona(ctx);
-      if (naturalAction.type === 'language') return this.handleLanguage(ctx);
-      if (naturalAction.type === 'memory_prompt') return this.handleMemoryPrompt(ctx);
-      if (naturalAction.type === 'memory_show') return this.handleMemoryShow(ctx);
-      if (naturalAction.type === 'topic_show') return this.handleTopicShow(ctx);
-      if (naturalAction.type === 'topics_show') return this.handleTopicsShow(ctx);
-      if (naturalAction.type === 'memory_clear') return this.handleClearPrompt(ctx);
-      if (naturalAction.type === 'topics_clear') return this.handleTopicsClear(ctx);
-
-      if (naturalAction.type === 'web_prompt') {
-        this.setPendingMenuAction(ctx, 'web_prompt');
-        await ctx.reply('🌐 联网搜索\n\n请直接发送你要搜索的内容，不需要输入“搜索”两个字。');
-        return;
-      }
-
-      if (naturalAction.type === 'image_prompt') {
-        this.setPendingMenuAction(ctx, 'image_prompt');
-        await ctx.reply('🖼️ 图片识别\n\n请直接发送图片，不需要输入指令。');
-        return;
-      }
-
-      if (naturalAction.type === 'tts_prompt') {
-        this.setPendingMenuAction(ctx, 'voice_prompt');
-        await ctx.reply('🎤 语音消息\n\n请直接发送 Telegram 语音消息。\n\n说明：TTS 朗读和 Gemini Live 后面再单独接。');
-        return;
-      }
-
-      if (naturalAction.type === 'model') {
-        ctx.message.text = `/model ${naturalAction.value}`;
-        return this.handleModel(ctx);
-      }
-      if (naturalAction.type === 'persona_set') {
-        ctx.message.text = `/persona ${naturalAction.value}`;
-        return this.handlePersona(ctx);
-      }
-      if (naturalAction.type === 'language_set') {
-        ctx.message.text = `/language ${naturalAction.value}`;
-        return this.handleLanguage(ctx);
-      }
-      if (await this.pluginManager.runNaturalAction(naturalAction, { bot: this, ctx, locale })) {
-        return;
-      }
+      if (await this.handleMenuAction(ctx, naturalAction, locale)) return;
     }
 
     // 只有不是按钮的新消息，才作为上一个按钮的输入

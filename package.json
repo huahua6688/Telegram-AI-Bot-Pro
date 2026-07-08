@@ -8,7 +8,7 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "test": "node --test",
-    "test:quick": "node --test test/config.test.js test/telegram-utils.test.js test/conversation-utils.test.js test/tool-access-policy.test.js test/provider-loader.test.js test/phase-g.smoke.test.js test/ai-fallback-regression.test.js test/runtime-config-validation.test.js",
+    "test:quick": "node --test test/config.test.js test/telegram-utils.test.js test/conversation-utils.test.js test/tool-access-policy.test.js test/provider-loader.test.js test/phase-g.smoke.test.js test/ai-fallback-regression.test.js test/runtime-config-validation.test.js test/menu-inline-regression.test.js",
     "test:smoke": "node --test test/phase-g.smoke.test.js",
     "test:e2e": "node --test test/phase-g.e2e.test.js",
     "test:regression": "node --test test/db.test.js test/access-control-service.test.js test/admin-api-server.test.js test/ai-client-factory.test.js test/provider-loader.test.js test/phase-g.regression.test.js",
