@@ -398,6 +398,7 @@ export class TelegramAIBot {
     this.bot.action(/^memory_pick:(.+)$/, (ctx) => this.handleMemoryTargetCallback(ctx));
     this.bot.action(/^clear_pick:(.+)$/, (ctx) => this.handleClearTargetCallback(ctx));
     this.bot.action(/^translate_pick:(.+)$/, (ctx) => this.handleTranslateTargetCallback(ctx));
+    this.bot.action(/^image_pick:(.+)$/, (ctx) => this.handleImageActionCallback(ctx));
     this.documentParser = new DocumentParser(config, logger);
     this.multimodalActions = new MultimodalActionService({
       aiClient,
@@ -482,12 +483,39 @@ export class TelegramAIBot {
       return this.runWebSearch(ctx, text);
     }
 
-    if (pending.type === 'image_prompt') {
+    if (pending.type === 'image_prompt' || pending.type === 'image_understand_prompt') {
       if (ctx.message?.photo?.length) {
         return this.handleIncomingMessage(ctx);
       }
 
-      await ctx.reply('请直接发送图片给我识别。图片生成还没有接好，所以这个按钮先只做图片识别。');
+      await ctx.reply('请直接发送图片给我识别。', this.createImageActionKeyboard(locale));
+      return true;
+    }
+
+    if (pending.type === 'image_generate_prompt') {
+      const prompt = text;
+      if (!prompt) {
+        await ctx.reply('请直接发送图片描述，例如：一只赛博朋克风格的猫。', this.createImageActionKeyboard(locale));
+        return true;
+      }
+
+      await this.runImageGeneration(ctx, prompt, 'generate');
+      return true;
+    }
+
+    if (pending.type === 'image_edit_prompt') {
+      const prompt = text || ctx.message?.caption || '';
+      if (!ctx.message?.photo?.length) {
+        await ctx.reply('请发送要编辑的图片，并在图片说明里写编辑要求。', this.createImageActionKeyboard(locale));
+        return true;
+      }
+
+      if (!prompt) {
+        await ctx.reply('请在图片说明里写编辑要求，例如：把背景改成夜晚城市。', this.createImageActionKeyboard(locale));
+        return true;
+      }
+
+      await this.runImageEdit(ctx, prompt);
       return true;
     }
 
@@ -618,6 +646,33 @@ export class TelegramAIBot {
     ]);
   }
 
+
+  createImageActionKeyboard(locale = 'zh') {
+    const labels =
+      locale === 'en'
+        ? {
+            understand: '🔍 Understand image',
+            generate: '🎨 Generate image',
+            edit: '🛠 Edit image',
+            cancel: 'Cancel'
+          }
+        : {
+            understand: '🔍 图片识别',
+            generate: '🎨 生成图片',
+            edit: '🛠 编辑图片',
+            cancel: '取消'
+          };
+
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback(labels.understand, 'image_pick:understand'),
+        Markup.button.callback(labels.generate, 'image_pick:generate')
+      ],
+      [Markup.button.callback(labels.edit, 'image_pick:edit')],
+      [Markup.button.callback(labels.cancel, 'image_pick:cancel')]
+    ]);
+  }
+
   resolveTranslationTargetCode(code = '') {
     const normalized = String(code || '').trim().toLowerCase();
 
@@ -727,7 +782,7 @@ export class TelegramAIBot {
       [menuLabels.models, { type: 'models' }],
       [menuLabels.persona, { type: 'persona' }],
       [menuLabels.web, { type: 'web_prompt' }],
-      [menuLabels.image, { type: 'image_prompt' }],
+      [menuLabels.image, { type: 'image_menu' }],
       [menuLabels.tts, { type: 'tts_prompt' }],
       [menuLabels.language, { type: 'language' }]
     ]);
@@ -2475,6 +2530,39 @@ export class TelegramAIBot {
     );
   }
 
+
+  async handleImageActionCallback(ctx) {
+    const locale = this.getLocale(ctx);
+    const target = String(ctx.match?.[1] || '').trim();
+
+    await ctx.answerCbQuery();
+
+    if (target === 'cancel') {
+      await this.handleMenu(ctx);
+      return;
+    }
+
+    if (target === 'understand') {
+      this.setPendingMenuAction(ctx, 'image_understand_prompt');
+      await ctx.reply('🔍 图片识别\n\n请直接发送图片给我。', this.createMenuKeyboard(locale));
+      return;
+    }
+
+    if (target === 'generate') {
+      this.setPendingMenuAction(ctx, 'image_generate_prompt');
+      await ctx.reply('🎨 生成图片\n\n请直接发送图片描述，不需要输入指令。', this.createMenuKeyboard(locale));
+      return;
+    }
+
+    if (target === 'edit') {
+      this.setPendingMenuAction(ctx, 'image_edit_prompt');
+      await ctx.reply('🛠 编辑图片\n\n请发送要编辑的图片，并在图片说明里写编辑要求。', this.createMenuKeyboard(locale));
+      return;
+    }
+
+    await ctx.reply('🖼️ 请选择图片功能：', this.createImageActionKeyboard(locale));
+  }
+
   async handleAssistantActionCallback(ctx) {
     const parts = String(ctx.callbackQuery?.data || '').split(':');
     const action = parts[1] || '';
@@ -2774,7 +2862,7 @@ export class TelegramAIBot {
       models: { type: 'models' },
       persona: { type: 'persona' },
       web: { type: 'web_prompt' },
-      image: { type: 'image_prompt' },
+      image: { type: 'image_menu' },
       tts: { type: 'tts_prompt' },
       language: { type: 'language' }
     };
@@ -2863,6 +2951,31 @@ export class TelegramAIBot {
 
     if (naturalAction.type === 'topics_clear') {
       await this.handleTopicsClear(ctx);
+      return true;
+    }
+
+    if (naturalAction.type === 'web') {
+      await this.runWebSearch(ctx, naturalAction.value);
+      return true;
+    }
+
+    if (naturalAction.type === 'image') {
+      await this.runImageGeneration(ctx, naturalAction.value, 'generate');
+      return true;
+    }
+
+    if (naturalAction.type === 'image_edit') {
+      await this.runImageEdit(ctx, naturalAction.value);
+      return true;
+    }
+
+    if (naturalAction.type === 'tts') {
+      await this.runTextToSpeech(ctx, naturalAction.value);
+      return true;
+    }
+
+    if (naturalAction.type === 'image_menu') {
+      await ctx.reply('🖼️ 请选择图片功能：', this.createImageActionKeyboard(locale));
       return true;
     }
 
