@@ -633,7 +633,8 @@ export class TelegramAIBot {
       [
         Markup.button.callback(labels.reset, 'menu:reset'),
         Markup.button.callback(labels.help, 'menu:help')
-      ]
+      ],
+      [Markup.button.callback(locale === 'en' ? '❌ Close menu' : '❌ 关闭菜单', 'menu:close')]
     ]);
   }
 
@@ -649,6 +650,7 @@ export class TelegramAIBot {
             aiTest: '🧪 AI test',
             configCheck: '🧭 Config check',
             version: 'ℹ️ Version',
+            quickHelp: '⚙️ Quick guide',
             docs: '📚 Deploy docs',
             cancel: 'Cancel'
           }
@@ -660,6 +662,7 @@ export class TelegramAIBot {
             aiTest: '🧪 AI 测试',
             configCheck: '🧭 配置检查',
             version: 'ℹ️ 版本信息',
+            quickHelp: '⚙️ 快捷说明',
             docs: '📚 部署文档',
             cancel: '取消'
           };
@@ -680,6 +683,9 @@ export class TelegramAIBot {
       [
         Markup.button.callback(labels.version, 'admin_pick:version'),
         Markup.button.callback(labels.docs, 'admin_pick:docs')
+      ],
+      [
+        Markup.button.callback(labels.quickHelp, 'admin_pick:quick_help')
       ],
       [Markup.button.callback(labels.cancel, 'admin_pick:cancel')],
       [Markup.button.callback(locale === 'en' ? '⬅️ Main menu' : '⬅️ 返回主菜单', 'menu:back')]
@@ -2800,6 +2806,58 @@ export class TelegramAIBot {
   }
 
 
+  async handleAdminQuickHelp(ctx) {
+    const locale = this.getLocale(ctx);
+
+    if (!this.isAdmin(ctx)) {
+      await ctx.reply(this.t(locale, 'adminOnly'));
+      return;
+    }
+
+    const lines =
+      locale === 'en'
+        ? [
+            '⚙️ Admin quick guide',
+            '',
+            'Common checks:',
+            '- 🧪 AI test: verify provider, model, and API key.',
+            '- 🧭 Config check: inspect env presence without exposing secrets.',
+            '- ℹ️ Version: see runtime, branch, commit, and uptime.',
+            '- 📊 Quota: see usage and AI cooldowns.',
+            '',
+            'Daily operation:',
+            '- Use /start or /menu only to reopen the compact menu.',
+            '- Most features should be used through buttons.',
+            '- If Telegram still shows old slash commands, wait a few minutes or restart Telegram.',
+            '',
+            'Troubleshooting:',
+            '- Bot no response: check Zeabur logs first.',
+            '- AI failed: run 🧪 AI test.',
+            '- Deploy failed: open 📚 Deploy docs.'
+          ]
+        : [
+            '⚙️ 管理员快捷说明',
+            '',
+            '常用检查：',
+            '- 🧪 AI 测试：检查 provider、模型、API Key 是否能用。',
+            '- 🧭 配置检查：只检查环境变量是否存在，不显示密钥。',
+            '- ℹ️ 版本信息：查看运行环境、分支、提交、运行时间。',
+            '- 📊 额度状态：查看使用量和 AI 冷却。',
+            '',
+            '日常使用：',
+            '- 只需要用 /start 或 /menu 打开紧凑菜单。',
+            '- 其他功能尽量走按钮。',
+            '- 如果 Telegram 右侧 / 菜单还旧，等几分钟或重启 Telegram。',
+            '',
+            '排错顺序：',
+            '- Bot 没反应：先看 Zeabur 日志。',
+            '- AI 失败：先点 🧪 AI 测试。',
+            '- 部署失败：点 📚 部署文档。'
+          ];
+
+    await ctx.reply(lines.join('\n'), this.createAdminActionKeyboard(locale));
+  }
+
   async handleAdminConfigCheck(ctx) {
     const locale = this.getLocale(ctx);
 
@@ -3236,6 +3294,11 @@ export class TelegramAIBot {
       return;
     }
 
+    if (target === 'quick_help') {
+      await this.handleAdminQuickHelp(ctx);
+      return;
+    }
+
     if (target === 'docs') {
       const text =
         locale === 'en'
@@ -3668,6 +3731,16 @@ export class TelegramAIBot {
     };
 
     await ctx.answerCbQuery();
+
+    if (target === 'close') {
+      try {
+        await ctx.deleteMessage();
+      } catch {
+        await ctx.reply(locale === 'en' ? 'Menu closed.' : '菜单已关闭。');
+      }
+      return;
+    }
+
 
     const handled = await this.handleMenuAction(ctx, actionMap[action]);
     if (!handled) {
