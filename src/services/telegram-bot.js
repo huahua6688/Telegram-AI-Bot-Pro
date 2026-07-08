@@ -1869,23 +1869,10 @@ export class TelegramAIBot {
     const me = await this.bot.telegram.getMe();
     this.botUsername = me.username || '';
     await this.bot.telegram.setMyCommands([
-      { command: 'start', description: 'Start the bot' },
-      { command: 'menu', description: 'Show main menu' },
-      { command: 'help', description: 'Show help' },
-      { command: 'status', description: 'Admin: show bot status' },
-      { command: 'whoami', description: 'Show your Telegram ID' },
-      { command: 'models', description: 'Show AI models' },
-      { command: 'memory', description: 'Open memory panel' },
-      { command: 'reset', description: 'Clear context or memory' },
-      { command: 'clear', description: 'Clear context or memory' },
-      { command: 'topic', description: 'Show current topic' },
-      { command: 'topics', description: 'Show recent topics' },
-      { command: 'translate', description: 'Translate text' },
-      { command: 'tr', description: 'Translate text' },
-      { command: 'block', description: 'Admin: block user by ID' },
-      { command: 'unblock', description: 'Admin: unblock user by ID' },
-      { command: 'allow', description: 'Admin: allow user by ID' },
-      { command: 'disallow', description: 'Admin: disallow user by ID' }
+      { command: "start", description: "Open button menu" },
+      { command: "menu", description: "Open button menu" },
+      { command: "whoami", description: "Show your Telegram ID" },
+      { command: "status", description: "Admin: show bot status" }
     ]);
   }
 
