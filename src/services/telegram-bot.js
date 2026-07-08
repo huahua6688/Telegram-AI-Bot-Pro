@@ -655,6 +655,80 @@ export class TelegramAIBot {
     return user?.preferredLanguage || normalizeLanguageCode(ctx.from?.language_code, 'zh');
   }
 
+  async handleBottomKeyboardAction(ctx) {
+    const text = String(ctx.message?.text || '').trim();
+    if (!text) return false;
+
+    const locale = this.getLocale(ctx);
+    const normalized = text.replace(/[🧰🌍🌤⚙️🧪❌]/g, '').trim().toLowerCase();
+
+    if (/^(退出模式|退出|结束模式|结束|exit mode|exit|stop|cancel)$/.test(normalized)) {
+      if (typeof this.clearActiveMode === 'function') {
+        this.clearActiveMode(ctx);
+      }
+
+      await ctx.reply(
+        locale === 'en' ? 'Exited current mode. You are back to normal chat.' : '已退出当前模式，回到普通聊天。',
+        this.createBottomKeyboard(locale)
+      );
+      return true;
+    }
+
+    if (/^(工具箱|toolbox)$/.test(normalized)) {
+      await ctx.reply(locale === 'en' ? '🧰 Toolbox' : '🧰 工具箱', this.createToolboxKeyboard(locale));
+      return true;
+    }
+
+    if (/^(翻译|translate)$/.test(normalized)) {
+      await ctx.reply(this.t(locale, 'translationTargetPrompt'), this.createTranslationTargetKeyboard(locale));
+      return true;
+    }
+
+    if (/^(天气|天氣|weather)$/.test(normalized)) {
+      if (typeof this.runWeather !== 'function') {
+        await ctx.reply(
+          locale === 'en'
+            ? 'Weather is not installed yet. Run the free API pack first.'
+            : '天气功能还没安装成功。先跑免费 API 功能包。',
+          this.createBottomKeyboard(locale)
+        );
+        return true;
+      }
+
+      this.setPendingMenuAction(ctx, 'weather_prompt');
+      await ctx.reply(
+        locale === 'en' ? 'Send a city name, for example: Kuala Lumpur.' : '请发送城市名，例如：吉隆坡。',
+        this.createBottomKeyboard(locale)
+      );
+      return true;
+    }
+
+    if (/^(设置|设置中心|settings?|setting)$/.test(normalized)) {
+      if (typeof this.handleSettingsOverview === 'function') {
+        await this.handleSettingsOverview(ctx);
+      } else {
+        await this.handleMenu(ctx);
+      }
+      return true;
+    }
+
+    if (/^(功能状态|功能检查|能力检查|feature status|features?)$/.test(normalized)) {
+      if (typeof this.handleFeatureStatus === 'function') {
+        await this.handleFeatureStatus(ctx);
+      } else {
+        await ctx.reply(
+          locale === 'en'
+            ? 'Feature status is not installed yet.'
+            : '功能状态还没安装成功。',
+          this.createBottomKeyboard(locale)
+        );
+      }
+      return true;
+    }
+
+    return false;
+  }
+
   t(locale, key, params = {}) {
     const dictionary = UI_TEXT[locale] || UI_TEXT.zh;
     return formatText(dictionary[key] || UI_TEXT.zh[key] || key, params);
@@ -681,6 +755,28 @@ export class TelegramAIBot {
 
 
 
+
+  createBottomKeyboard(locale = 'zh') {
+    const rows =
+      locale === 'en'
+        ? [
+            ['🧰 Toolbox', '🌍 Translate', '🌤 Weather'],
+            ['⚙️ Settings', '🧪 Feature status', '❌ Exit mode']
+          ]
+        : [
+            ['🧰 工具箱', '🌍 翻译', '🌤 天气'],
+            ['⚙️ 设置', '🧪 功能状态', '❌ 退出模式']
+          ];
+
+    return {
+      reply_markup: {
+        keyboard: rows,
+        resize_keyboard: true,
+        is_persistent: true,
+        input_field_placeholder: locale === 'en' ? 'Send a message or tap a shortcut…' : '直接输入问题，或点下面快捷键…'
+      }
+    };
+  }
 
   createMenuKeyboard(locale) {
     const labels = this.getMenuLabels(locale);
@@ -2171,6 +2267,14 @@ export class TelegramAIBot {
   async handleStart(ctx) {
     const locale = this.getLocale(ctx);
     const adminLine = this.isAdmin(ctx) ? `\n\n${this.t(locale, 'adminEntry')}` : '';
+
+    await ctx.reply(
+      locale === 'en'
+        ? 'Bottom shortcuts are enabled. You can use them anytime.'
+        : '底部快捷键已开启，以后不用翻旧消息找按钮。',
+      this.createBottomKeyboard(locale)
+    );
+
     await sendTextReply(
       ctx,
       `${this.t(locale, 'start')}${adminLine}`,
@@ -2494,6 +2598,14 @@ export class TelegramAIBot {
 
   async handleMenu(ctx) {
     const locale = this.getLocale(ctx);
+
+    await ctx.reply(
+      locale === 'en'
+        ? 'Bottom shortcuts are enabled.'
+        : '底部快捷键已开启。',
+      this.createBottomKeyboard(locale)
+    );
+
     await ctx.reply(this.t(locale, 'menu'), this.createMenuKeyboard(locale));
   }
 
@@ -2954,65 +3066,83 @@ export class TelegramAIBot {
     const user = this.db.findUser(ctx.from.id);
     const stats = this.db.getStats?.() || {};
     const cooldowns = this.listActiveAiCooldowns();
-
     const models = Array.isArray(this.config.availableModels)
       ? this.config.availableModels.join(', ')
       : String(this.config.defaultModel || '');
 
-    if (locale === 'en') {
-      const lines = [
-        '🤖 Bot status',
-        `Provider: ${this.getProviderName()}`,
-        `Default model: ${this.config.defaultModel}`,
-        `Translation model: ${this.config.translationModel || this.config.defaultModel}`,
-        `Router model: ${this.config.routerModel || this.config.defaultModel}`,
-        `Available models: ${models}`,
-        `AI Router: ${this.config.enableAiRouter ? this.config.aiRouterMode || 'smart' : 'off'}`,
-        `Memory summary: every ${this.config.memorySummaryInterval || 5} turns`,
-        `Today: ${user?.dailyUsageCount || 0}/${this.config.dailyQuota}`,
-        `Total messages: ${user?.totalMessages || 0}`,
-        `Uptime: ${this.formatUptime(process.uptime())}`,
-        '',
-        'AI cooldown:',
-        cooldowns.length
-          ? cooldowns.map((item) => `- ${item.key}: ${item.retrySeconds}s`).join('\n')
-          : '- none',
-        '',
-        'Stats:',
-        `- messagesHandled: ${stats.messagesHandled || 0}`,
-        `- aiCalls: ${stats.aiCalls || 0}`,
-        `- toolCalls: ${stats.toolCalls || 0}`
-      ];
+    const userDaily = user?.dailyUsageCount || 0;
+    const userTotal = user?.totalMessages || 0;
 
-      await ctx.reply(lines.join('\n'), this.createMenuKeyboard(locale));
-      return;
-    }
+    const lines =
+      locale === 'en'
+        ? [
+            '🤖 Bot status',
+            '',
+            'Provider:',
+            `- Provider: ${this.getProviderName()}`,
+            `- Default model: ${this.config.defaultModel || '-'}`,
+            `- Translation model: ${this.config.translationModel || this.config.defaultModel || '-'}`,
+            `- Router model: ${this.config.routerModel || this.config.defaultModel || '-'}`,
+            `- Available models: ${models || '-'}`,
+            '',
+            'Current user quota:',
+            `- Today: ${userDaily}/${this.config.dailyQuota}`,
+            `- User total messages: ${userTotal}`,
+            '',
+            'Global runtime stats:',
+            `- Handled chat messages: ${stats.messagesHandled || 0}`,
+            `- AI API calls: ${stats.aiCalls || 0}`,
+            `- Tool calls: ${stats.toolCalls || 0}`,
+            `- Voice transcriptions: ${stats.voiceTranscriptions || 0}`,
+            `- Image generations: ${stats.imageGenerations || 0}`,
+            `- TTS generations: ${stats.ttsGenerations || 0}`,
+            `- Uptime: ${this.formatUptime(process.uptime())}`,
+            '',
+            'AI cooldown:',
+            cooldowns.length
+              ? cooldowns.map((item) => `- ${item.key}: ${item.retrySeconds}s`).join('\n')
+              : '- none',
+            '',
+            'Note:',
+            '- AI API calls means real requests to the AI provider.',
+            '- It is not the same as your daily quota or message count.',
+            '- Admin AI tests, translations, file summaries, and normal chat may all increase AI API calls.'
+          ]
+        : [
+            '🤖 Bot 状态',
+            '',
+            '模型配置：',
+            `- Provider：${this.getProviderName()}`,
+            `- 默认模型：${this.config.defaultModel || '-'}`,
+            `- 翻译模型：${this.config.translationModel || this.config.defaultModel || '-'}`,
+            `- Router 模型：${this.config.routerModel || this.config.defaultModel || '-'}`,
+            `- 可用模型：${models || '-'}`,
+            '',
+            '当前用户额度：',
+            `- 今日额度：${userDaily}/${this.config.dailyQuota}`,
+            `- 个人累计消息：${userTotal}`,
+            '',
+            '全局运行统计：',
+            `- 已处理聊天消息：${stats.messagesHandled || 0}`,
+            `- AI API 调用次数：${stats.aiCalls || 0}`,
+            `- 工具调用次数：${stats.toolCalls || 0}`,
+            `- 语音转文字次数：${stats.voiceTranscriptions || 0}`,
+            `- 图片生成次数：${stats.imageGenerations || 0}`,
+            `- 文字转语音次数：${stats.ttsGenerations || 0}`,
+            `- 运行时间：${this.formatUptime(process.uptime())}`,
+            '',
+            'AI 冷却：',
+            cooldowns.length
+              ? cooldowns.map((item) => `- ${item.key}：${item.retrySeconds}s`).join('\n')
+              : '- 无',
+            '',
+            '说明：',
+            '- AI API 调用次数 = Bot 真正请求模型接口的次数。',
+            '- 它不等于今日额度，也不等于你的聊天消息条数。',
+            '- 管理员 AI 测试、翻译、文件总结、普通聊天都可能增加这个数字。'
+          ];
 
-    const lines = [
-      '🤖 Bot 状态',
-      `Provider：${this.getProviderName()}`,
-      `默认模型：${this.config.defaultModel}`,
-      `翻译模型：${this.config.translationModel || this.config.defaultModel}`,
-      `Router 模型：${this.config.routerModel || this.config.defaultModel}`,
-      `可用模型：${models}`,
-      `AI Router：${this.config.enableAiRouter ? this.config.aiRouterMode || 'smart' : 'off'}`,
-      `记忆总结：每 ${this.config.memorySummaryInterval || 5} 轮`,
-      `今日用量：${user?.dailyUsageCount || 0}/${this.config.dailyQuota}`,
-      `总消息数：${user?.totalMessages || 0}`,
-      `运行时间：${this.formatUptime(process.uptime())}`,
-      '',
-      'AI 冷却：',
-      cooldowns.length
-        ? cooldowns.map((item) => `- ${item.key}：${item.retrySeconds}s`).join('\n')
-        : '- 无',
-      '',
-      '统计：',
-      `- messagesHandled：${stats.messagesHandled || 0}`,
-      `- aiCalls：${stats.aiCalls || 0}`,
-      `- toolCalls：${stats.toolCalls || 0}`
-    ];
-
-    await ctx.reply(lines.join('\n'), this.createMenuKeyboard(locale));
+    await ctx.reply(lines.join('\n'), this.createAdminActionKeyboard(locale));
   }
 
 
@@ -4267,6 +4397,8 @@ export class TelegramAIBot {
     const user = this.db.findUser(ctx.from.id);
     const chat = this.db.findChat(ctx.chat.id);
     const locale = this.getLocale(ctx, user);
+
+    if (await this.handleBottomKeyboardAction(ctx)) return;
 
     const translationRequest = text ? this.parseTranslationRequest(text) : null;
     if (translationRequest) {
