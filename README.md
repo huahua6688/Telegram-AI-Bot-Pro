@@ -25,6 +25,10 @@ Zeabur 环境变量模板：
 
     docs/README.md
 
+常用命令说明：
+
+    docs/COMMANDS.md
+
 Copilot 交接说明：
 
     docs/COPILOT_HANDOFF.md

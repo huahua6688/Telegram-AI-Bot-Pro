@@ -38,3 +38,9 @@
 
     1. docs/TROUBLESHOOTING.md
     2. docs/DEPLOY_CHECKLIST.md
+
+## 常用命令说明
+
+    docs/COMMANDS.md
+
+解释 npm start、npm run verify、npm run doctor、npm run predeploy、npm run docker:verify 等命令。
