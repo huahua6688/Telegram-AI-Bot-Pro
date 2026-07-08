@@ -2942,22 +2942,22 @@ export class TelegramAIBot {
           ? [
               '📚 Deploy docs',
               '',
-              'docs/ZEABUR.md',
-              'docs/ENVIRONMENT.md',
-              'docs/DEPLOY_CHECKLIST.md',
-              'docs/TROUBLESHOOTING.md',
-              'docs/COMMANDS.md',
-              'SECURITY.md'
+              'https://github.com/huahua6688/Telegram-AI-Bot-Pro/blob/main/docs/ZEABUR.md',
+              'https://github.com/huahua6688/Telegram-AI-Bot-Pro/blob/main/docs/ENVIRONMENT.md',
+              'https://github.com/huahua6688/Telegram-AI-Bot-Pro/blob/main/docs/DEPLOY_CHECKLIST.md',
+              'https://github.com/huahua6688/Telegram-AI-Bot-Pro/blob/main/docs/TROUBLESHOOTING.md',
+              'https://github.com/huahua6688/Telegram-AI-Bot-Pro/blob/main/docs/COMMANDS.md',
+              'https://github.com/huahua6688/Telegram-AI-Bot-Pro/blob/main/SECURITY.md'
             ].join('\n')
           : [
               '📚 部署文档',
               '',
-              'docs/ZEABUR.md',
-              'docs/ENVIRONMENT.md',
-              'docs/DEPLOY_CHECKLIST.md',
-              'docs/TROUBLESHOOTING.md',
-              'docs/COMMANDS.md',
-              'SECURITY.md'
+              'https://github.com/huahua6688/Telegram-AI-Bot-Pro/blob/main/docs/ZEABUR.md',
+              'https://github.com/huahua6688/Telegram-AI-Bot-Pro/blob/main/docs/ENVIRONMENT.md',
+              'https://github.com/huahua6688/Telegram-AI-Bot-Pro/blob/main/docs/DEPLOY_CHECKLIST.md',
+              'https://github.com/huahua6688/Telegram-AI-Bot-Pro/blob/main/docs/TROUBLESHOOTING.md',
+              'https://github.com/huahua6688/Telegram-AI-Bot-Pro/blob/main/docs/COMMANDS.md',
+              'https://github.com/huahua6688/Telegram-AI-Bot-Pro/blob/main/SECURITY.md'
             ].join('\n');
 
       await ctx.reply(text, this.createAdminActionKeyboard(locale));
