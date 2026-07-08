@@ -25,6 +25,10 @@ Zeabur 环境变量模板：
 
     docs/README.md
 
+Copilot 交接说明：
+
+    docs/COPILOT_HANDOFF.md
+
 部署前检查清单：
 
     docs/DEPLOY_CHECKLIST.md
