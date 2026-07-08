@@ -646,6 +646,7 @@ export class TelegramAIBot {
             whoami: '👤 My ID',
             models: '🧠 Models',
             quota: '📊 Quota',
+            aiTest: '🧪 AI test',
             docs: '📚 Deploy docs',
             cancel: 'Cancel'
           }
@@ -654,6 +655,7 @@ export class TelegramAIBot {
             whoami: '👤 我的 ID',
             models: '🧠 模型列表',
             quota: '📊 额度状态',
+            aiTest: '🧪 AI 测试',
             docs: '📚 部署文档',
             cancel: '取消'
           };
@@ -667,6 +669,7 @@ export class TelegramAIBot {
         Markup.button.callback(labels.models, 'admin_pick:models'),
         Markup.button.callback(labels.quota, 'admin_pick:quota')
       ],
+      [Markup.button.callback(labels.aiTest, 'admin_pick:ai_test')],
       [Markup.button.callback(labels.docs, 'admin_pick:docs')],
       [Markup.button.callback(labels.cancel, 'admin_pick:cancel')],
       [Markup.button.callback(locale === 'en' ? '⬅️ Main menu' : '⬅️ 返回主菜单', 'menu:back')]
@@ -2729,6 +2732,92 @@ export class TelegramAIBot {
   }
 
 
+  async handleAdminAiTest(ctx) {
+    const locale = this.getLocale(ctx);
+    const model = this.config.defaultModel;
+
+    if (!this.isAdmin(ctx)) {
+      await ctx.reply(this.t(locale, "adminOnly"));
+      return;
+    }
+
+    try {
+      await ctx.sendChatAction("typing");
+
+      const completion = await this.completeWithAiFallback({
+        scope: "chat",
+        model,
+        locale,
+        request: {
+          messages: [
+            {
+              role: "system",
+              content: "You are a deployment health checker. Reply with a very short OK message."
+            },
+            {
+              role: "user",
+              content: "Reply exactly: AI_OK"
+            }
+          ],
+          tools: [],
+          temperature: 0
+        }
+      });
+
+      await this.db.incrementStats("aiCalls");
+
+      const usedModel = completion.model || model;
+      const text = completion.result?.text || "";
+
+      const lines =
+        locale === "en"
+          ? [
+              "🧪 AI test passed",
+              "",
+              `Provider: ${this.getProviderName()}`,
+              `Model: ${usedModel}`,
+              `Reply: ${text}`
+            ]
+          : [
+              "🧪 AI 测试通过",
+              "",
+              `Provider：${this.getProviderName()}`,
+              `实际模型：${usedModel}`,
+              `模型回复：${text}`
+            ];
+
+      await ctx.reply(lines.join("\n"), this.createAdminActionKeyboard(locale));
+    } catch (error) {
+      if (this.isAiQuotaError(error)) {
+        this.setAiCooldown("chat", model, error);
+      }
+
+      this.logger.warn("Admin AI test failed", {
+        chatId: ctx.chat?.id,
+        error: this.formatLogError(error)
+      });
+
+      const lines =
+        locale === "en"
+          ? [
+              "🧪 AI test failed",
+              "",
+              this.formatUserFacingError(error, locale),
+              "",
+              "Check AI_PROVIDER, GEMINI_API_KEY, AI_MODEL, and fallback models."
+            ]
+          : [
+              "🧪 AI 测试失败",
+              "",
+              this.formatUserFacingError(error, locale),
+              "",
+              "请检查 AI_PROVIDER、GEMINI_API_KEY、AI_MODEL、AI_FALLBACK_MODELS。"
+            ];
+
+      await ctx.reply(lines.join("\n"), this.createAdminActionKeyboard(locale));
+    }
+  }
+
   async handleAdminQuota(ctx) {
     const locale = this.getLocale(ctx);
     const user = this.db.findUser(ctx.from.id);
@@ -2938,6 +3027,11 @@ export class TelegramAIBot {
 
     if (target === 'quota') {
       await this.handleAdminQuota(ctx);
+      return;
+    }
+
+    if (target === 'ai_test') {
+      await this.handleAdminAiTest(ctx);
       return;
     }
 
