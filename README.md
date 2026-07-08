@@ -13,10 +13,6 @@ Zeabur 环境变量模板：
 
     .env.zeabur.example
 
-环境变量说明：
-
-    docs/ENVIRONMENT.md
-
 完整部署说明：
 
     docs/ZEABUR.md
@@ -33,18 +29,6 @@ Zeabur 环境变量模板：
 
     SECURITY.md
 
-Copilot 交接说明：
-
-    docs/COPILOT_HANDOFF.md
-
-部署前检查清单：
-
-    docs/DEPLOY_CHECKLIST.md
-
-故障排查：
-
-    docs/TROUBLESHOOTING.md
-
 最少需要在 Zeabur 填写：
 
     BOT_TOKEN
@@ -56,8 +40,6 @@ Copilot 交接说明：
 不知道自己的 Telegram 用户 ID 时，部署后给机器人发送：
 
     /whoami
-
-然后把显示的 User ID 填到 Zeabur 的 ADMIN_USER_IDS。
 <!-- ZEABUR_DEPLOY_END -->
 
 

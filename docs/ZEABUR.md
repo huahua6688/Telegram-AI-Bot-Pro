@@ -1,71 +1,70 @@
 # Zeabur 部署指南
 
-## 部署前检查
+## 部署方式
 
-每次部署前运行：
+推荐使用项目内置 Dockerfile 部署到 Zeabur。
 
-npm run predeploy
+Zeabur 设置：
 
-它会检查配置、语法、测试、Docker 构建和 Docker 内部 doctor。
+    Build: Dockerfile
+    Port: 8080
 
-## Zeabur 推荐设置
+部署前建议运行：
 
-Build 方式：Dockerfile
-
-端口：
-
-PORT=8080
-HEALTH_PORT=8080
-
-持久化目录建议挂载到：
-
-/data
-
-数据库变量：
-
-DATABASE_FILE=/data/bot-data.db
-DATA_FILE=/data/bot-data.json
+    npm run predeploy
 
 ## 必填环境变量
 
-BOT_TOKEN=你的 BotFather Token
-AI_PROVIDER=gemini
-GEMINI_API_KEY=你的 Gemini API Key
+参考：
 
-AI_MODEL=gemini-2.5-flash
-AI_FALLBACK_MODELS=gemini-2.0-flash,gemini-2.5-flash-lite
-TRANSLATION_MODEL=gemini-2.5-flash-lite
-ROUTER_MODEL=gemini-2.5-flash-lite
+    .env.zeabur.example
 
-ADMIN_USER_IDS=你的 Telegram 用户 ID
+最少需要：
 
-## 怎么查看 Telegram 用户 ID
+    BOT_TOKEN
+    AI_PROVIDER
+    GEMINI_API_KEY
+    AI_MODEL
+    ADMIN_USER_IDS
 
-部署后给机器人发送：
+不知道 Telegram User ID 时，部署后给 Bot 发送：
 
-/whoami
+    /whoami
 
-然后把 User ID 填到 Zeabur 的 ADMIN_USER_IDS。
+然后把 User ID 填到：
+
+    ADMIN_USER_IDS
+
+## 持久化数据
+
+建议 Zeabur 挂载磁盘到：
+
+    /data
+
+并设置：
+
+    DATABASE_FILE=/data/bot-data.db
+    DATA_FILE=/data/bot-data.json
+
+## 健康检查
+
+可访问：
+
+    /
+    /health
+    /ready
+
+推荐使用：
+
+    /ready
 
 ## Admin API
 
-默认关闭：
+普通部署建议关闭：
 
-ADMIN_API_ENABLED=false
+    ADMIN_API_ENABLED=false
 
-普通部署不用开。
+只有做后台管理面板时才开启：
 
-如果以后要做后台管理面板，再设置：
-
-ADMIN_API_ENABLED=true
-ADMIN_API_TOKEN=一串很长的随机密码
-
-## 常见问题
-
-如果 Zeabur BackOff，先看日志有没有：
-
-Invalid runtime configuration
-
-一般是 BOT_TOKEN、GEMINI_API_KEY、AI_MODEL 或 ADMIN_API_TOKEN 缺失。
-
-如果 Gemini 429，说明免费额度限制了。Bot 会自动尝试备用模型并进入冷却。
+    ADMIN_API_ENABLED=true
+    ADMIN_API_TOKEN=一串很长的随机密码
