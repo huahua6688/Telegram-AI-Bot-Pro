@@ -13,6 +13,10 @@ Zeabur 环境变量模板：
 
     .env.zeabur.example
 
+环境变量说明：
+
+    docs/ENVIRONMENT.md
+
 完整部署说明：
 
     docs/ZEABUR.md
