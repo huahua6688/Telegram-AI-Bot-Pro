@@ -1,7 +1,7 @@
 # Telegram-AI-Bot-Pro
 
 <!-- ZEABUR_DEPLOY_START -->
-## 🚀 Zeabur 一键部署入口
+## Zeabur 部署入口
 
 本项目推荐使用 Dockerfile 部署到 Zeabur。
 
@@ -17,7 +17,7 @@ Zeabur 环境变量模板：
 
     docs/ZEABUR.md
 
-最少需要在 Zeabur 填写这些环境变量：
+最少需要在 Zeabur 填写：
 
     BOT_TOKEN
     AI_PROVIDER
