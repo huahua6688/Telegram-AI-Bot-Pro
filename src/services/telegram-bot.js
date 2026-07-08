@@ -398,12 +398,12 @@ export class TelegramAIBot {
     this.aiCooldowns = new Map();
     this.bot = new Telegraf(config.botToken);
     this.botUsername = '';
-    this.bot.action(/^memory_pick:(.+)$/, (ctx) => this.handleMemoryTargetCallback(ctx));
-    this.bot.action(/^clear_pick:(.+)$/, (ctx) => this.handleClearTargetCallback(ctx));
-    this.bot.action(/^translate_pick:(.+)$/, (ctx) => this.handleTranslateTargetCallback(ctx));
-    this.bot.action(/^file_pick:(.+)$/, (ctx) => this.handleFileActionCallback(ctx));
-    this.bot.action(/^voice_pick:(.+)$/, (ctx) => this.handleVoiceActionCallback(ctx));
-    this.bot.action(/^image_pick:(.+)$/, (ctx) => this.handleImageActionCallback(ctx));
+    this.bot.action(/^memory_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleMemoryTargetCallback(ctx)));
+    this.bot.action(/^clear_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleClearTargetCallback(ctx)));
+    this.bot.action(/^translate_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleTranslateTargetCallback(ctx)));
+    this.bot.action(/^file_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleFileActionCallback(ctx)));
+    this.bot.action(/^voice_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleVoiceActionCallback(ctx)));
+    this.bot.action(/^image_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleImageActionCallback(ctx)));
     this.documentParser = new DocumentParser(config, logger);
     this.multimodalActions = new MultimodalActionService({
       aiClient,
@@ -1790,6 +1790,57 @@ export class TelegramAIBot {
     }
   }
 
+  async withCompactCallbackReply(ctx, handler) {
+    const originalReply = ctx.reply.bind(ctx);
+    let editedOnce = false;
+
+    if (ctx.callbackQuery?.message) {
+      ctx.reply = async (text, extra = {}) => {
+        if (!editedOnce) {
+          const editExtra = extra?.reply_markup
+            ? { reply_markup: extra.reply_markup }
+            : { ...extra };
+
+          delete editExtra.reply_parameters;
+          delete editExtra.reply_to_message_id;
+
+          const editableText =
+            splitMessage(cleanBotOutput(String(text || "")), this.config.maxOutputChars)[0] ||
+            this.t(this.getLocale(ctx), "noReply");
+
+          try {
+            await ctx.editMessageText(editableText, editExtra);
+            editedOnce = true;
+            return ctx.callbackQuery.message;
+          } catch (error) {
+            const message = String(error?.description || error?.message || "");
+
+            if (/message is not modified/i.test(message)) {
+              try {
+                await ctx.answerCbQuery();
+              } catch {}
+              editedOnce = true;
+              return ctx.callbackQuery.message;
+            }
+
+            this.logger?.warn?.("Compact callback edit failed, fallback to reply", {
+              chatId: ctx.chat?.id,
+              error: message
+            });
+          }
+        }
+
+        return originalReply(text, extra);
+      };
+    }
+
+    try {
+      return await handler();
+    } finally {
+      ctx.reply = originalReply;
+    }
+  }
+
   async init() {
     this.bot.catch((error, ctx) => {
       this.logger.error('Telegram handler error', { chatId: ctx.chat?.id, error: this.formatLogError(error) });
@@ -1856,11 +1907,11 @@ export class TelegramAIBot {
     this.bot.command('unblock', (ctx) => this.handleBlock(ctx, false));
     this.bot.command('allow', (ctx) => this.handleAllow(ctx, true));
     this.bot.command('disallow', (ctx) => this.handleAllow(ctx, false));
-    this.bot.action(/^set_model:(.+)$/, (ctx) => this.handleModelCallback(ctx));
-    this.bot.action(/^set_persona:(.+)$/, (ctx) => this.handlePersonaCallback(ctx));
-    this.bot.action(/^set_language:(.+)$/, (ctx) => this.handleLanguageCallback(ctx));
-    this.bot.action(/^menu:(.+)$/, (ctx) => this.handleMenuCallback(ctx));
-    this.bot.action(/^admin_pick:(.+)$/, (ctx) => this.handleAdminActionCallback(ctx));
+    this.bot.action(/^set_model:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleModelCallback(ctx)));
+    this.bot.action(/^set_persona:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handlePersonaCallback(ctx)));
+    this.bot.action(/^set_language:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleLanguageCallback(ctx)));
+    this.bot.action(/^menu:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleMenuCallback(ctx)));
+    this.bot.action(/^admin_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleAdminActionCallback(ctx)));
     this.bot.action(/^act:/, (ctx) => this.handleAssistantActionCallback(ctx));
   }
 
