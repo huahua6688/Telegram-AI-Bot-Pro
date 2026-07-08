@@ -647,6 +647,8 @@ export class TelegramAIBot {
             models: '🧠 Models',
             quota: '📊 Quota',
             aiTest: '🧪 AI test',
+            configCheck: '🧭 Config check',
+            version: 'ℹ️ Version',
             docs: '📚 Deploy docs',
             cancel: 'Cancel'
           }
@@ -656,6 +658,8 @@ export class TelegramAIBot {
             models: '🧠 模型列表',
             quota: '📊 额度状态',
             aiTest: '🧪 AI 测试',
+            configCheck: '🧭 配置检查',
+            version: 'ℹ️ 版本信息',
             docs: '📚 部署文档',
             cancel: '取消'
           };
@@ -669,10 +673,36 @@ export class TelegramAIBot {
         Markup.button.callback(labels.models, 'admin_pick:models'),
         Markup.button.callback(labels.quota, 'admin_pick:quota')
       ],
-      [Markup.button.callback(labels.aiTest, 'admin_pick:ai_test')],
-      [Markup.button.callback(labels.docs, 'admin_pick:docs')],
+      [
+        Markup.button.callback(labels.aiTest, 'admin_pick:ai_test'),
+        Markup.button.callback(labels.configCheck, 'admin_pick:config_check')
+      ],
+      [
+        Markup.button.callback(labels.version, 'admin_pick:version'),
+        Markup.button.callback(labels.docs, 'admin_pick:docs')
+      ],
       [Markup.button.callback(labels.cancel, 'admin_pick:cancel')],
       [Markup.button.callback(locale === 'en' ? '⬅️ Main menu' : '⬅️ 返回主菜单', 'menu:back')]
+    ]);
+  }
+
+  createDeployDocsKeyboard(locale = 'zh') {
+    const repo = 'https://github.com/huahua6688/Telegram-AI-Bot-Pro/blob/main';
+
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.url(locale === 'en' ? 'Zeabur' : 'Zeabur 部署', `${repo}/docs/ZEABUR.md`),
+        Markup.button.url(locale === 'en' ? 'Env vars' : '环境变量', `${repo}/docs/ENVIRONMENT.md`)
+      ],
+      [
+        Markup.button.url(locale === 'en' ? 'Checklist' : '部署清单', `${repo}/docs/DEPLOY_CHECKLIST.md`),
+        Markup.button.url(locale === 'en' ? 'Troubleshooting' : '故障排查', `${repo}/docs/TROUBLESHOOTING.md`)
+      ],
+      [
+        Markup.button.url(locale === 'en' ? 'Commands' : '命令说明', `${repo}/docs/COMMANDS.md`),
+        Markup.button.url(locale === 'en' ? 'Security' : '安全说明', `${repo}/SECURITY.md`)
+      ],
+      [Markup.button.callback(locale === 'en' ? '⬅️ Admin panel' : '⬅️ 返回管理', 'admin_pick:back')]
     ]);
   }
 
@@ -2770,6 +2800,124 @@ export class TelegramAIBot {
   }
 
 
+  async handleAdminConfigCheck(ctx) {
+    const locale = this.getLocale(ctx);
+
+    if (!this.isAdmin(ctx)) {
+      await ctx.reply(this.t(locale, 'adminOnly'));
+      return;
+    }
+
+    const provider = this.getProviderName();
+    const hasGeminiKey = Boolean(process.env.GEMINI_API_KEY);
+    const usesGemini = String(provider || this.config.aiProvider || '').toLowerCase().includes('gemini');
+
+    const checks = [
+      ['BOT_TOKEN', Boolean(process.env.BOT_TOKEN || this.config.botToken)],
+      ['AI_PROVIDER', Boolean(provider || this.config.aiProvider)],
+      ['GEMINI_API_KEY', usesGemini ? hasGeminiKey : true],
+      ['AI_MODEL', Boolean(this.config.defaultModel)],
+      ['ADMIN_USER_IDS', Boolean(this.config.adminUserIds?.size)],
+      ['DATABASE_FILE', Boolean(process.env.DATABASE_FILE || this.config.databaseFile)],
+      ['PORT / HEALTH_PORT', Boolean(process.env.PORT || process.env.HEALTH_PORT || this.config.port || this.config.healthPort)]
+    ];
+
+    const mark = (ok) => (ok ? '✅' : '⚠️');
+    const checkLines = checks.map(([name, ok]) => `${mark(ok)} ${name}`);
+
+    const models = Array.isArray(this.config.availableModels)
+      ? this.config.availableModels.join(', ')
+      : String(this.config.defaultModel || '');
+
+    const lines =
+      locale === 'en'
+        ? [
+            '🧭 Config check',
+            '',
+            ...checkLines,
+            '',
+            `Provider: ${provider}`,
+            `Default model: ${this.config.defaultModel || '-'}`,
+            `Translation model: ${this.config.translationModel || this.config.defaultModel || '-'}`,
+            `Router model: ${this.config.routerModel || this.config.defaultModel || '-'}`,
+            `Available models: ${models || '-'}`,
+            '',
+            `AI Router: ${this.config.enableAiRouter ? this.config.aiRouterMode || 'smart' : 'off'}`,
+            `Memory summary interval: ${this.config.memorySummaryInterval || 5}`,
+            `Tool calls: ${this.config.enableToolCalls ? 'on' : 'off'}`,
+            `Live audio: ${this.config.enableLiveAudio ? 'on' : 'off'}`,
+            '',
+            'Secrets are only checked for presence and are not displayed.'
+          ]
+        : [
+            '🧭 配置检查',
+            '',
+            ...checkLines,
+            '',
+            `Provider：${provider}`,
+            `默认模型：${this.config.defaultModel || '-'}`,
+            `翻译模型：${this.config.translationModel || this.config.defaultModel || '-'}`,
+            `Router 模型：${this.config.routerModel || this.config.defaultModel || '-'}`,
+            `可用模型：${models || '-'}`,
+            '',
+            `AI Router：${this.config.enableAiRouter ? this.config.aiRouterMode || 'smart' : 'off'}`,
+            `记忆总结间隔：${this.config.memorySummaryInterval || 5}`,
+            `工具调用：${this.config.enableToolCalls ? '开启' : '关闭'}`,
+            `Live 语音：${this.config.enableLiveAudio ? '开启' : '关闭'}`,
+            '',
+            '密钥只检查是否存在，不会显示具体内容。'
+          ];
+
+    await ctx.reply(lines.join('\n'), this.createAdminActionKeyboard(locale));
+  }
+
+  async handleAdminVersion(ctx) {
+    const locale = this.getLocale(ctx);
+
+    if (!this.isAdmin(ctx)) {
+      await ctx.reply(this.t(locale, 'adminOnly'));
+      return;
+    }
+
+    const commit =
+      process.env.ZEABUR_GIT_COMMIT_SHA ||
+      process.env.GIT_COMMIT_SHA ||
+      process.env.COMMIT_SHA ||
+      process.env.SOURCE_COMMIT ||
+      'unknown';
+
+    const branch =
+      process.env.ZEABUR_GIT_BRANCH ||
+      process.env.GIT_BRANCH ||
+      process.env.BRANCH ||
+      'main';
+
+    const lines =
+      locale === 'en'
+        ? [
+            'ℹ️ Version info',
+            '',
+            `Node: ${process.version}`,
+            `Branch: ${branch}`,
+            `Commit: ${String(commit).slice(0, 12)}`,
+            `Uptime: ${this.formatUptime(process.uptime())}`,
+            `Provider: ${this.getProviderName()}`,
+            `Model: ${this.config.defaultModel || '-'}`
+          ]
+        : [
+            'ℹ️ 版本信息',
+            '',
+            `Node：${process.version}`,
+            `分支：${branch}`,
+            `提交：${String(commit).slice(0, 12)}`,
+            `运行时间：${this.formatUptime(process.uptime())}`,
+            `Provider：${this.getProviderName()}`,
+            `模型：${this.config.defaultModel || '-'}`
+          ];
+
+    await ctx.reply(lines.join('\n'), this.createAdminActionKeyboard(locale));
+  }
+
   async handleAdminAiTest(ctx) {
     const locale = this.getLocale(ctx);
     const model = this.config.defaultModel;
@@ -3073,31 +3221,28 @@ export class TelegramAIBot {
       return;
     }
 
+    if (target === 'back') {
+      await ctx.reply('🛠 管理员面板', this.createAdminActionKeyboard(locale));
+      return;
+    }
+
+    if (target === 'config_check') {
+      await this.handleAdminConfigCheck(ctx);
+      return;
+    }
+
+    if (target === 'version') {
+      await this.handleAdminVersion(ctx);
+      return;
+    }
+
     if (target === 'docs') {
       const text =
         locale === 'en'
-          ? [
-              '📚 Deploy docs',
-              '',
-              'https://github.com/huahua6688/Telegram-AI-Bot-Pro/blob/main/docs/ZEABUR.md',
-              'https://github.com/huahua6688/Telegram-AI-Bot-Pro/blob/main/docs/ENVIRONMENT.md',
-              'https://github.com/huahua6688/Telegram-AI-Bot-Pro/blob/main/docs/DEPLOY_CHECKLIST.md',
-              'https://github.com/huahua6688/Telegram-AI-Bot-Pro/blob/main/docs/TROUBLESHOOTING.md',
-              'https://github.com/huahua6688/Telegram-AI-Bot-Pro/blob/main/docs/COMMANDS.md',
-              'https://github.com/huahua6688/Telegram-AI-Bot-Pro/blob/main/SECURITY.md'
-            ].join('\n')
-          : [
-              '📚 部署文档',
-              '',
-              'https://github.com/huahua6688/Telegram-AI-Bot-Pro/blob/main/docs/ZEABUR.md',
-              'https://github.com/huahua6688/Telegram-AI-Bot-Pro/blob/main/docs/ENVIRONMENT.md',
-              'https://github.com/huahua6688/Telegram-AI-Bot-Pro/blob/main/docs/DEPLOY_CHECKLIST.md',
-              'https://github.com/huahua6688/Telegram-AI-Bot-Pro/blob/main/docs/TROUBLESHOOTING.md',
-              'https://github.com/huahua6688/Telegram-AI-Bot-Pro/blob/main/docs/COMMANDS.md',
-              'https://github.com/huahua6688/Telegram-AI-Bot-Pro/blob/main/SECURITY.md'
-            ].join('\n');
+          ? '📚 Deploy docs\n\nTap a button below to open the document.'
+          : '📚 部署文档\n\n点击下面按钮打开对应文档。';
 
-      await ctx.reply(text, this.createAdminActionKeyboard(locale));
+      await ctx.reply(text, this.createDeployDocsKeyboard(locale));
       return;
     }
 
