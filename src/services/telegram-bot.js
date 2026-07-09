@@ -2285,14 +2285,12 @@ export class TelegramAIBot {
             'You can type naturally. No commands are required.',
             '',
             'I can help with:',
-            '- normal chat and project troubleshooting',
-            '- translation and rewrite',
+            '- chat, project troubleshooting, translation',
             '- current news and web search',
             '- URL reading and summaries',
-            '- weather',
-            '- image, voice, and file handling when supported',
+            '- weather, images, voice, files when enabled',
             '',
-            'Use the bottom buttons only when you need Help, Settings, Admin, or Exit mode.'
+            'Use bottom buttons only for Help, Settings, Admin, or Exit mode.'
           ].join('\n')
         : [
             '你好，我已经准备好了。',

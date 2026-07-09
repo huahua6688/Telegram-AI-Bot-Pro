@@ -3,6 +3,25 @@ import { splitMessage, truncateText } from '../utils/text.js';
 const TARGET_LANGUAGE_PATTERN =
   '(韩语|韓語|韩国语|韓國語|korean|日语|日語|japanese|英语|英文|english|中文|chinese|高棉语|高棉語|柬埔寨语|柬埔寨語|khmer|粤语|粵語|cantonese|泰语|泰語|thai|马来语|馬來語|malay|越南语|越南語|vietnamese|法语|法語|french|西班牙语|西班牙語|spanish)';
 
+function createSessionId(ctx) {
+  const chatId = String(ctx.chat?.id || '');
+  const userId = String(ctx.from?.id || 'anonymous');
+  const threadId = ctx.message?.message_thread_id ? String(ctx.message.message_thread_id) : 'main';
+  return `${chatId}:${userId}:${threadId}`;
+}
+
+function escapeHtml(value = '') {
+  return String(value || '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;');
+}
+
+function escapeAttr(value = '') {
+  return escapeHtml(value).replaceAll("'", '&#39;');
+}
+
 function cleanPlainText(text = '') {
   return String(text || '')
     .replace(/```[\s\S]*?```/g, (block) =>
@@ -19,8 +38,21 @@ function cleanPlainText(text = '') {
     .trim();
 }
 
-async function replyLong(ctx, text, maxLength = 3800, extra = undefined) {
+async function replyHtml(ctx, text, maxLength = 3600, extra = undefined) {
+  const chunks = splitMessage(String(text || '').trim(), maxLength);
+
+  for (const chunk of chunks) {
+    await ctx.reply(chunk, {
+      ...(extra || {}),
+      parse_mode: 'HTML',
+      link_preview_options: { is_disabled: true }
+    });
+  }
+}
+
+async function replyPlain(ctx, text, maxLength = 3800, extra = undefined) {
   const chunks = splitMessage(cleanPlainText(text), maxLength);
+
   for (const chunk of chunks) {
     await ctx.reply(chunk, extra);
   }
@@ -28,12 +60,14 @@ async function replyLong(ctx, text, maxLength = 3800, extra = undefined) {
 
 function extractJson(text = '') {
   const raw = String(text || '').trim();
+
   try {
     return JSON.parse(raw);
   } catch {
     const start = raw.indexOf('{');
     const end = raw.lastIndexOf('}');
     if (start < 0 || end <= start) return null;
+
     try {
       return JSON.parse(raw.slice(start, end + 1));
     } catch {
@@ -42,9 +76,39 @@ function extractJson(text = '') {
   }
 }
 
+function getRecentContext(bot, ctx) {
+  try {
+    const sessionId = createSessionId(ctx);
+    const stored = bot.db.getConversationForContext?.(sessionId, {
+      maxMessages: 8,
+      strategy: 'recent'
+    });
+
+    const messages = Array.isArray(stored)
+      ? stored
+      : Array.isArray(stored?.messages)
+        ? stored.messages
+        : [];
+
+    return messages
+      .filter((item) => item?.role === 'user' || item?.role === 'assistant')
+      .slice(-8)
+      .map((item) => {
+        const role = item.role === 'assistant' ? 'assistant' : 'user';
+        const content = truncateText(String(item.content || item.text || ''), 500);
+        return `${role}: ${content}`;
+      })
+      .filter((line) => line.trim().length > 8)
+      .join('\n');
+  } catch {
+    return '';
+  }
+}
+
 function hasUsefulToolResult(raw = '') {
   try {
     const data = JSON.parse(String(raw || '').trim());
+
     if (!data || data.error) return false;
     if (data.current || data.location) return true;
     if (Array.isArray(data.forecast) && data.forecast.length > 0) return true;
@@ -53,10 +117,70 @@ function hasUsefulToolResult(raw = '') {
     if (String(data.heading || '').trim()) return true;
     if (String(data.abstract || '').trim()) return true;
     if (String(data.answer || '').trim()) return true;
+
     return false;
   } catch {
     return String(raw || '').trim().length > 0;
   }
+}
+
+function normalizeUrl(url = '') {
+  const raw = String(url || '').trim();
+  if (!/^https?:\/\//i.test(raw)) return '';
+
+  try {
+    const u = new URL(raw);
+
+    if (u.hostname.includes('news.google.com') && u.searchParams.get('url')) {
+      return u.searchParams.get('url') || raw;
+    }
+
+    return raw;
+  } catch {
+    return raw;
+  }
+}
+
+function extractReferenceLinks(raw = '') {
+  const links = [];
+
+  function add(title, url) {
+    const cleanUrl = normalizeUrl(url);
+    const cleanTitle = cleanPlainText(title || '');
+
+    if (!cleanUrl) return;
+    if (links.some((item) => item.url === cleanUrl)) return;
+
+    let label = cleanTitle || cleanUrl.replace(/^https?:\/\//, '').split('/')[0] || '来源';
+    label = truncateText(label.replace(/\s+/g, ' ').trim(), 80);
+
+    links.push({ title: label, url: cleanUrl });
+  }
+
+  try {
+    const data = JSON.parse(String(raw || '').trim());
+
+    const results = Array.isArray(data.results)
+      ? data.results
+      : Array.isArray(data.topics)
+        ? data.topics
+        : [];
+
+    for (const item of results) {
+      add(item.title || item.Text || item.name, item.url || item.FirstURL || item.link);
+      if (links.length >= 3) break;
+    }
+
+    if (data.url) add(data.heading || data.title || '网页来源', data.url);
+  } catch {
+    const urls = String(raw || '').match(/https?:\/\/[^\s)）]+/g) || [];
+    for (const url of urls) {
+      add('', url);
+      if (links.length >= 3) break;
+    }
+  }
+
+  return links.slice(0, 3);
 }
 
 function compactToolPayload(raw = '') {
@@ -65,6 +189,7 @@ function compactToolPayload(raw = '') {
 
   try {
     const data = JSON.parse(text);
+
     const results = Array.isArray(data.results)
       ? data.results
       : Array.isArray(data.topics)
@@ -82,7 +207,7 @@ function compactToolPayload(raw = '') {
         results: results.slice(0, 8).map((item) => ({
           title: item.title || item.Text || '',
           description: item.description || item.Text || '',
-          url: item.url || item.FirstURL || ''
+          url: item.url || item.FirstURL || item.link || ''
         }))
       },
       null,
@@ -91,6 +216,19 @@ function compactToolPayload(raw = '') {
   } catch {
     return truncateText(text, 6000);
   }
+}
+
+function appendClickableReferences(answer = '', raw = '') {
+  const links = extractReferenceLinks(raw);
+  const body = escapeHtml(cleanPlainText(answer));
+
+  if (!links.length) return body;
+
+  const refLines = links.map((item, index) => {
+    return `${index + 1}. <a href="${escapeAttr(item.url)}">${escapeHtml(item.title)}</a>`;
+  });
+
+  return `${body}\n\n参考链接：\n${refLines.join('\n')}`;
 }
 
 function rawFallbackText(raw = '', title = '结果') {
@@ -116,7 +254,8 @@ function rawFallbackText(raw = '', title = '结果') {
         '',
         '当前：',
         `天气：${data.current.weather ?? '-'}`,
-        `温度：${data.current.temperatureC ?? '-'}°C`
+        `温度：${data.current.temperatureC ?? '-'}°C`,
+        `湿度：${data.current.humidityPercent ?? '-'}%`
       );
     }
 
@@ -132,12 +271,6 @@ function rawFallbackText(raw = '', title = '结果') {
         const itemTitle = item.title || item.Text || '-';
         const desc = item.description || item.Text || '';
         lines.push(`- ${itemTitle}${desc && desc !== itemTitle ? `：${desc}` : ''}`);
-      }
-
-      const links = results.map((item) => item.url || item.FirstURL || '').filter(Boolean).slice(0, 3);
-      if (links.length) {
-        lines.push('', '参考链接：');
-        links.forEach((link, index) => lines.push(`${index + 1}. ${link}`));
       }
     }
 
@@ -172,9 +305,7 @@ async function fetchNewsFallback(query = '今日新闻') {
     '&hl=zh-CN&gl=MY&ceid=MY:zh-Hans';
 
   const response = await fetch(url, {
-    headers: {
-      'User-Agent': 'Telegram-AI-Bot-Pro'
-    }
+    headers: { 'User-Agent': 'Telegram-AI-Bot-Pro' }
   });
 
   if (!response.ok) return '';
@@ -226,6 +357,7 @@ async function composeHumanAnswer(bot, ctx, { userText, toolName, raw, title }) 
   const locale = bot.getLocale(ctx);
   const model = bot.config.routerModel || bot.config.translationModel || bot.config.defaultModel;
   const payload = compactToolPayload(raw);
+  const recentContext = getRecentContext(bot, ctx);
 
   if (!payload) {
     return locale === 'en' ? 'No useful result was found.' : '没有拿到有效结果。';
@@ -242,22 +374,25 @@ async function composeHumanAnswer(bot, ctx, { userText, toolName, raw, title }) 
             role: 'system',
             content: [
               'You are the final answer composer for a Telegram AI bot.',
-              'Answer in the same language as the user, usually Simplified Chinese.',
+              'Behave like ChatGPT: infer missing details from context, answer naturally, and do not expose internal tool output.',
+              'Always answer in the same language as the user. For Chinese users, use Simplified Chinese.',
               'Do not dump JSON.',
               'Do not dump raw original titles and links as the main answer.',
-              'First give a clear synthesized answer.',
-              'For news/search: summarize the key points in 3-6 concise points.',
-              'For URL pages: summarize what the page is about and what matters.',
+              'Do not say “according to the search results” too mechanically.',
+              'Give a useful synthesized answer first.',
+              'For news/search: summarize the key points, explain what matters, and avoid copying original titles verbatim.',
+              'For URL pages: explain what the page is about and what the user should know.',
               'For weather: answer directly with practical advice.',
-              'At the end, if source URLs exist, add 参考链接 with at most 3 links.',
-              'Keep the tone like a helpful ChatGPT assistant.'
+              'Do not include raw URLs in the answer body. References will be appended separately as clickable links.',
+              'Keep the reply concise but complete.'
             ].join('\n')
           },
           {
             role: 'user',
             content: [
-              `User message: ${userText}`,
-              `Tool: ${toolName}`,
+              recentContext ? `Recent conversation context:\n${recentContext}\n` : '',
+              `Current user message: ${userText}`,
+              `Tool used: ${toolName}`,
               `Display title: ${title}`,
               '',
               'Tool result:',
@@ -266,7 +401,7 @@ async function composeHumanAnswer(bot, ctx, { userText, toolName, raw, title }) 
           }
         ],
         tools: [],
-        temperature: 0.2
+        temperature: 0.25
       }
     });
 
@@ -322,7 +457,7 @@ async function runSearch(bot, ctx, query, originalText = query) {
       title: '联网搜索结果'
     });
 
-    await replyLong(ctx, answer, bot.config.maxOutputChars);
+    await replyHtml(ctx, appendClickableReferences(answer, raw), bot.config.maxOutputChars);
     return true;
   } catch (error) {
     await ctx.reply(bot.formatUserFacingError(error, locale));
@@ -358,7 +493,7 @@ async function runUrl(bot, ctx, url, originalText = url) {
       title: '网页摘要'
     });
 
-    await replyLong(ctx, answer, bot.config.maxOutputChars);
+    await replyHtml(ctx, appendClickableReferences(answer, raw || JSON.stringify({ results: [{ title: '打开网页', url: targetUrl }] })), bot.config.maxOutputChars);
     return true;
   } catch {
     await ctx.reply(locale === 'en' ? 'This page cannot be fetched right now.' : '这个网页暂时抓不到，可能是网站禁止机器人访问。');
@@ -383,7 +518,7 @@ async function runWeather(bot, ctx, location, originalText = location) {
       title: '天气'
     });
 
-    await replyLong(ctx, answer, bot.config.maxOutputChars);
+    await replyHtml(ctx, appendClickableReferences(answer, raw), bot.config.maxOutputChars);
     return true;
   } catch {
     if (typeof bot.runWeather === 'function') {
@@ -399,18 +534,23 @@ async function runWeather(bot, ctx, location, originalText = location) {
 async function classifyNaturally(bot, ctx, text) {
   const locale = bot.getLocale(ctx);
   const model = bot.config.routerModel || bot.config.translationModel || bot.config.defaultModel;
+  const recentContext = getRecentContext(bot, ctx);
 
   const prompt = [
     'You are the hidden intent router for a Telegram AI bot.',
     'The user must not need commands.',
-    'Decide what the bot should do from natural language.',
+    'Use recent context to understand follow-up messages like “继续”, “这个”, “它”, “刚才那个”.',
     'Return JSON only. No Markdown. No explanation.',
+    '',
     'Actions: chat, translate, web_search, fetch_url, weather, help.',
+    '',
     'Use web_search for latest/current/news/search/prices/exchange rates/recent events/current facts.',
     'Use weather for weather/hot/rain/temperature questions for a place.',
     'Use fetch_url if the user includes a URL.',
     'Use translate when the user asks to translate or rewrite into another language.',
+    'If the user asks a follow-up about previous answer, use chat unless fresh information is needed.',
     'If unsure, use chat.',
+    '',
     'JSON schema: {"action":"chat|translate|web_search|fetch_url|weather|help","text":"","query":"","url":"","location":"","targetLanguage":"","confidence":0.0}'
   ].join('\n');
 
@@ -422,7 +562,13 @@ async function classifyNaturally(bot, ctx, text) {
       request: {
         messages: [
           { role: 'system', content: prompt },
-          { role: 'user', content: text }
+          {
+            role: 'user',
+            content: [
+              recentContext ? `Recent context:\n${recentContext}\n` : '',
+              `Current message: ${text}`
+            ].join('\n')
+          }
         ],
         tools: [],
         temperature: 0
@@ -454,7 +600,6 @@ export async function tryHandleNaturalAgent(bot, ctx) {
   const text = String(ctx.message?.text || '').trim();
 
   if (!text) return false;
-
   if (typeof bot.getActiveMode === 'function' && bot.getActiveMode(ctx)) return false;
 
   const locale = bot.getLocale(ctx);
@@ -528,7 +673,10 @@ export async function tryHandleNaturalAgent(bot, ctx) {
 
 export const naturalAgentInternals = {
   cleanPlainText,
+  getRecentContext,
   hasUsefulToolResult,
+  extractReferenceLinks,
+  appendClickableReferences,
   rawFallbackText,
   composeHumanAnswer,
   fetchNewsFallback,
