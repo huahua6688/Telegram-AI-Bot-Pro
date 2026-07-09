@@ -3,9 +3,35 @@ export function normalizeCommand(text = '') {
 }
 
 export function normalizeLanguageCode(value = '', fallback = 'zh') {
-  const normalized = String(value || '').trim().toLowerCase();
-  if (normalized.startsWith('zh')) return 'zh';
-  if (normalized.startsWith('en')) return 'en';
+  const raw = String(value || '').trim().toLowerCase().replaceAll('_', '-');
+  if (!raw) return fallback;
+  if (raw === 'auto') return 'auto';
+
+  if (
+    raw.startsWith('zh-hant') ||
+    raw.startsWith('zh-tw') ||
+    raw.startsWith('zh-hk') ||
+    raw.startsWith('zh-mo')
+  ) {
+    return 'zh-hant';
+  }
+
+  if (raw.startsWith('zh')) return 'zh';
+  if (raw.startsWith('en')) return 'en';
+
+  // Accept normal Telegram-style language codes:
+  // km, ms, ko-KR, ja-JP, pt-BR, es-419
+  // Reject broken values like bad_language_code.
+  if (!/^[a-z]{2,3}(?:-[a-z0-9]{2,4})?$/.test(raw)) {
+    return fallback;
+  }
+
+  const base = raw.split('-')[0];
+
+  if (/^[a-z]{2,3}$/.test(base)) {
+    return base;
+  }
+
   return fallback;
 }
 

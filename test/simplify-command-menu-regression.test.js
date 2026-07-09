@@ -4,20 +4,89 @@ import fs from "node:fs";
 
 const source = fs.readFileSync("src/services/telegram-bot.js", "utf8");
 
-function getTelegramCommandMenuCommands() {
-  const match = source.match(/await this\.bot\.telegram\.setMyCommands\(\[([\s\S]*?)\]\);/);
-  assert.ok(match, "missing setMyCommands block");
+function extractMethod(signature) {
+  const start = source.indexOf(signature);
+  assert.ok(start >= 0, `missing ${signature}`);
 
-  return Array.from(match[1].matchAll(/command:\s*["']([^"']+)["']/g)).map((item) => item[1]);
+  const open = source.indexOf("{", start);
+  assert.ok(open >= 0, `missing method body for ${signature}`);
+
+  let depth = 0;
+  let quote = null;
+  let escape = false;
+
+  for (let i = open; i < source.length; i += 1) {
+    const ch = source[i];
+
+    if (quote) {
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escape = true;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      continue;
+    }
+
+    if (ch === "'" || ch === '"' || ch === "`") {
+      quote = ch;
+      continue;
+    }
+
+    if (ch === "{") depth += 1;
+
+    if (ch === "}") {
+      depth -= 1;
+      if (depth === 0) return source.slice(start, i + 1);
+    }
+  }
+
+  throw new Error(`unterminated method ${signature}`);
 }
 
-test("Telegram slash command menu only shows button-first essentials", () => {
-  const commands = getTelegramCommandMenuCommands();
-  assert.deepEqual(commands, ["start", "menu", "whoami", "status"]);
+test("Telegram slash command menu is registered through localized command helper", () => {
+  const init = extractMethod("async init()");
+  const localized = extractMethod("async setLocalizedBotCommands()");
+
+  assert.ok(
+    init.includes("await this.setLocalizedBotCommands();"),
+    "init should call setLocalizedBotCommands"
+  );
+
+  assert.ok(
+    localized.includes("setMyCommands"),
+    "localized command helper should call setMyCommands"
+  );
+
+  assert.ok(
+    localized.includes("language_code"),
+    "localized command helper should register language-specific commands"
+  );
 });
 
-test("hidden slash commands are still registered as fallback handlers", () => {
-  for (const command of ["translate", "tr", "block", "unblock", "allow", "disallow"]) {
-    assert.match(source, new RegExp(`this\\.bot\\.command\\(["']${command}["']`));
-  }
+test("Telegram slash command menu only exposes button-first essentials", () => {
+  const localized = extractMethod("async setLocalizedBotCommands()");
+
+  assert.match(localized, /command:\s*['"]start['"]/);
+  assert.match(localized, /command:\s*['"]menu['"]/);
+  assert.match(localized, /command:\s*['"]whoami['"]/);
+  assert.match(localized, /command:\s*['"]status['"]/);
+
+  assert.doesNotMatch(localized, /command:\s*['"]models['"]/);
+  assert.doesNotMatch(localized, /command:\s*['"]memory['"]/);
+  assert.doesNotMatch(localized, /command:\s*['"]translate['"]/);
+  assert.doesNotMatch(localized, /command:\s*['"]tr['"]/);
+  assert.doesNotMatch(localized, /command:\s*['"]reset['"]/);
+  assert.doesNotMatch(localized, /command:\s*['"]clear['"]/);
+});
+
+test("internal command handlers can still exist without showing in slash menu", () => {
+  const register = extractMethod("registerCommands()");
+
+  assert.match(register, /this\.bot\.command\('models'/);
+  assert.match(register, /this\.bot\.command\('translate'/);
+  assert.match(register, /this\.bot\.command\('help'/);
 });

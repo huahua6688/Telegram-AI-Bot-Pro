@@ -1,4 +1,5 @@
 import { splitMessage, truncateText } from '../utils/text.js';
+import { personaPresets } from '../config.js';
 
 const TARGET_LANGUAGE_PATTERN =
   '(韩语|韓語|韩国语|韓國語|korean|日语|日語|japanese|英语|英文|english|中文|chinese|高棉语|高棉語|柬埔寨语|柬埔寨語|khmer|粤语|粵語|cantonese|泰语|泰語|thai|马来语|馬來語|malay|越南语|越南語|vietnamese|法语|法語|french|西班牙语|西班牙語|spanish)';
@@ -33,7 +34,7 @@ function cleanPlainText(text = '') {
     .replace(/^\s{0,3}#{1,6}\s+/gm, '')
     .replace(/^\s*[\*•]\s+/gm, '- ')
     .replace(/^\s*>\s?/gm, '')
-    .replace(/$begin:math:display$\(\.\*\?\)$end:math:display$$begin:math:text$\(https\?\:\\\/\\\/\[\^\)\]\+\)$end:math:text$/g, '$1 $2')
+    .replace(/\[(.*?)\]\((https?:\/\/[^)]+)\)/g, '$1 $2')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
@@ -115,7 +116,7 @@ function stripGeneratedReferences(answer = '') {
 function stripBareUrls(text = '') {
   return String(text || '')
     .replace(/https?:\/\/[^\s<>)）]+/g, '')
-    .replace(/$begin:math:text$\\s\*$end:math:text$/g, '')
+    .replace(/\$begin:math:text$\\s\*\$end:math:text$/g, '')
     .replace(/（\s*）/g, '')
     .replace(/[ \t]+\n/g, '\n')
     .replace(/\n{3,}/g, '\n\n')
@@ -400,6 +401,20 @@ async function executeTool(bot, ctx, name, args, source = 'natural_agent') {
 }
 
 
+
+function getPersonaInstruction(bot, ctx) {
+  try {
+    const user = bot.db.findUser(ctx.from?.id);
+    const persona = user?.persona || 'default';
+    const prompt = personaPresets[persona] || personaPresets.default || '';
+
+    if (!prompt) return 'Persona: default general assistant.';
+    return `Persona: ${persona}\n${prompt}`;
+  } catch {
+    return 'Persona: default general assistant.';
+  }
+}
+
 function modelName(bot) {
   return bot.config?.routerModel || bot.config?.translationModel || bot.config?.defaultModel || '';
 }
@@ -410,6 +425,7 @@ async function composeHumanAnswer(bot, ctx, { userText, toolName, raw, title }) 
   const model = bot.config.routerModel || bot.config.translationModel || bot.config.defaultModel;
   const payload = compactToolPayload(raw);
   const recentContext = getRecentContext(bot, ctx);
+  const personaInstruction = getPersonaInstruction(bot, ctx);
 
   if (!payload) {
     return locale === 'en' ? 'No useful result was found.' : '没有拿到有效结果。';
@@ -426,6 +442,7 @@ async function composeHumanAnswer(bot, ctx, { userText, toolName, raw, title }) 
             role: 'system',
             content: [
               'You are the final answer composer for a Telegram AI bot.',
+              personaInstruction || 'Persona: default general assistant.',
               'Behave like ChatGPT: infer missing details from context, answer naturally, and do not expose internal tool output.',
               'Always answer in the same language as the user. For Chinese users, use Simplified Chinese.',
               'Do not dump JSON.',
@@ -599,6 +616,68 @@ function isFollowUpOnly(text = '') {
 }
 
 
+
+async function continueFromContext(bot, ctx, text = '') {
+  const locale = bot.getLocale(ctx);
+  const recentContext = getRecentContext(bot, ctx);
+
+  if (!recentContext) return false;
+
+  const model = modelName(bot);
+  const followupPersonaInstruction = getPersonaInstruction(bot, ctx);
+
+  try {
+    await ctx.sendChatAction('typing');
+
+    const completion = await bot.completeWithAiFallback({
+      scope: 'follow_up',
+      model,
+      locale,
+      request: {
+        messages: [
+          {
+            role: 'system',
+            content: [
+              'You are continuing an existing Telegram conversation.',
+              followupPersonaInstruction || 'Persona: default general assistant.',
+              'The user is asking a short follow-up such as 还有吗, 继续, 然后呢, 这个呢.',
+              'Do not start a new topic.',
+              'Use the recent conversation context to continue the same topic.',
+              'Answer in Simplified Chinese unless the user clearly uses another language.',
+              'Do not invent sources or URLs.',
+              'Be natural and concise like ChatGPT.'
+            ].join('\n')
+          },
+          {
+            role: 'user',
+            content: [
+              `Recent conversation context:\n${recentContext}`,
+              '',
+              `Current follow-up: ${text}`
+            ].join('\n')
+          }
+        ],
+        tools: [],
+        temperature: 0.3
+      }
+    });
+
+    const answer = String(completion.result?.text || '').trim();
+    if (!answer) return false;
+
+    await replyPlain(ctx, answer, bot.config.maxOutputChars);
+    await rememberHandledInteraction(bot, ctx, text, answer, model);
+    return true;
+  } catch (error) {
+    bot.logger?.warn?.('Follow-up continuation failed', {
+      error: bot.formatLogError ? bot.formatLogError(error) : String(error?.message || error)
+    });
+
+    return false;
+  }
+}
+
+
 async function classifyNaturally(bot, ctx, text) {
   const locale = bot.getLocale(ctx);
   const model = bot.config.routerModel || bot.config.translationModel || bot.config.defaultModel;
@@ -673,11 +752,10 @@ export async function tryHandleNaturalAgent(bot, ctx) {
   const locale = bot.getLocale(ctx);
 
   if (isFollowUpOnly(text)) {
-    return false;
+    return continueFromContext(bot, ctx, text);
   }
 
   const url = text.match(/https?:\/\/[^\s]+/i)?.[0] || '';
-
   if (url) return runUrl(bot, ctx, url, text);
 
   const translateModeRegex = new RegExp(
@@ -727,6 +805,8 @@ export async function tryHandleNaturalAgent(bot, ctx) {
 }
 
 export const naturalAgentInternals = {
+  getPersonaInstruction,
+  continueFromContext,
   stripBareUrls,
   stripGeneratedReferences,
   rememberHandledInteraction,

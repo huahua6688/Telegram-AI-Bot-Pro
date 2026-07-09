@@ -44,8 +44,21 @@ test('shouldRespondToMessage supports smart group triggers', () => {
   );
 });
 
-test('normalizeLanguageCode keeps supported locales and falls back otherwise', () => {
-  assert.equal(normalizeLanguageCode('zh-CN', 'en'), 'zh');
-  assert.equal(normalizeLanguageCode('en-US', 'zh'), 'en');
-  assert.equal(normalizeLanguageCode('fr-FR', 'zh'), 'zh');
+test('normalizeLanguageCode normalizes Telegram language codes', () => {
+  assert.equal(normalizeLanguageCode('en-US'), 'en');
+  assert.equal(normalizeLanguageCode('en_GB'), 'en');
+  assert.equal(normalizeLanguageCode('zh-CN'), 'zh');
+  assert.equal(normalizeLanguageCode('zh-Hans'), 'zh');
+  assert.equal(normalizeLanguageCode('zh-TW'), 'zh-hant');
+  assert.equal(normalizeLanguageCode('zh-HK'), 'zh-hant');
+
+  assert.equal(normalizeLanguageCode('km'), 'km');
+  assert.equal(normalizeLanguageCode('ms-MY'), 'ms');
+  assert.equal(normalizeLanguageCode('ko-KR'), 'ko');
+  assert.equal(normalizeLanguageCode('ja-JP'), 'ja');
+  assert.equal(normalizeLanguageCode('th-TH'), 'th');
+  assert.equal(normalizeLanguageCode('vi-VN'), 'vi');
+
+  assert.equal(normalizeLanguageCode('', 'zh'), 'zh');
+  assert.equal(normalizeLanguageCode('bad_language_code', 'en'), 'en');
 });

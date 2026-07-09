@@ -16,14 +16,145 @@ import { MemoryManager } from './memory-manager.js';
 import { tryHandleNaturalAgent } from './natural-agent.js';
 
 const LANGUAGE_NAMES = {
-  zh: '中文',
-  en: 'English'
-};
+  auto: 'Auto / Telegram',
+  zh: '简体中文',
+  'zh-hant': '繁體中文',
+  en: 'English',
+  km: 'ភាសាខ្មែរ',
+  ms: 'Bahasa Melayu',
+  id: 'Bahasa Indonesia',
+  ko: '한국어',
+  ja: '日本語',
+  th: 'ไทย',
+  vi: 'Tiếng Việt',
+  es: 'Español',
+  fr: 'Français',
+  de: 'Deutsch',
+  it: 'Italiano',
+  pt: 'Português',
+  ru: 'Русский',
+  tr: 'Türkçe',
+  ar: 'العربية',
+  fa: 'فارسی',
+  hi: 'हिन्दी',
+  uk: 'Українська',
+  pl: 'Polski',
+  nl: 'Nederlands'
+};;
 
 const LANGUAGE_PROMPTS = {
   zh: 'Always answer in Simplified Chinese unless the user explicitly asks for another language.',
   en: 'Always answer in English unless the user explicitly asks for another language.'
 };
+
+
+const UI_LABELS = {
+  zh: {
+    help: '🆘 帮助',
+    settings: '⚙️ 设置',
+    admin: '🛠 管理',
+    exit: '❌ 退出模式',
+    close: '❌ 关闭菜单',
+    mainMenu: '⬅️ 返回主菜单',
+    settingsCenter: '⚙️ 设置中心',
+    currentSettings: '📊 当前设置',
+    model: '🤖 模型',
+    persona: '🎭 人格',
+    language: '🌍 语言',
+    memory: '🧠 记忆',
+    clear: '🧹 清空',
+    menuClosed: '菜单已关闭。',
+    languageSet: '已切换语言：{language}',
+    languageAuto: '自动跟随 Telegram 语言',
+    currentLanguage: '当前语言：{language}'
+  },
+  'zh-hant': {
+    help: '🆘 幫助',
+    settings: '⚙️ 設定',
+    admin: '🛠 管理',
+    exit: '❌ 退出模式',
+    close: '❌ 關閉選單',
+    mainMenu: '⬅️ 返回主選單',
+    settingsCenter: '⚙️ 設定中心',
+    currentSettings: '📊 目前設定',
+    model: '🤖 模型',
+    persona: '🎭 人格',
+    language: '🌍 語言',
+    memory: '🧠 記憶',
+    clear: '🧹 清除',
+    menuClosed: '選單已關閉。',
+    languageSet: '已切換語言：{language}',
+    languageAuto: '自動跟隨 Telegram 語言',
+    currentLanguage: '目前語言：{language}'
+  },
+  en: {
+    help: '🆘 Help',
+    settings: '⚙️ Settings',
+    admin: '🛠 Admin',
+    exit: '❌ Exit mode',
+    close: '❌ Close menu',
+    mainMenu: '⬅️ Main menu',
+    settingsCenter: '⚙️ Settings center',
+    currentSettings: '📊 Current settings',
+    model: '🤖 Model',
+    persona: '🎭 Persona',
+    language: '🌍 Language',
+    memory: '🧠 Memory',
+    clear: '🧹 Clear',
+    menuClosed: 'Menu closed.',
+    languageSet: 'Language switched: {language}',
+    languageAuto: 'Auto follow Telegram language',
+    currentLanguage: 'Current language: {language}'
+  },
+  km: { help: '🆘 ជំនួយ', settings: '⚙️ ការកំណត់', admin: '🛠 គ្រប់គ្រង', exit: '❌ ចេញពីរបៀប', close: '❌ បិទម៉ឺនុយ', mainMenu: '⬅️ ម៉ឺនុយមេ', settingsCenter: '⚙️ មជ្ឈមណ្ឌលការកំណត់', currentSettings: '📊 ការកំណត់បច្ចុប្បន្ន', model: '🤖 ម៉ូដែល', persona: '🎭 តួអង្គ', language: '🌍 ភាសា', memory: '🧠 ការចងចាំ', clear: '🧹 សម្អាត', menuClosed: 'បានបិទម៉ឺនុយ។', languageSet: 'បានប្តូរភាសា៖ {language}', languageAuto: 'តាមភាសា Telegram ដោយស្វ័យប្រវត្តិ', currentLanguage: 'ភាសាបច្ចុប្បន្ន៖ {language}' },
+  ms: { help: '🆘 Bantuan', settings: '⚙️ Tetapan', admin: '🛠 Admin', exit: '❌ Keluar mod', close: '❌ Tutup menu', mainMenu: '⬅️ Menu utama', settingsCenter: '⚙️ Pusat tetapan', currentSettings: '📊 Tetapan semasa', model: '🤖 Model', persona: '🎭 Persona', language: '🌍 Bahasa', memory: '🧠 Memori', clear: '🧹 Kosongkan', menuClosed: 'Menu ditutup.', languageSet: 'Bahasa ditukar: {language}', languageAuto: 'Ikut bahasa Telegram secara automatik', currentLanguage: 'Bahasa semasa: {language}' },
+  id: { help: '🆘 Bantuan', settings: '⚙️ Pengaturan', admin: '🛠 Admin', exit: '❌ Keluar mode', close: '❌ Tutup menu', mainMenu: '⬅️ Menu utama', settingsCenter: '⚙️ Pusat pengaturan', currentSettings: '📊 Pengaturan saat ini', model: '🤖 Model', persona: '🎭 Persona', language: '🌍 Bahasa', memory: '🧠 Memori', clear: '🧹 Bersihkan', menuClosed: 'Menu ditutup.', languageSet: 'Bahasa diganti: {language}', languageAuto: 'Ikuti bahasa Telegram otomatis', currentLanguage: 'Bahasa saat ini: {language}' },
+  ko: { help: '🆘 도움말', settings: '⚙️ 설정', admin: '🛠 관리자', exit: '❌ 모드 종료', close: '❌ 메뉴 닫기', mainMenu: '⬅️ 메인 메뉴', settingsCenter: '⚙️ 설정 센터', currentSettings: '📊 현재 설정', model: '🤖 모델', persona: '🎭 페르소나', language: '🌍 언어', memory: '🧠 메모리', clear: '🧹 지우기', menuClosed: '메뉴를 닫았습니다.', languageSet: '언어 변경됨: {language}', languageAuto: 'Telegram 언어 자동 적용', currentLanguage: '현재 언어: {language}' },
+  ja: { help: '🆘 ヘルプ', settings: '⚙️ 設定', admin: '🛠 管理', exit: '❌ モード終了', close: '❌ メニューを閉じる', mainMenu: '⬅️ メインメニュー', settingsCenter: '⚙️ 設定センター', currentSettings: '📊 現在の設定', model: '🤖 モデル', persona: '🎭 ペルソナ', language: '🌍 言語', memory: '🧠 メモリ', clear: '🧹 クリア', menuClosed: 'メニューを閉じました。', languageSet: '言語を変更しました: {language}', languageAuto: 'Telegram の言語に自動追従', currentLanguage: '現在の言語: {language}' },
+  th: { help: '🆘 ช่วยเหลือ', settings: '⚙️ ตั้งค่า', admin: '🛠 ผู้ดูแล', exit: '❌ ออกจากโหมด', close: '❌ ปิดเมนู', mainMenu: '⬅️ เมนูหลัก', settingsCenter: '⚙️ ศูนย์ตั้งค่า', currentSettings: '📊 การตั้งค่าปัจจุบัน', model: '🤖 โมเดล', persona: '🎭 บุคลิก', language: '🌍 ภาษา', memory: '🧠 ความจำ', clear: '🧹 ล้าง', menuClosed: 'ปิดเมนูแล้ว', languageSet: 'เปลี่ยนภาษาแล้ว: {language}', languageAuto: 'ตามภาษา Telegram อัตโนมัติ', currentLanguage: 'ภาษาปัจจุบัน: {language}' },
+  vi: { help: '🆘 Trợ giúp', settings: '⚙️ Cài đặt', admin: '🛠 Quản trị', exit: '❌ Thoát chế độ', close: '❌ Đóng menu', mainMenu: '⬅️ Menu chính', settingsCenter: '⚙️ Trung tâm cài đặt', currentSettings: '📊 Cài đặt hiện tại', model: '🤖 Mô hình', persona: '🎭 Persona', language: '🌍 Ngôn ngữ', memory: '🧠 Bộ nhớ', clear: '🧹 Xóa', menuClosed: 'Đã đóng menu.', languageSet: 'Đã đổi ngôn ngữ: {language}', languageAuto: 'Tự động theo ngôn ngữ Telegram', currentLanguage: 'Ngôn ngữ hiện tại: {language}' },
+  es: { help: '🆘 Ayuda', settings: '⚙️ Ajustes', admin: '🛠 Admin', exit: '❌ Salir del modo', close: '❌ Cerrar menú', mainMenu: '⬅️ Menú principal', settingsCenter: '⚙️ Centro de ajustes', currentSettings: '📊 Ajustes actuales', model: '🤖 Modelo', persona: '🎭 Persona', language: '🌍 Idioma', memory: '🧠 Memoria', clear: '🧹 Limpiar', menuClosed: 'Menú cerrado.', languageSet: 'Idioma cambiado: {language}', languageAuto: 'Seguir idioma de Telegram automáticamente', currentLanguage: 'Idioma actual: {language}' },
+  fr: { help: '🆘 Aide', settings: '⚙️ Paramètres', admin: '🛠 Admin', exit: '❌ Quitter le mode', close: '❌ Fermer le menu', mainMenu: '⬅️ Menu principal', settingsCenter: '⚙️ Centre des paramètres', currentSettings: '📊 Paramètres actuels', model: '🤖 Modèle', persona: '🎭 Persona', language: '🌍 Langue', memory: '🧠 Mémoire', clear: '🧹 Effacer', menuClosed: 'Menu fermé.', languageSet: 'Langue changée : {language}', languageAuto: 'Suivre automatiquement la langue Telegram', currentLanguage: 'Langue actuelle : {language}' },
+  de: { help: '🆘 Hilfe', settings: '⚙️ Einstellungen', admin: '🛠 Admin', exit: '❌ Modus beenden', close: '❌ Menü schließen', mainMenu: '⬅️ Hauptmenü', settingsCenter: '⚙️ Einstellungszentrum', currentSettings: '📊 Aktuelle Einstellungen', model: '🤖 Modell', persona: '🎭 Persona', language: '🌍 Sprache', memory: '🧠 Speicher', clear: '🧹 Löschen', menuClosed: 'Menü geschlossen.', languageSet: 'Sprache geändert: {language}', languageAuto: 'Telegram-Sprache automatisch verwenden', currentLanguage: 'Aktuelle Sprache: {language}' },
+  ru: { help: '🆘 Помощь', settings: '⚙️ Настройки', admin: '🛠 Админ', exit: '❌ Выйти из режима', close: '❌ Закрыть меню', mainMenu: '⬅️ Главное меню', settingsCenter: '⚙️ Центр настроек', currentSettings: '📊 Текущие настройки', model: '🤖 Модель', persona: '🎭 Персона', language: '🌍 Язык', memory: '🧠 Память', clear: '🧹 Очистить', menuClosed: 'Меню закрыто.', languageSet: 'Язык изменён: {language}', languageAuto: 'Автоматически следовать языку Telegram', currentLanguage: 'Текущий язык: {language}' },
+  tr: { help: '🆘 Yardım', settings: '⚙️ Ayarlar', admin: '🛠 Admin', exit: '❌ Moddan çık', close: '❌ Menüyü kapat', mainMenu: '⬅️ Ana menü', settingsCenter: '⚙️ Ayar merkezi', currentSettings: '📊 Geçerli ayarlar', model: '🤖 Model', persona: '🎭 Persona', language: '🌍 Dil', memory: '🧠 Hafıza', clear: '🧹 Temizle', menuClosed: 'Menü kapatıldı.', languageSet: 'Dil değiştirildi: {language}', languageAuto: 'Telegram dilini otomatik takip et', currentLanguage: 'Geçerli dil: {language}' },
+  ar: { help: '🆘 مساعدة', settings: '⚙️ الإعدادات', admin: '🛠 الإدارة', exit: '❌ الخروج من الوضع', close: '❌ إغلاق القائمة', mainMenu: '⬅️ القائمة الرئيسية', settingsCenter: '⚙️ مركز الإعدادات', currentSettings: '📊 الإعدادات الحالية', model: '🤖 النموذج', persona: '🎭 الشخصية', language: '🌍 اللغة', memory: '🧠 الذاكرة', clear: '🧹 مسح', menuClosed: 'تم إغلاق القائمة.', languageSet: 'تم تغيير اللغة: {language}', languageAuto: 'اتباع لغة Telegram تلقائياً', currentLanguage: 'اللغة الحالية: {language}' }
+};
+
+function labelLocale(locale = 'en') {
+  const normalized = normalizeLanguageCode(locale, 'en');
+  if (UI_LABELS[normalized]) return normalized;
+  const base = normalized.split('-')[0];
+  if (UI_LABELS[base]) return base;
+  return normalized.startsWith('zh') ? 'zh' : 'en';
+}
+
+function uiLabel(locale = 'en', key = '') {
+  const labels = UI_LABELS[labelLocale(locale)] || UI_LABELS.en;
+  return labels[key] || UI_LABELS.en[key] || key;
+}
+
+function getLanguageDisplayName(code = 'en') {
+  const normalized = normalizeLanguageCode(code, 'en');
+  if (LANGUAGE_NAMES[normalized]) return LANGUAGE_NAMES[normalized];
+
+  try {
+    const display = new Intl.DisplayNames([labelLocale(normalized)], { type: 'language' });
+    return display.of(normalized) || normalized;
+  } catch {
+    return normalized;
+  }
+}
+
+function createLanguagePrompt(locale = 'en') {
+  const normalized = normalizeLanguageCode(locale, 'en');
+  if (normalized === 'zh') return LANGUAGE_PROMPTS.zh;
+  if (normalized === 'zh-hant') return 'Always answer in Traditional Chinese unless the user explicitly asks for another language.';
+  if (normalized === 'en') return LANGUAGE_PROMPTS.en;
+
+  return `Always answer in the user's preferred Telegram language: ${getLanguageDisplayName(normalized)} (${normalized}). If the user explicitly asks for another language, follow that request.`;
+}
+
 
 const UI_TEXT = {
   zh: {
@@ -283,7 +414,7 @@ function formatText(template, params = {}) {
 function createSystemPrompt(config, chatSettings, userSettings, locale) {
   const personaPrompt = userSettings.customSystemPrompt || personaPresets[userSettings.persona] || config.systemPrompt;
   const chatPrompt = chatSettings.systemPrompt ? `\n\nChat instructions: ${chatSettings.systemPrompt}` : '';
-  const languagePrompt = LANGUAGE_PROMPTS[locale] || LANGUAGE_PROMPTS.zh;
+  const languagePrompt = createLanguagePrompt(locale);
   const currentTime = new Date().toISOString();
   const productRules = [
     `Current UTC time: ${currentTime}`,
@@ -687,7 +818,13 @@ export class TelegramAIBot {
   }
 
   getLocale(ctx, user = this.db.findUser(ctx.from?.id)) {
-    return user?.preferredLanguage || normalizeLanguageCode(ctx.from?.language_code, 'zh');
+    const preferred = normalizeLanguageCode(user?.preferredLanguage || 'auto', 'auto');
+    if (preferred && preferred !== 'auto') return preferred;
+    return normalizeLanguageCode(ctx.from?.language_code, 'en');
+  }
+
+  ui(locale = 'en', key = '') {
+    return uiLabel(locale, key);
   }
 
   async handleBottomKeyboardAction(ctx) {
@@ -738,8 +875,11 @@ export class TelegramAIBot {
   }
 
   t(locale, key, params = {}) {
-    const dictionary = UI_TEXT[locale] || UI_TEXT.zh;
-    return formatText(dictionary[key] || UI_TEXT.zh[key] || key, params);
+    const normalized = normalizeLanguageCode(locale, 'en');
+    const dictionaryKey = normalized.startsWith('zh') ? 'zh' : normalized;
+    const dictionary = UI_TEXT[dictionaryKey] || UI_TEXT.en || UI_TEXT.zh;
+    const fallback = UI_TEXT.en?.[key] || UI_TEXT.zh?.[key] || key;
+    return formatText(dictionary[key] || fallback, params);
   }
 
   getMenuLabels(locale) {
@@ -765,25 +905,17 @@ export class TelegramAIBot {
 
 
   createBottomKeyboard(locale = 'zh') {
-    const rows =
-      locale === 'en'
-        ? [
-            ['🆘 Help', '⚙️ Settings'],
-            ['🛠 Admin', '❌ Exit mode']
-          ]
-        : [
-            ['🆘 帮助', '⚙️ 设置'],
-            ['🛠 管理', '❌ 退出模式']
-          ];
-
     return {
       reply_markup: {
-        keyboard: rows,
+        keyboard: [
+          [this.ui(locale, 'help'), this.ui(locale, 'settings')],
+          [this.ui(locale, 'admin'), this.ui(locale, 'exit')]
+        ],
         resize_keyboard: true,
         is_persistent: true,
-        input_field_placeholder: locale === 'en'
-          ? 'Ask anything naturally…'
-          : '直接输入任何问题，我会自动判断…'
+        input_field_placeholder: locale === 'zh'
+          ? '直接输入任何问题，我会自动判断…'
+          : 'Ask anything naturally…'
       }
     };
   }
@@ -791,42 +923,29 @@ export class TelegramAIBot {
   createMenuKeyboard(locale) {
     return Markup.inlineKeyboard([
       [
-        Markup.button.callback(locale === 'en' ? '🆘 Help' : '🆘 帮助', 'menu:help'),
-        Markup.button.callback(locale === 'en' ? '⚙️ Settings' : '⚙️ 设置', 'menu:settings')
+        Markup.button.callback(this.ui(locale, 'help'), 'menu:help'),
+        Markup.button.callback(this.ui(locale, 'settings'), 'menu:settings')
       ],
       [
-        Markup.button.callback(locale === 'en' ? '🛠 Admin' : '🛠 管理', 'menu:admin'),
-        Markup.button.callback(locale === 'en' ? '❌ Close menu' : '❌ 关闭菜单', 'menu:close')
+        Markup.button.callback(this.ui(locale, 'admin'), 'menu:admin'),
+        Markup.button.callback(this.ui(locale, 'close'), 'menu:close')
       ]
     ]);
   }
 
 
   createSettingsKeyboard(locale = 'zh') {
-    const labels =
-      locale === 'en'
-        ? {
-            overview: '📊 Current settings',
-            model: '🤖 Model',
-            persona: '🎭 Persona',
-            language: '🌍 Language',
-            memory: '🧠 Memory',
-            clear: '🧹 Clear',
-            admin: '🛠 Admin',
-            main: '⬅️ Main menu',
-            close: '❌ Close menu'
-          }
-        : {
-            overview: '📊 当前设置',
-            model: '🤖 模型',
-            persona: '🎭 人格',
-            language: '🌍 语言',
-            memory: '🧠 记忆',
-            clear: '🧹 清空',
-            admin: '🛠 管理',
-            main: '⬅️ 返回主菜单',
-            close: '❌ 关闭菜单'
-          };
+    const labels = {
+      overview: this.ui(locale, 'currentSettings'),
+      model: this.ui(locale, 'model'),
+      persona: this.ui(locale, 'persona'),
+      language: this.ui(locale, 'language'),
+      memory: this.ui(locale, 'memory'),
+      clear: this.ui(locale, 'clear'),
+      admin: this.ui(locale, 'admin'),
+      main: this.ui(locale, 'mainMenu'),
+      close: this.ui(locale, 'close')
+    };
 
     return Markup.inlineKeyboard([
       [Markup.button.callback(labels.overview, 'settings_pick:overview')],
@@ -852,12 +971,12 @@ export class TelegramAIBot {
   createToolboxKeyboard(locale = 'zh') {
     return Markup.inlineKeyboard([
       [
-        Markup.button.callback(locale === 'en' ? '🆘 Help' : '🆘 帮助', 'menu:help'),
-        Markup.button.callback(locale === 'en' ? '⚙️ Settings' : '⚙️ 设置', 'menu:settings')
+        Markup.button.callback(this.ui(locale, 'help'), 'menu:help'),
+        Markup.button.callback(this.ui(locale, 'settings'), 'menu:settings')
       ],
       [
-        Markup.button.callback(locale === 'en' ? '🛠 Admin' : '🛠 管理', 'menu:admin'),
-        Markup.button.callback(locale === 'en' ? '❌ Close menu' : '❌ 关闭菜单', 'menu:close')
+        Markup.button.callback(this.ui(locale, 'admin'), 'menu:admin'),
+        Markup.button.callback(this.ui(locale, 'close'), 'menu:close')
       ]
     ]);
   }
@@ -953,9 +1072,10 @@ export class TelegramAIBot {
   }
 
   createLanguageKeyboard(currentLanguage) {
+    const current = normalizeLanguageCode(currentLanguage || 'auto', 'auto');
     const buttons = Object.entries(LANGUAGE_NAMES).map(([code, name]) =>
       Markup.button.callback(
-        code === currentLanguage ? `✅ ${name}` : name,
+        code === current ? `✅ ${name}` : name,
         `set_language:${code}`
       )
     );
@@ -1510,18 +1630,43 @@ export class TelegramAIBot {
   }
 
   normalizeLanguageInput(value = '') {
-    const normalized = String(value).trim().toLowerCase();
-    const baseLanguage = normalizeLanguageCode(normalized, '');
-    if (baseLanguage) {
-      return baseLanguage;
+    const normalized = String(value).trim().toLowerCase().replaceAll('_', '-');
+    if (!normalized) return '';
+    if (['auto', 'telegram', 'system', '自动', '自動', '跟随系统', '跟隨系統'].includes(normalized)) {
+      return 'auto';
     }
-    if (['zh', 'zh-cn', 'zh-hans', 'chinese', '中文', '简体中文', '簡體中文'].includes(normalized)) {
-      return 'zh';
-    }
-    if (['en', 'en-us', 'en-gb', 'english', '英语', '英文', '英語'].includes(normalized)) {
-      return 'en';
-    }
-    return '';
+
+    const aliases = {
+      chinese: 'zh',
+      '简体中文': 'zh',
+      '簡體中文': 'zh',
+      '繁体中文': 'zh-hant',
+      '繁體中文': 'zh-hant',
+      english: 'en',
+      '英语': 'en',
+      '英文': 'en',
+      '英語': 'en',
+      khmer: 'km',
+      '高棉语': 'km',
+      '高棉語': 'km',
+      '柬埔寨语': 'km',
+      korean: 'ko',
+      '韩语': 'ko',
+      '韓語': 'ko',
+      japanese: 'ja',
+      '日语': 'ja',
+      '日語': 'ja',
+      malay: 'ms',
+      '马来语': 'ms',
+      thai: 'th',
+      '泰语': 'th',
+      vietnamese: 'vi',
+      '越南语': 'vi'
+    };
+
+    if (aliases[normalized]) return aliases[normalized];
+
+    return normalizeLanguageCode(normalized, '');
   }
 
   getProviderCapabilities() {
@@ -2100,6 +2245,79 @@ export class TelegramAIBot {
     }
   }
 
+  async setLocalizedBotCommands() {
+    const commands = [
+      { command: 'start', description: 'Open assistant / 打开助手' },
+      { command: 'menu', description: 'Open menu / 打开菜单' },
+      { command: 'whoami', description: 'Show Telegram ID / 查看 Telegram ID' },
+      { command: 'status', description: 'Admin status / 管理员状态' }
+    ];
+
+    await this.bot.telegram.setMyCommands(commands);
+
+    const localized = {
+      zh: [
+        { command: 'start', description: '打开助手' },
+        { command: 'menu', description: '打开菜单' },
+        { command: 'whoami', description: '查看 Telegram ID' },
+        { command: 'status', description: '管理员状态' }
+      ],
+      en: [
+        { command: 'start', description: 'Open assistant' },
+        { command: 'menu', description: 'Open menu' },
+        { command: 'whoami', description: 'Show Telegram ID' },
+        { command: 'status', description: 'Admin status' }
+      ],
+      km: [
+        { command: 'start', description: 'បើកជំនួយការ' },
+        { command: 'menu', description: 'បើកម៉ឺនុយ' },
+        { command: 'whoami', description: 'បង្ហាញ Telegram ID' },
+        { command: 'status', description: 'ស្ថានភាពអ្នកគ្រប់គ្រង' }
+      ],
+      ms: [
+        { command: 'start', description: 'Buka pembantu' },
+        { command: 'menu', description: 'Buka menu' },
+        { command: 'whoami', description: 'Tunjuk Telegram ID' },
+        { command: 'status', description: 'Status admin' }
+      ],
+      ko: [
+        { command: 'start', description: '도우미 열기' },
+        { command: 'menu', description: '메뉴 열기' },
+        { command: 'whoami', description: 'Telegram ID 보기' },
+        { command: 'status', description: '관리자 상태' }
+      ],
+      ja: [
+        { command: 'start', description: 'アシスタントを開く' },
+        { command: 'menu', description: 'メニューを開く' },
+        { command: 'whoami', description: 'Telegram ID を表示' },
+        { command: 'status', description: '管理者状態' }
+      ],
+      th: [
+        { command: 'start', description: 'เปิดผู้ช่วย' },
+        { command: 'menu', description: 'เปิดเมนู' },
+        { command: 'whoami', description: 'แสดง Telegram ID' },
+        { command: 'status', description: 'สถานะแอดมิน' }
+      ],
+      vi: [
+        { command: 'start', description: 'Mở trợ lý' },
+        { command: 'menu', description: 'Mở menu' },
+        { command: 'whoami', description: 'Hiển thị Telegram ID' },
+        { command: 'status', description: 'Trạng thái admin' }
+      ]
+    };
+
+    for (const [languageCode, list] of Object.entries(localized)) {
+      try {
+        await this.bot.telegram.setMyCommands(list, { language_code: languageCode });
+      } catch (error) {
+        this.logger?.warn?.('Failed to set localized bot commands', {
+          languageCode,
+          error: error.message
+        });
+      }
+    }
+  }
+
   async init() {
     this.bot.catch((error, ctx) => {
       this.logger.error('Telegram handler error', { chatId: ctx.chat?.id, error: this.formatLogError(error) });
@@ -2134,12 +2352,7 @@ export class TelegramAIBot {
 
     const me = await this.bot.telegram.getMe();
     this.botUsername = me.username || '';
-    await this.bot.telegram.setMyCommands([
-      { command: "start", description: "Open button menu" },
-      { command: "menu", description: "Open button menu" },
-      { command: "whoami", description: "Show your Telegram ID" },
-      { command: "status", description: "Admin: show bot status" }
-    ]);
+    await this.setLocalizedBotCommands();
   }
 
   registerCommands() {
@@ -2645,24 +2858,32 @@ export class TelegramAIBot {
     const arg = this.normalizeLanguageInput(rawArg);
     const user = this.db.findUser(ctx.from.id);
     const locale = this.getLocale(ctx, user);
+    const preferred = normalizeLanguageCode(user?.preferredLanguage || 'auto', 'auto');
+    const detected = normalizeLanguageCode(ctx.from?.language_code, 'en');
 
     if (!rawArg) {
+      const display = preferred === 'auto'
+        ? `${this.ui(locale, 'languageAuto')} → ${getLanguageDisplayName(detected)}`
+        : getLanguageDisplayName(preferred);
+
       await ctx.reply(
-        this.t(locale, 'currentLanguage', { language: LANGUAGE_NAMES[locale] || locale }),
-        this.createLanguageKeyboard(locale)
+        this.t(locale, 'currentLanguage', { language: display }),
+        this.createLanguageKeyboard(preferred)
       );
       return;
     }
 
     if (!arg) {
-      await ctx.reply(this.t(locale, 'languageUnsupported'), this.createLanguageKeyboard(locale));
+      await ctx.reply(this.t(locale, 'languageUnsupported'), this.createLanguageKeyboard(preferred));
       return;
     }
 
     await this.db.setUserSettings(ctx.from.id, { preferredLanguage: arg });
+    const effective = arg === 'auto' ? detected : arg;
+
     await ctx.reply(
-      this.t(arg, 'languageSet', { language: LANGUAGE_NAMES[arg] || arg }),
-      this.createMenuKeyboard(arg)
+      this.t(effective, 'languageSet', { language: arg === 'auto' ? `${this.ui(effective, 'languageAuto')} → ${getLanguageDisplayName(effective)}` : getLanguageDisplayName(effective) }),
+      this.createMenuKeyboard(effective)
     );
   }
 
@@ -3643,7 +3864,11 @@ export class TelegramAIBot {
   async handleSettingsOverview(ctx) {
     const user = this.db.findUser(ctx.from?.id);
     const locale = this.getLocale(ctx, user);
-    const languageName = LANGUAGE_NAMES[locale] || locale;
+    const preferredLanguage = normalizeLanguageCode(user?.preferredLanguage || 'auto', 'auto');
+    const detectedLanguage = normalizeLanguageCode(ctx.from?.language_code, 'en');
+    const languageName = preferredLanguage === 'auto'
+      ? `${this.ui(locale, 'languageAuto')} → ${getLanguageDisplayName(detectedLanguage)}`
+      : getLanguageDisplayName(preferredLanguage);
     const currentModel = user?.preferredModel || this.config.defaultModel || '-';
     const persona = user?.persona || 'default';
     const dailyUsed = user?.dailyUsageCount || 0;
@@ -4244,18 +4469,29 @@ export class TelegramAIBot {
 
   async handleLanguageCallback(ctx) {
     const language = this.normalizeLanguageInput(ctx.match[1]);
-    const locale = this.getLocale(ctx);
+    const oldLocale = this.getLocale(ctx);
     await ctx.answerCbQuery();
+
     if (!language) {
-      await ctx.reply(this.t(locale, 'languageUnsupported'));
+      await ctx.reply(this.t(oldLocale, 'languageUnsupported'));
       return;
     }
+
     await this.db.setUserSettings(ctx.from.id, { preferredLanguage: language });
+
+    const detected = normalizeLanguageCode(ctx.from?.language_code, 'en');
+    const effective = language === 'auto' ? detected : language;
+    const display = language === 'auto'
+      ? `${this.ui(effective, 'languageAuto')} → ${getLanguageDisplayName(effective)}`
+      : getLanguageDisplayName(effective);
+
     await this.editAssistantMessageText(
       ctx,
-      this.t(language, 'languageSet', { language: LANGUAGE_NAMES[language] || language }),
+      this.t(effective, 'languageSet', { language: display }),
       this.createLanguageKeyboard(language)
     );
+
+    await ctx.reply(this.t(effective, 'currentLanguage', { language: display }), this.createBottomKeyboard(effective));
   }
 
 
