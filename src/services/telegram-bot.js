@@ -283,8 +283,19 @@ function createSystemPrompt(config, chatSettings, userSettings, locale) {
   const personaPrompt = userSettings.customSystemPrompt || personaPresets[userSettings.persona] || config.systemPrompt;
   const chatPrompt = chatSettings.systemPrompt ? `\n\nChat instructions: ${chatSettings.systemPrompt}` : '';
   const languagePrompt = LANGUAGE_PROMPTS[locale] || LANGUAGE_PROMPTS.zh;
-  return `${personaPrompt}${chatPrompt}\n\n${languagePrompt}`.trim();
+  const productRules = [
+    'Telegram product rules:',
+    '- Use plain text. Do not use Markdown bold symbols or decorative bullet spam.',
+    '- Do not expose internal tool names such as get_time, fetch_url, web_search, or get_weather.',
+    '- Do not claim you searched or fetched a page unless the bot actually routed that tool.',
+    '- If the user asks what you can do, answer briefly and suggest using the toolbox.',
+    '- Keep replies natural, direct, and practical.'
+  ].join('\n');
+
+  return `${personaPrompt}${chatPrompt}\n\n${languagePrompt}\n\n${productRules}`.trim();
 }
+
+
 
 function createSessionId(ctx) {
   const chatId = String(ctx.chat.id);
@@ -294,29 +305,41 @@ function createSessionId(ctx) {
 }
 
 function cleanBotOutput(text = '') {
-  return String(text || '')
-    // 去掉代码块围栏
-    .replace(/```[\w-]*\n?/g, '')
-    .replace(/```/g, '')
-    // 去掉行内代码反引号
-    .replace(/`([^`]+)`/g, '$1')
-    // 去掉 Markdown 标题符号
-    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
-    // Markdown 加粗/斜体符号
+  const blocks = [];
+
+  let out = String(text || '').replace(/```[\s\S]*?```/g, (x) => {
+    const k = '__CODE_BLOCK_' + blocks.length + '__';
+    blocks.push(
+      x
+        .replace(/^\`\`\`[\w-]*\n?/, '')
+        .replace(/\`\`\`$/, '')
+        .trim()
+    );
+    return k;
+  });
+
+  out = out
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/__([^_]+)__/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/^\s*[\*•]\s+/gm, '- ')
+    .replace(/^\s*-\s+/gm, '- ')
+    .replace(/^\s*>\s?/gm, '')
+    .replace(/\[(.*?)\]\((https?:\/\/[^)]+)\)/g, '$1 $2')
     .replace(/(^|[^\w])\*([^*\n]+)\*/g, '$1$2')
     .replace(/(^|[^\w])_([^_\n]+)_/g, '$1$2')
-    // 列表统一成普通短横线，避免一堆 *
-    .replace(/^\s*[\*\u2022]\s+/gm, '- ')
-    // 去掉引用符号
-    .replace(/^\s*>\s?/gm, '')
-    // 去掉模型偶尔输出的脚注/上标符号
-    .replace(/\^+/g, '')
-    // 清理过多空行
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+
+  for (let i = 0; i < blocks.length; i += 1) {
+    out = out.replace('__CODE_BLOCK_' + i + '__', blocks[i]);
+  }
+
+  return out.trim();
 }
+
+
 
 async function sendTextReply(ctx, text, maxLength, extra = {}) {
   const cleaned = cleanBotOutput(text);
@@ -2158,6 +2181,13 @@ export class TelegramAIBot {
     });
 
     this.bot.use(async (ctx, next) => {
+      // global_plain_text_reply_cleaner
+      const oldReply = ctx.reply.bind(ctx);
+      ctx.reply = async (text, extra = {}) => oldReply(typeof text === 'string' ? cleanBotOutput(text) : text, extra);
+      return next();
+    });
+
+    this.bot.use(async (ctx, next) => {
       if (ctx.from) {
         const isAdmin = this.config.adminUserIds.has(String(ctx.from.id));
         await this.db.upsertUser(ctx.from, { isAdmin });
@@ -2612,6 +2642,31 @@ export class TelegramAIBot {
   async handleModels(ctx) {
     const user = this.db.findUser(ctx.from.id);
     const locale = this.getLocale(ctx, user);
+
+    const directText = String(text || '').trim();
+
+    if (/^(你能做什么|你会什么|有什么功能|怎么用|帮助|help|what can you do)$/i.test(directText)) {
+      await this.handleHelp(ctx);
+      return;
+    }
+
+    const directUrl = directText.match(/https?:\/\/[^\s]+/i)?.[0] || '';
+    if (directUrl) {
+      await this.runUrlFetch(ctx, directUrl);
+      return;
+    }
+
+    const directWeather = directText.match(/^(?:天气|天氣|查天气|查天氣|weather)\s+(.+)$/i);
+    if (directWeather && typeof this.runWeather === 'function') {
+      await this.runWeather(ctx, directWeather[1].trim());
+      return;
+    }
+
+    const directSearch = directText.match(/^(?:搜索|搜一下|联网搜索|上网搜|查一下|web|search)\s+(.+)$/i);
+    if (directSearch) {
+      await this.runWebSearch(ctx, directSearch[1].trim());
+      return;
+    }
     const current = user?.preferredModel || this.config.defaultModel;
     const models = this.config.availableModels.length > 0 ? this.config.availableModels.join(', ') : this.config.defaultModel;
     await ctx.reply(
@@ -2851,6 +2906,102 @@ export class TelegramAIBot {
     }
   }
 
+  formatToolResult(raw = '', title = '结果') {
+    const text = String(raw || '').trim();
+    if (!text) return title;
+
+    try {
+      const data = JSON.parse(text);
+
+      if (data?.error) {
+        return title + '\n\n' + (data.message || data.error);
+      }
+
+      const lines = [title];
+
+      if (data.location) {
+        lines.push('', '地点：' + data.location);
+      }
+
+      if (data.current) {
+        lines.push('', '当前：');
+        lines.push('天气：' + (data.current.weather || '-'));
+        lines.push('温度：' + (data.current.temperatureC ?? '-') + '°C');
+        lines.push('湿度：' + (data.current.humidityPercent ?? '-') + '%');
+        lines.push('降水：' + (data.current.precipitationMm ?? '-') + ' mm');
+        lines.push('风速：' + (data.current.windKmh ?? '-') + ' km/h');
+      }
+
+      if (Array.isArray(data.forecast) && data.forecast.length) {
+        lines.push('', '预报：');
+        for (const item of data.forecast.slice(0, 3)) {
+          lines.push('- ' + item.date + '：' + (item.weather || '-') + '，' + (item.minC ?? '-') + '~' + (item.maxC ?? '-') + '°C');
+        }
+      }
+
+      if (data.heading) lines.push('', '标题：' + data.heading);
+      if (data.answer) lines.push('答案：' + data.answer);
+      if (data.abstract) lines.push('摘要：' + data.abstract);
+
+      if (Array.isArray(data.results) && data.results.length) {
+        lines.push('', '搜索结果：');
+        for (const item of data.results.slice(0, 5)) {
+          lines.push('', '标题：' + (item.title || '-'));
+          if (item.description) lines.push('摘要：' + item.description);
+          if (item.url) lines.push('链接：' + item.url);
+        }
+      }
+
+      if (lines.length > 1) return lines.join('\n');
+    } catch {
+      // raw text fallback
+    }
+
+    return title + '\n\n' + text;
+  }
+
+  async runUrlFetch(ctx, url = '') {
+    const locale = this.getLocale(ctx);
+    const targetUrl = String(url || '').trim();
+
+    if (!/^https?:\/\//i.test(targetUrl)) {
+      await ctx.reply(locale === 'en' ? 'Send a valid URL.' : '请发送一个有效的网址。');
+      return;
+    }
+
+    try {
+      await ctx.sendChatAction('typing');
+
+      const raw = await this.toolRegistry.execute({
+        function: {
+          name: 'fetch_url',
+          arguments: JSON.stringify({ url: targetUrl })
+        }
+      }, {
+        source: 'telegram_url_fetch',
+        userId: ctx.from?.id,
+        chatId: ctx.chat?.id,
+        isAdmin: this.isAdmin(ctx),
+        toolUsage: { count: 0 }
+      });
+
+      try {
+        const parsed = JSON.parse(raw);
+        if (parsed?.error) {
+          await ctx.reply(locale === 'en' ? 'This page cannot be fetched right now.' : '这个网页暂时抓不到，可能是网站禁止机器人访问。');
+          return;
+        }
+      } catch {
+        // not json
+      }
+
+      await this.db.incrementStats('toolCalls');
+      await sendTextReply(ctx, this.formatToolResult(raw, locale === 'en' ? 'URL summary' : '网页摘要'), this.config.maxOutputChars);
+    } catch {
+      await ctx.reply(locale === 'en' ? 'This page cannot be fetched right now.' : '这个网页暂时抓不到，可能是网站禁止机器人访问。');
+    }
+  }
+
   async runWebSearch(ctx, query = extractCommandArgs(ctx.message.text || '')) {
     const locale = this.getLocale(ctx);
     if (!query) {
@@ -2882,7 +3033,7 @@ export class TelegramAIBot {
         // No-op, keep raw text path.
       }
       await this.db.incrementStats('toolCalls');
-      await sendTextReply(ctx, this.t(locale, 'webResult', { result: raw }), this.config.maxOutputChars);
+      await sendTextReply(ctx, this.formatToolResult(raw, locale === 'en' ? 'Web search results' : '联网搜索结果'), this.config.maxOutputChars);
     } catch (error) {
       await ctx.reply(this.formatUserFacingError(error, locale));
     }
