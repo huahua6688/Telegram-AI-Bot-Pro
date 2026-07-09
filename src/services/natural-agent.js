@@ -28,14 +28,12 @@ async function replyLong(ctx, text, maxLength = 3800, extra = undefined) {
 
 function extractJson(text = '') {
   const raw = String(text || '').trim();
-
   try {
     return JSON.parse(raw);
   } catch {
     const start = raw.indexOf('{');
     const end = raw.lastIndexOf('}');
     if (start < 0 || end <= start) return null;
-
     try {
       return JSON.parse(raw.slice(start, end + 1));
     } catch {
@@ -47,7 +45,6 @@ function extractJson(text = '') {
 function hasUsefulToolResult(raw = '') {
   try {
     const data = JSON.parse(String(raw || '').trim());
-
     if (!data || data.error) return false;
     if (data.current || data.location) return true;
     if (Array.isArray(data.forecast) && data.forecast.length > 0) return true;
@@ -56,59 +53,72 @@ function hasUsefulToolResult(raw = '') {
     if (String(data.heading || '').trim()) return true;
     if (String(data.abstract || '').trim()) return true;
     if (String(data.answer || '').trim()) return true;
-
     return false;
   } catch {
     return String(raw || '').trim().length > 0;
   }
 }
 
-function formatToolResult(raw = '', title = '结果') {
+function compactToolPayload(raw = '') {
+  const text = String(raw || '').trim();
+  if (!text) return '';
+
+  try {
+    const data = JSON.parse(text);
+    const results = Array.isArray(data.results)
+      ? data.results
+      : Array.isArray(data.topics)
+        ? data.topics
+        : [];
+
+    return JSON.stringify(
+      {
+        heading: data.heading || '',
+        answer: data.answer || '',
+        abstract: data.abstract || '',
+        location: data.location || '',
+        current: data.current || null,
+        forecast: Array.isArray(data.forecast) ? data.forecast.slice(0, 5) : [],
+        results: results.slice(0, 8).map((item) => ({
+          title: item.title || item.Text || '',
+          description: item.description || item.Text || '',
+          url: item.url || item.FirstURL || ''
+        }))
+      },
+      null,
+      2
+    );
+  } catch {
+    return truncateText(text, 6000);
+  }
+}
+
+function rawFallbackText(raw = '', title = '结果') {
   const text = String(raw || '').trim();
 
-  if (!text) {
-    return `${title}\n\n没有拿到有效结果。`;
-  }
+  if (!text) return `${title}\n\n没有拿到有效结果。`;
 
   try {
     const data = JSON.parse(text);
 
-    if (data?.error) {
-      return `${title}\n\n${data.message || data.error}`;
-    }
+    if (data?.error) return `${title}\n\n${data.message || data.error}`;
 
     if (!hasUsefulToolResult(text)) {
-      return `${title}\n\n没有拿到有效结果。\n如果需要稳定实时搜索，请在 Zeabur 配置 BRAVE_SEARCH_API_KEY。`;
+      return `${title}\n\n没有拿到有效结果。需要稳定实时搜索的话，请配置 BRAVE_SEARCH_API_KEY。`;
     }
 
     const lines = [title];
 
-    if (data.location) {
-      lines.push('', `地点：${data.location}`);
-    }
+    if (data.location) lines.push('', `地点：${data.location}`);
 
     if (data.current) {
       lines.push(
         '',
         '当前：',
         `天气：${data.current.weather ?? '-'}`,
-        `温度：${data.current.temperatureC ?? '-'}°C`,
-        `湿度：${data.current.humidityPercent ?? '-'}%`,
-        `降水：${data.current.precipitationMm ?? '-'} mm`,
-        `风速：${data.current.windKmh ?? '-'} km/h`
+        `温度：${data.current.temperatureC ?? '-'}°C`
       );
     }
-
-    if (Array.isArray(data.forecast) && data.forecast.length > 0) {
-      lines.push('', '预报：');
-      for (const item of data.forecast.slice(0, 3)) {
-        lines.push(`- ${item.date || '-'}：${item.weather || '-'}，${item.minC ?? '-'}~${item.maxC ?? '-'}°C`);
-      }
-    }
-
-    if (data.heading) lines.push('', `标题：${data.heading}`);
-    if (data.answer) lines.push(`答案：${data.answer}`);
-    if (data.abstract) lines.push(`摘要：${data.abstract}`);
 
     const results = Array.isArray(data.results)
       ? data.results
@@ -117,16 +127,17 @@ function formatToolResult(raw = '', title = '结果') {
         : [];
 
     if (results.length > 0) {
-      lines.push('', '搜索结果：');
-
+      lines.push('', '简要结果：');
       for (const item of results.slice(0, 5)) {
         const itemTitle = item.title || item.Text || '-';
         const desc = item.description || item.Text || '';
-        const url = item.url || item.FirstURL || '';
+        lines.push(`- ${itemTitle}${desc && desc !== itemTitle ? `：${desc}` : ''}`);
+      }
 
-        lines.push('', `标题：${itemTitle}`);
-        if (desc && desc !== itemTitle) lines.push(`摘要：${desc}`);
-        if (url) lines.push(`链接：${url}`);
+      const links = results.map((item) => item.url || item.FirstURL || '').filter(Boolean).slice(0, 3);
+      if (links.length) {
+        lines.push('', '参考链接：');
+        links.forEach((link, index) => lines.push(`${index + 1}. ${link}`));
       }
     }
 
@@ -179,20 +190,18 @@ async function fetchNewsFallback(query = '今日新闻') {
     const pubDate = extractXmlTag(block, 'pubDate');
 
     if (title) items.push({ title, link, pubDate });
-    if (items.length >= 5) break;
+    if (items.length >= 6) break;
   }
 
   if (items.length === 0) return '';
 
-  const lines = ['新闻结果'];
-
-  for (const item of items) {
-    lines.push('', `标题：${item.title}`);
-    if (item.pubDate) lines.push(`时间：${item.pubDate}`);
-    if (item.link) lines.push(`链接：${item.link}`);
-  }
-
-  return lines.join('\n');
+  return JSON.stringify({
+    results: items.map((item) => ({
+      title: item.title,
+      description: item.pubDate,
+      url: item.link
+    }))
+  });
 }
 
 async function executeTool(bot, ctx, name, args, source = 'natural_agent') {
@@ -213,7 +222,65 @@ async function executeTool(bot, ctx, name, args, source = 'natural_agent') {
   );
 }
 
-async function runSearch(bot, ctx, query) {
+async function composeHumanAnswer(bot, ctx, { userText, toolName, raw, title }) {
+  const locale = bot.getLocale(ctx);
+  const model = bot.config.routerModel || bot.config.translationModel || bot.config.defaultModel;
+  const payload = compactToolPayload(raw);
+
+  if (!payload) {
+    return locale === 'en' ? 'No useful result was found.' : '没有拿到有效结果。';
+  }
+
+  try {
+    const completion = await bot.completeWithAiFallback({
+      scope: 'answer_composer',
+      model,
+      locale,
+      request: {
+        messages: [
+          {
+            role: 'system',
+            content: [
+              'You are the final answer composer for a Telegram AI bot.',
+              'Answer in the same language as the user, usually Simplified Chinese.',
+              'Do not dump JSON.',
+              'Do not dump raw original titles and links as the main answer.',
+              'First give a clear synthesized answer.',
+              'For news/search: summarize the key points in 3-6 concise points.',
+              'For URL pages: summarize what the page is about and what matters.',
+              'For weather: answer directly with practical advice.',
+              'At the end, if source URLs exist, add 参考链接 with at most 3 links.',
+              'Keep the tone like a helpful ChatGPT assistant.'
+            ].join('\n')
+          },
+          {
+            role: 'user',
+            content: [
+              `User message: ${userText}`,
+              `Tool: ${toolName}`,
+              `Display title: ${title}`,
+              '',
+              'Tool result:',
+              payload
+            ].join('\n')
+          }
+        ],
+        tools: [],
+        temperature: 0.2
+      }
+    });
+
+    return String(completion.result?.text || '').trim() || rawFallbackText(raw, title);
+  } catch (error) {
+    bot.logger?.warn?.('Answer composer failed; fallback to formatted raw result', {
+      error: bot.formatLogError ? bot.formatLogError(error) : String(error?.message || error)
+    });
+
+    return rawFallbackText(raw, title);
+  }
+}
+
+async function runSearch(bot, ctx, query, originalText = query) {
   const locale = bot.getLocale(ctx);
   const keyword = String(query || '').trim();
 
@@ -222,7 +289,7 @@ async function runSearch(bot, ctx, query) {
   try {
     await ctx.sendChatAction('typing');
 
-    const raw = await executeTool(bot, ctx, 'web_search', { query: keyword }, 'natural_agent_search');
+    let raw = await executeTool(bot, ctx, 'web_search', { query: keyword }, 'natural_agent_search');
 
     try {
       const parsed = JSON.parse(raw);
@@ -234,25 +301,28 @@ async function runSearch(bot, ctx, query) {
 
     await bot.db.incrementStats('toolCalls');
 
-    if (!hasUsefulToolResult(raw)) {
-      if (/新闻|新聞|今日|今天|最新|news/i.test(keyword)) {
-        const newsText = await fetchNewsFallback(keyword);
-        if (newsText) {
-          await replyLong(ctx, newsText, bot.config.maxOutputChars);
-          return true;
-        }
-      }
+    if (!hasUsefulToolResult(raw) && /新闻|新聞|今日|今天|最新|news/i.test(keyword)) {
+      const fallbackRaw = await fetchNewsFallback(keyword);
+      if (fallbackRaw) raw = fallbackRaw;
+    }
 
+    if (!hasUsefulToolResult(raw)) {
       await ctx.reply(
         locale === 'en'
           ? 'No useful search results were returned. For stable web search, configure BRAVE_SEARCH_API_KEY.'
-          : '没有搜到有效结果。\n如果需要稳定实时搜索，请在 Zeabur 配置 BRAVE_SEARCH_API_KEY。',
-        bot.createToolboxKeyboard?.(locale)
+          : '没有搜到有效结果。如果需要稳定实时搜索，请在 Zeabur 配置 BRAVE_SEARCH_API_KEY。'
       );
       return true;
     }
 
-    await replyLong(ctx, formatToolResult(raw, locale === 'en' ? 'Web search results' : '联网搜索结果'), bot.config.maxOutputChars);
+    const answer = await composeHumanAnswer(bot, ctx, {
+      userText: originalText,
+      toolName: 'web_search',
+      raw,
+      title: '联网搜索结果'
+    });
+
+    await replyLong(ctx, answer, bot.config.maxOutputChars);
     return true;
   } catch (error) {
     await ctx.reply(bot.formatUserFacingError(error, locale));
@@ -260,7 +330,7 @@ async function runSearch(bot, ctx, query) {
   }
 }
 
-async function runUrl(bot, ctx, url) {
+async function runUrl(bot, ctx, url, originalText = url) {
   const locale = bot.getLocale(ctx);
   const targetUrl = String(url || '').trim();
 
@@ -280,7 +350,15 @@ async function runUrl(bot, ctx, url) {
     } catch {}
 
     await bot.db.incrementStats('toolCalls');
-    await replyLong(ctx, formatToolResult(raw, locale === 'en' ? 'URL summary' : '网页摘要'), bot.config.maxOutputChars);
+
+    const answer = await composeHumanAnswer(bot, ctx, {
+      userText: originalText,
+      toolName: 'fetch_url',
+      raw,
+      title: '网页摘要'
+    });
+
+    await replyLong(ctx, answer, bot.config.maxOutputChars);
     return true;
   } catch {
     await ctx.reply(locale === 'en' ? 'This page cannot be fetched right now.' : '这个网页暂时抓不到，可能是网站禁止机器人访问。');
@@ -288,23 +366,31 @@ async function runUrl(bot, ctx, url) {
   }
 }
 
-async function runWeather(bot, ctx, location) {
+async function runWeather(bot, ctx, location, originalText = location) {
   const locale = bot.getLocale(ctx);
   const place = String(location || '').trim();
 
   if (!place) return false;
 
-  if (typeof bot.runWeather === 'function') {
-    await bot.runWeather(ctx, place);
-    return true;
-  }
-
   try {
     const raw = await executeTool(bot, ctx, 'get_weather', { location: place }, 'natural_agent_weather');
     await bot.db.incrementStats('toolCalls');
-    await replyLong(ctx, formatToolResult(raw, locale === 'en' ? 'Weather' : '天气'), bot.config.maxOutputChars);
+
+    const answer = await composeHumanAnswer(bot, ctx, {
+      userText: originalText,
+      toolName: 'get_weather',
+      raw,
+      title: '天气'
+    });
+
+    await replyLong(ctx, answer, bot.config.maxOutputChars);
     return true;
   } catch {
+    if (typeof bot.runWeather === 'function') {
+      await bot.runWeather(ctx, place);
+      return true;
+    }
+
     await ctx.reply(locale === 'en' ? 'Weather is not available yet.' : '天气功能暂时不可用。');
     return true;
   }
@@ -319,24 +405,13 @@ async function classifyNaturally(bot, ctx, text) {
     'The user must not need commands.',
     'Decide what the bot should do from natural language.',
     'Return JSON only. No Markdown. No explanation.',
-    '',
-    'Actions:',
-    '- chat: normal conversation, coding help, explanations, opinions, stable knowledge',
-    '- translate: translate or rewrite text into another language',
-    '- web_search: latest/current/news/search/prices/exchange rates/recent events/current facts',
-    '- fetch_url: user sent or asked to read a URL',
-    '- weather: weather forecast or current weather for a place',
-    '- help: asks what the bot can do or how to use it',
-    '',
-    'Rules:',
-    '- If the user asks news/latest/current/today/recent, use web_search.',
-    '- If the user asks weather/hot/rain/temperature for a place, use weather.',
-    '- If the user includes a URL, use fetch_url.',
-    '- If the user asks translation, use translate and extract targetLanguage and text.',
-    '- If unsure, use chat.',
-    '',
-    'JSON schema:',
-    '{"action":"chat|translate|web_search|fetch_url|weather|help","text":"","query":"","url":"","location":"","targetLanguage":"","confidence":0.0}'
+    'Actions: chat, translate, web_search, fetch_url, weather, help.',
+    'Use web_search for latest/current/news/search/prices/exchange rates/recent events/current facts.',
+    'Use weather for weather/hot/rain/temperature questions for a place.',
+    'Use fetch_url if the user includes a URL.',
+    'Use translate when the user asks to translate or rewrite into another language.',
+    'If unsure, use chat.',
+    'JSON schema: {"action":"chat|translate|web_search|fetch_url|weather|help","text":"","query":"","url":"","location":"","targetLanguage":"","confidence":0.0}'
   ].join('\n');
 
   try {
@@ -367,10 +442,6 @@ async function classifyNaturally(bot, ctx, text) {
       confidence: Number(parsed.confidence || 0)
     };
   } catch (error) {
-    if (bot.isAiQuotaError?.(error)) {
-      bot.setAiCooldown?.('router', model, error);
-    }
-
     bot.logger?.warn?.('Natural agent router failed; fallback to normal chat', {
       error: bot.formatLogError ? bot.formatLogError(error) : String(error?.message || error)
     });
@@ -384,14 +455,12 @@ export async function tryHandleNaturalAgent(bot, ctx) {
 
   if (!text) return false;
 
-  if (typeof bot.getActiveMode === 'function' && bot.getActiveMode(ctx)) {
-    return false;
-  }
+  if (typeof bot.getActiveMode === 'function' && bot.getActiveMode(ctx)) return false;
 
   const locale = bot.getLocale(ctx);
-
   const url = text.match(/https?:\/\/[^\s]+/i)?.[0] || '';
-  if (url) return runUrl(bot, ctx, url);
+
+  if (url) return runUrl(bot, ctx, url, text);
 
   const translateModeRegex = new RegExp(
     `^(?:翻译为|翻译成|翻譯為|翻譯成|translate to)\\s*${TARGET_LANGUAGE_PATTERN}$`,
@@ -419,21 +488,15 @@ export async function tryHandleNaturalAgent(bot, ctx) {
 
   const trailingTranslate = text.match(trailingTranslateRegex);
   if (trailingTranslate) {
-    const sourceText = trailingTranslate[1].trim();
-    const targetLanguage = bot.normalizeTranslationTarget(trailingTranslate[2]);
-    await bot.runTranslation(ctx, sourceText, targetLanguage);
+    await bot.runTranslation(ctx, trailingTranslate[1].trim(), bot.normalizeTranslationTarget(trailingTranslate[2]));
     return true;
   }
 
   const explicitWeather = text.match(/^(?:天气|天氣|查天气|查天氣|weather)\s+(.+)$/i);
-  if (explicitWeather) {
-    return runWeather(bot, ctx, explicitWeather[1].trim());
-  }
+  if (explicitWeather) return runWeather(bot, ctx, explicitWeather[1].trim(), text);
 
   const explicitSearch = text.match(/^(?:搜索|搜一下|联网搜索|上网搜|查一下|web|search)\s+(.+)$/i);
-  if (explicitSearch) {
-    return runSearch(bot, ctx, explicitSearch[1].trim());
-  }
+  if (explicitSearch) return runSearch(bot, ctx, explicitSearch[1].trim(), text);
 
   if (/^(你能做什么|你会什么|有什么功能|怎么用|帮助|help|what can you do)$/i.test(text)) {
     await bot.handleHelp(ctx);
@@ -448,25 +511,17 @@ export async function tryHandleNaturalAgent(bot, ctx) {
   }
 
   if (routed.action === 'translate') {
-    const targetLanguage = routed.targetLanguage
-      ? bot.normalizeTranslationTarget(routed.targetLanguage)
-      : 'auto';
-
-    await bot.runTranslation(ctx, routed.text || text, targetLanguage);
+    await bot.runTranslation(
+      ctx,
+      routed.text || text,
+      routed.targetLanguage ? bot.normalizeTranslationTarget(routed.targetLanguage) : 'auto'
+    );
     return true;
   }
 
-  if (routed.action === 'fetch_url') {
-    return runUrl(bot, ctx, routed.url || url);
-  }
-
-  if (routed.action === 'weather') {
-    return runWeather(bot, ctx, routed.location || routed.query || text);
-  }
-
-  if (routed.action === 'web_search') {
-    return runSearch(bot, ctx, routed.query || text);
-  }
+  if (routed.action === 'fetch_url') return runUrl(bot, ctx, routed.url || url, text);
+  if (routed.action === 'weather') return runWeather(bot, ctx, routed.location || routed.query || text, text);
+  if (routed.action === 'web_search') return runSearch(bot, ctx, routed.query || text, text);
 
   return false;
 }
@@ -474,7 +529,8 @@ export async function tryHandleNaturalAgent(bot, ctx) {
 export const naturalAgentInternals = {
   cleanPlainText,
   hasUsefulToolResult,
-  formatToolResult,
+  rawFallbackText,
+  composeHumanAnswer,
   fetchNewsFallback,
   classifyNaturally
 };

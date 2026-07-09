@@ -685,7 +685,7 @@ export class TelegramAIBot {
     if (!text) return false;
 
     const locale = this.getLocale(ctx);
-    const normalized = text.replace(/[🧰🌍🌤⚙️🧪❌]/g, '').trim().toLowerCase();
+    const normalized = text.replace(/[🆘⚙️🛠❌]/g, '').trim().toLowerCase();
 
     if (/^(退出模式|退出|结束模式|结束|exit mode|exit|stop|cancel)$/.test(normalized)) {
       if (typeof this.clearActiveMode === 'function') {
@@ -699,32 +699,8 @@ export class TelegramAIBot {
       return true;
     }
 
-    if (/^(工具箱|toolbox)$/.test(normalized)) {
-      await ctx.reply(locale === 'en' ? '🧰 Toolbox' : '🧰 工具箱', this.createToolboxKeyboard(locale));
-      return true;
-    }
-
-    if (/^(翻译|translate)$/.test(normalized)) {
-      await ctx.reply(this.t(locale, 'translationTargetPrompt'), this.createTranslationTargetKeyboard(locale));
-      return true;
-    }
-
-    if (/^(天气|天氣|weather)$/.test(normalized)) {
-      if (typeof this.runWeather !== 'function') {
-        await ctx.reply(
-          locale === 'en'
-            ? 'Weather is not installed yet. Run the free API pack first.'
-            : '天气功能还没安装成功。先跑免费 API 功能包。',
-          this.createBottomKeyboard(locale)
-        );
-        return true;
-      }
-
-      this.setPendingMenuAction(ctx, 'weather_prompt');
-      await ctx.reply(
-        locale === 'en' ? 'Send a city name, for example: Kuala Lumpur.' : '请发送城市名，例如：吉隆坡。',
-        this.createBottomKeyboard(locale)
-      );
+    if (/^(帮助|help)$/.test(normalized)) {
+      await this.handleHelp(ctx);
       return true;
     }
 
@@ -737,17 +713,14 @@ export class TelegramAIBot {
       return true;
     }
 
-    if (/^(功能状态|功能检查|能力检查|feature status|features?)$/.test(normalized)) {
-      if (typeof this.handleFeatureStatus === 'function') {
-        await this.handleFeatureStatus(ctx);
-      } else {
-        await ctx.reply(
-          locale === 'en'
-            ? 'Feature status is not installed yet.'
-            : '功能状态还没安装成功。',
-          this.createBottomKeyboard(locale)
-        );
+    if (/^(管理|管理员|后台|admin)$/.test(normalized)) {
+      if (!this.isAdmin(ctx)) {
+        await ctx.reply(this.t(locale, 'adminOnly'));
+        await this.handleWhoami(ctx);
+        return true;
       }
+
+      await ctx.reply(locale === 'en' ? '🛠 Admin panel' : '🛠 管理员面板', this.createAdminActionKeyboard(locale));
       return true;
     }
 
@@ -785,12 +758,12 @@ export class TelegramAIBot {
     const rows =
       locale === 'en'
         ? [
-            ['🧰 Toolbox', '🌍 Translate', '🌤 Weather'],
-            ['⚙️ Settings', '🧪 Feature status', '❌ Exit mode']
+            ['🆘 Help', '⚙️ Settings'],
+            ['🛠 Admin', '❌ Exit mode']
           ]
         : [
-            ['🧰 工具箱', '🌍 翻译', '🌤 天气'],
-            ['⚙️ 设置', '🧪 功能状态', '❌ 退出模式']
+            ['🆘 帮助', '⚙️ 设置'],
+            ['🛠 管理', '❌ 退出模式']
           ];
 
     return {
@@ -798,7 +771,9 @@ export class TelegramAIBot {
         keyboard: rows,
         resize_keyboard: true,
         is_persistent: true,
-        input_field_placeholder: locale === 'en' ? 'Send a message or tap a shortcut…' : '直接输入问题，或点下面快捷键…'
+        input_field_placeholder: locale === 'en'
+          ? 'Ask anything naturally…'
+          : '直接输入任何问题，我会自动判断…'
       }
     };
   }
@@ -2298,21 +2273,44 @@ export class TelegramAIBot {
 
   async handleStart(ctx) {
     const locale = this.getLocale(ctx);
-    const adminLine = this.isAdmin(ctx) ? `\n\n${this.t(locale, 'adminEntry')}` : '';
+    const adminLine = this.isAdmin(ctx)
+      ? '\n\n管理员可点底部「🛠 管理」进入管理面板。'
+      : '';
 
-    await ctx.reply(
+    const text =
       locale === 'en'
-        ? 'Bottom shortcuts are enabled. You can use them anytime.'
-        : '底部快捷键已开启，以后不用翻旧消息找按钮。',
-      this.createBottomKeyboard(locale)
-    );
+        ? [
+            'Hi, I am ready.',
+            '',
+            'You can type naturally. No commands are required.',
+            '',
+            'I can help with:',
+            '- normal chat and project troubleshooting',
+            '- translation and rewrite',
+            '- current news and web search',
+            '- URL reading and summaries',
+            '- weather',
+            '- image, voice, and file handling when supported',
+            '',
+            'Use the bottom buttons only when you need Help, Settings, Admin, or Exit mode.'
+          ].join('\n')
+        : [
+            '你好，我已经准备好了。',
+            '',
+            '你可以直接像正常聊天一样输入，不需要记指令。',
+            '',
+            '我会自动判断要做什么：',
+            '- 普通聊天、代码/部署排错',
+            '- 翻译、改写、解释',
+            '- 最新新闻、联网搜索',
+            '- 读取网页并总结',
+            '- 查询天气',
+            '- 图片、语音、文件处理（取决于已启用能力）',
+            '',
+            '底部只保留：帮助、设置、管理、退出模式。其他功能直接说就行。' + adminLine
+          ].join('\n');
 
-    await sendTextReply(
-      ctx,
-      `${this.t(locale, 'start')}${adminLine}`,
-      this.config.maxOutputChars,
-      this.createMenuKeyboard(locale)
-    );
+    await ctx.reply(text, this.createBottomKeyboard(locale));
   }
 
   async handleWhoami(ctx) {
@@ -2353,74 +2351,36 @@ export class TelegramAIBot {
   async handleHelp(ctx) {
     const locale = this.getLocale(ctx);
 
-    if (locale === 'en') {
-      const helpText = [
-        '🆘 Help',
-        '',
-        'Main menu:',
-        '💬 Chat — send any question directly.',
-        '🌍 Translate — choose target language first, then send text.',
-        '🧠 Memory — view memory, current topic, topic list, or clear memory.',
-        '🤖 Models — view and switch available AI models.',
-        '🧹 Clear — choose what to clear: current context, long-term memory, or all.',
-        '🆘 Help — show this page.',
-        '',
-        'Reply buttons:',
-        '🔄 Regenerate — regenerate the last answer.',
-        '🧠 Model — switch model for future replies.',
-        '🌍 Translate — translate this answer into a selected language.',
-        '❤️ Favorite — save the answer.',
-        '🗑 Context — clear current conversation context.',
-        '',
-        'Useful commands:',
-        '/start — show main menu',
-        '/help — show help',
-        '/status — admin only: show bot status, models, quota cooldowns',
-        '/whoami — show your Telegram ID',
-        '/translate text — translate text automatically',
-        '',
-        'Notes:',
-        '- If Gemini quota is exhausted, the bot will show a short cooldown message.',
-        '- If fallback models are configured, the bot will try another model automatically.',
-        '- Long-term memory and current chat context are separate.'
-      ].join('\n');
+    const helpText =
+      locale === 'en'
+        ? [
+            'Help',
+            '',
+            'Just type naturally. Examples:',
+            '- What happened in Malaysia today?',
+            '- Will it rain in Kuala Lumpur?',
+            '- Summarize this page: https://example.com',
+            '- Translate “I miss you” to Khmer',
+            '- Explain this error log',
+            '',
+            'Bottom buttons:',
+            'Help / Settings / Admin / Exit mode'
+          ].join('\n')
+        : [
+            '帮助',
+            '',
+            '直接输入就行，不用记指令。例如：',
+            '- 今天马来西亚有什么新闻',
+            '- 吉隆坡会不会下雨',
+            '- 这个网页讲什么 https://example.com',
+            '- 把“我很担心你”翻成高棉语',
+            '- 帮我看这个报错怎么修',
+            '',
+            '底部按钮只做辅助：',
+            '帮助 / 设置 / 管理 / 退出模式'
+          ].join('\n');
 
-      await sendTextReply(ctx, helpText, this.config.maxOutputChars, this.createMenuKeyboard(locale));
-      return;
-    }
-
-    const helpText = [
-      '🆘 帮助',
-      '',
-      '主菜单：',
-      '💬 对话 —— 直接发问题就行。',
-      '🌍 翻译 —— 先选目标语言，再发送要翻译的内容。',
-      '🧠 记忆 —— 查看当前记忆、当前话题、话题列表，或清空记忆。',
-      '🤖 模型 —— 查看并切换可用 AI 模型。',
-      '🧹 清空 —— 可选择清空当前上下文、长期记忆，或全部清空。',
-      '🆘 帮助 —— 显示这个页面。',
-      '',
-      '回复下方按钮：',
-      '🔄 重生成 —— 重新生成上一条回答。',
-      '🧠 模型 —— 切换后续回复使用的模型。',
-      '🌍 翻译 —— 把这条回复翻译成指定语言。',
-      '❤️ 收藏 —— 保存这条回复。',
-      '🗑 上下文 —— 清空当前对话上下文。',
-      '',
-      '常用命令：',
-      '/start —— 显示主菜单',
-      '/help —— 显示帮助',
-      '/status —— 管理员专用：查看 Bot 状态、模型、额度冷却',
-      '/whoami —— 查看你的 Telegram 用户 ID',
-      '/translate 文本 —— 自动翻译文本',
-      '',
-      '说明：',
-      '- Gemini 额度用完时，Bot 会显示简洁冷却提示。',
-      '- 如果配置了备用模型，Bot 会自动尝试切换模型。',
-      '- 长期记忆和当前对话上下文是分开的。'
-    ].join('\n');
-
-    await sendTextReply(ctx, helpText, this.config.maxOutputChars, this.createMenuKeyboard(locale));
+    await sendTextReply(ctx, helpText, this.config.maxOutputChars, this.createBottomKeyboard(locale));
   }
 
 
