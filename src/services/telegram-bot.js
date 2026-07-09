@@ -931,7 +931,10 @@ export class TelegramAIBot {
         Markup.button.callback(this.ui(locale, 'settings'), 'menu:settings')
       ],
       [
-        Markup.button.callback(this.ui(locale, 'admin'), 'menu:admin'),
+        Markup.button.callback(this.t(locale, 'buttonToolbox'), 'menu:toolbox'),
+        Markup.button.callback(this.ui(locale, 'admin'), 'menu:admin')
+      ],
+      [
         Markup.button.callback(this.ui(locale, 'close'), 'menu:close')
       ]
     ]);
@@ -973,14 +976,53 @@ export class TelegramAIBot {
   }
 
   createToolboxKeyboard(locale = 'zh') {
+    const labels =
+      locale === 'en'
+        ? {
+            web: 'Web search',
+            translate: 'Translate',
+            image: 'Image',
+            voice: 'Voice',
+            file: 'File',
+            memory: 'Memory',
+            clear: 'Clear memory',
+            settings: this.ui(locale, 'settings'),
+            main: this.ui(locale, 'mainMenu'),
+            close: this.ui(locale, 'close')
+          }
+        : {
+            web: '联网搜索',
+            translate: '翻译',
+            image: '图片',
+            voice: '语音',
+            file: '文件',
+            memory: '记忆',
+            clear: '清空记忆',
+            settings: this.ui(locale, 'settings'),
+            main: this.ui(locale, 'mainMenu'),
+            close: this.ui(locale, 'close')
+          };
+
     return Markup.inlineKeyboard([
       [
-        Markup.button.callback(this.ui(locale, 'help'), 'menu:help'),
-        Markup.button.callback(this.ui(locale, 'settings'), 'menu:settings')
+        Markup.button.callback(labels.web, 'toolbox:web'),
+        Markup.button.callback(labels.translate, 'toolbox:translate')
       ],
       [
-        Markup.button.callback(this.ui(locale, 'admin'), 'menu:admin'),
-        Markup.button.callback(this.ui(locale, 'close'), 'menu:close')
+        Markup.button.callback(labels.image, 'toolbox:image'),
+        Markup.button.callback(labels.voice, 'toolbox:voice')
+      ],
+      [
+        Markup.button.callback(labels.file, 'toolbox:file'),
+        Markup.button.callback(labels.memory, 'toolbox:memory')
+      ],
+      [
+        Markup.button.callback(labels.clear, 'toolbox:clear'),
+        Markup.button.callback(labels.settings, 'toolbox:settings')
+      ],
+      [
+        Markup.button.callback(labels.main, 'toolbox:back'),
+        Markup.button.callback(labels.close, 'toolbox:close')
       ]
     ]);
   }
@@ -1062,7 +1104,10 @@ export class TelegramAIBot {
     const buttons = this.config.availableModels.map((model) =>
       Markup.button.callback(model === currentModel ? `✅ ${model}` : model, `set_model:${model}`)
     );
-    return Markup.inlineKeyboard(chunkItems(buttons, 2));
+    return Markup.inlineKeyboard([
+      ...chunkItems(buttons, 2),
+      [Markup.button.callback('返回主菜单 / Main menu', 'menu:back')]
+    ]);
   }
 
   createPersonaKeyboard(currentPersona) {
@@ -1072,7 +1117,10 @@ export class TelegramAIBot {
         `set_persona:${persona}`
       )
     );
-    return Markup.inlineKeyboard(chunkItems(buttons, 2));
+    return Markup.inlineKeyboard([
+      ...chunkItems(buttons, 2),
+      [Markup.button.callback('返回主菜单 / Main menu', 'menu:back')]
+    ]);
   }
 
   createLanguageKeyboard(currentLanguage) {
@@ -1083,7 +1131,10 @@ export class TelegramAIBot {
         `set_language:${code}`
       )
     );
-    return Markup.inlineKeyboard(chunkItems(buttons, 2));
+    return Markup.inlineKeyboard([
+      ...chunkItems(buttons, 2),
+      [Markup.button.callback('返回主菜单 / Main menu', 'menu:back')]
+    ]);
   }
 
   createMemoryPanelKeyboard(locale = 'zh') {
@@ -1092,7 +1143,8 @@ export class TelegramAIBot {
       [Markup.button.callback(this.t(locale, 'memoryViewTopic'), 'memory_pick:topic')],
       [Markup.button.callback(this.t(locale, 'memoryViewTopics'), 'memory_pick:topics')],
       [Markup.button.callback(this.t(locale, 'memoryClearAction'), 'memory_pick:clear')],
-      [Markup.button.callback(this.t(locale, 'memoryCancel'), 'memory_pick:cancel')]
+      [Markup.button.callback(this.t(locale, 'memoryCancel'), 'memory_pick:cancel')],
+      [Markup.button.callback(locale === 'en' ? 'Main menu' : '返回主菜单', 'menu:back')]
     ]);
   }
 
@@ -1101,7 +1153,8 @@ export class TelegramAIBot {
       [Markup.button.callback(this.t(locale, 'clearShortMemory'), 'clear_pick:short')],
       [Markup.button.callback(this.t(locale, 'clearLongMemory'), 'clear_pick:long')],
       [Markup.button.callback(this.t(locale, 'clearAllMemory'), 'clear_pick:all')],
-      [Markup.button.callback(this.t(locale, 'clearCancel'), 'clear_pick:cancel')]
+      [Markup.button.callback(this.t(locale, 'clearCancel'), 'clear_pick:cancel')],
+      [Markup.button.callback(locale === 'en' ? 'Main menu' : '返回主菜单', 'menu:back')]
     ]);
   }
 
@@ -1172,7 +1225,8 @@ export class TelegramAIBot {
       [
         Markup.button.callback('繁体中文', 'translate_pick:zh_hant'),
         Markup.button.callback(locale === 'en' ? 'Auto' : '自动判断', 'translate_pick:auto')
-      ]
+      ],
+      [Markup.button.callback(locale === 'en' ? 'Main menu' : '返回主菜单', 'menu:back')]
     ]);
   }
 
@@ -1621,7 +1675,7 @@ export class TelegramAIBot {
         }
       });
 
-      const result = completion.result;
+      const result = this.normalizeAiResult(completion.result);
       await sendTextReply(ctx, result.text || this.t(locale, 'noReply'), this.config.maxOutputChars);
     } catch (error) {
       if (this.isAiQuotaError(error)) {
@@ -1794,7 +1848,7 @@ export class TelegramAIBot {
         }
       });
 
-      const result = completion.result;
+      const result = this.normalizeAiResult(completion.result);
       const parsed = this.extractJsonObject(result.text || '');
       if (!parsed || typeof parsed !== 'object') return { intent: 'chat' };
 
@@ -1884,6 +1938,35 @@ export class TelegramAIBot {
     );
   }
 
+  isAiTransientError(error) {
+    const raw = String(error?.message || error || '').toLowerCase();
+    return (
+      /\b(500|502|503|504)\b/.test(raw) ||
+      raw.includes('fetch failed') ||
+      raw.includes('network') ||
+      raw.includes('timeout') ||
+      raw.includes('timed out') ||
+      raw.includes('abort') ||
+      raw.includes('econnreset') ||
+      raw.includes('enotfound') ||
+      raw.includes('eai_again') ||
+      raw.includes('temporarily unavailable') ||
+      raw.includes('service unavailable') ||
+      raw.includes('overloaded') ||
+      raw.includes('upstream')
+    );
+  }
+
+  normalizeAiResult(result, fallbackMessages = []) {
+    const safe = result && typeof result === 'object' ? result : {};
+    const text = typeof safe.text === 'string' ? safe.text : String(safe.text || '');
+    return {
+      ...safe,
+      text,
+      messages: Array.isArray(safe.messages) ? safe.messages : fallbackMessages
+    };
+  }
+
   getAiCooldownKey(scope = 'ai', model = '') {
     return `${String(scope || 'ai')}:${String(model || this.config.defaultModel || 'default')}`;
   }
@@ -1908,8 +1991,8 @@ export class TelegramAIBot {
     };
   }
 
-  setAiCooldown(scope = 'ai', model = '', error = null) {
-    const retrySeconds = this.extractRetrySecondsFromError(error) || 60;
+  setAiCooldown(scope = 'ai', model = '', error = null, fallbackSeconds = 60) {
+    const retrySeconds = this.extractRetrySecondsFromError(error) || fallbackSeconds;
     const safeSeconds = Math.max(10, Math.min(retrySeconds, 300));
     const key = this.getAiCooldownKey(scope, model);
 
@@ -1971,6 +2054,7 @@ export class TelegramAIBot {
     const candidates = this.buildAiModelCandidates(model);
     const skippedCooldowns = [];
     let lastQuotaError = null;
+    let lastTransientError = null;
 
     for (const candidate of candidates) {
       const cooldown = this.getAiCooldown(scope, candidate);
@@ -1986,7 +2070,7 @@ export class TelegramAIBot {
         });
 
         return {
-          result,
+          result: this.normalizeAiResult(result, request.messages || []),
           model: candidate
         };
       } catch (error) {
@@ -2001,6 +2085,17 @@ export class TelegramAIBot {
           continue;
         }
 
+        if (this.isAiTransientError(error)) {
+          lastTransientError = error;
+          this.setAiCooldown(scope, candidate, error, 20);
+          this.logger.warn('AI model temporarily unavailable, trying fallback model', {
+            scope,
+            model: candidate,
+            error: this.formatLogError(error)
+          });
+          continue;
+        }
+
         throw error;
       }
     }
@@ -2008,8 +2103,13 @@ export class TelegramAIBot {
     const retrySeconds = Math.max(
       1,
       ...skippedCooldowns.map((item) => Number(item.retrySeconds || 0)),
-      this.extractRetrySecondsFromError(lastQuotaError) || 60
+      this.extractRetrySecondsFromError(lastTransientError) || (lastTransientError ? 20 : 0),
+      this.extractRetrySecondsFromError(lastQuotaError) || (lastQuotaError ? 60 : 0)
     );
+
+    if (lastTransientError && !lastQuotaError) {
+      throw new Error(`AI service temporarily unavailable. Please retry in ${retrySeconds}s.`);
+    }
 
     throw new Error(`AI quota exceeded. Please retry in ${retrySeconds}s.`);
   }
@@ -2076,6 +2176,16 @@ export class TelegramAIBot {
       lower.includes('abort')
     ) {
       return t.timeout;
+    }
+
+    if (
+      /\b(500|502|503|504)\b/.test(raw) ||
+      lower.includes('temporarily unavailable') ||
+      lower.includes('service unavailable') ||
+      lower.includes('overloaded') ||
+      lower.includes('upstream')
+    ) {
+      return `${t.network}\n${t.retry}`;
     }
 
     if (
@@ -2198,6 +2308,27 @@ export class TelegramAIBot {
     }
   }
 
+  async handleUnknownCallback(ctx) {
+    const locale = this.getLocale(ctx);
+    const message =
+      locale === 'en'
+        ? 'This button is no longer available. Please open the menu again.'
+        : '这个按钮可能已过期，请重新打开菜单。';
+
+    this.logger?.warn?.('Unknown callback query', {
+      chatId: ctx.chat?.id,
+      data: String(ctx.callbackQuery?.data || '').slice(0, 120)
+    });
+
+    try {
+      await ctx.answerCbQuery(message.slice(0, 180));
+    } catch {
+      // Telegram may reject very old callback queries; still send a visible reply.
+    }
+
+    await ctx.reply(message, this.createMenuKeyboard(locale));
+  }
+
   async withCompactCallbackReply(ctx, handler) {
     const originalReply = ctx.reply.bind(ctx);
     let editedOnce = false;
@@ -2244,6 +2375,32 @@ export class TelegramAIBot {
 
     try {
       return await handler();
+    } catch (error) {
+      const locale = this.getLocale(ctx);
+      const message = this.formatUserFacingError(error, locale);
+
+      this.logger.error('Callback handler error', {
+        chatId: ctx.chat?.id,
+        data: String(ctx.callbackQuery?.data || '').slice(0, 120),
+        error: this.formatLogError(error)
+      });
+
+      try {
+        await ctx.answerCbQuery(message.slice(0, 180));
+      } catch {
+        // Ignore callback answer failures for expired callback queries.
+      }
+
+      try {
+        await originalReply(message, this.createMenuKeyboard(locale));
+      } catch (replyError) {
+        this.logger.warn('Failed to send callback error reply', {
+          chatId: ctx.chat?.id,
+          error: this.formatLogError(replyError)
+        });
+      }
+
+      return null;
     } finally {
       ctx.reply = originalReply;
     }
@@ -2386,6 +2543,7 @@ export class TelegramAIBot {
     this.bot.action(/^settings_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleSettingsCallback(ctx)));
     this.bot.action(/^mode:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleModeCallback(ctx)));
     this.bot.action(/^act:/, (ctx) => this.handleAssistantActionCallback(ctx));
+    this.bot.on('callback_query', (ctx) => this.handleUnknownCallback(ctx));
   }
 
   isAdmin(ctx) {
@@ -2996,7 +3154,7 @@ export class TelegramAIBot {
 
       await sendTextReply(
         ctx,
-        `${title}\n\n${completion.result.text || this.t(locale, 'noReply')}`,
+        `${title}\n\n${this.normalizeAiResult(completion.result).text || this.t(locale, 'noReply')}`,
         this.config.maxOutputChars,
         this.createMenuKeyboard(locale)
       );
@@ -4006,6 +4164,25 @@ export class TelegramAIBot {
       return;
     }
 
+    if (target === 'settings') {
+      await this.handleSettingsOverview(ctx);
+      return;
+    }
+
+    if (target === 'back') {
+      await this.handleMenu(ctx);
+      return;
+    }
+
+    if (target === 'close') {
+      try {
+        await ctx.deleteMessage();
+      } catch {
+        await ctx.reply(locale === 'en' ? 'Menu closed.' : '菜单已关闭。');
+      }
+      return;
+    }
+
     if (target === 'admin') {
       await ctx.reply(locale === 'en' ? '🛠 Admin panel' : '🛠 管理员面板', this.createAdminActionKeyboard(locale));
       return;
@@ -4393,7 +4570,7 @@ export class TelegramAIBot {
         tools: []
       }
     });
-    const result = completion.result;
+    const result = this.normalizeAiResult(completion.result);
     return result.text || '';
   }
 
@@ -4432,12 +4609,13 @@ export class TelegramAIBot {
         }
       }
     });
-    const result = completion.result;
+    const result = this.normalizeAiResult(completion.result, [state.systemMessage, ...(state.historyBefore || []), state.preparedMessage]);
     await this.db.setConversation(
       state.sessionId,
       buildConversationHistory(
         result.messages.filter((item) => item.role !== 'system'),
-        this.config.maxHistoryMessages
+        this.config.maxHistoryMessages,
+        this.config.maxContextChars
       )
     );
     state.model = model;
@@ -4837,7 +5015,7 @@ export class TelegramAIBot {
         }
       });
 
-      const result = completion.result;
+      const result = this.normalizeAiResult(completion.result, messages);
       activeAiModel = completion.model || model;
 
       await this.db.incrementStats('messagesHandled');
