@@ -68,7 +68,8 @@ test('BotDatabase imports legacy JSON data into SQLite', async (t) => {
   assert.equal(db.findChat('200')?.triggerMode, 'mention');
   assert.deepEqual(db.getConversation('200:100:main'), [{ role: 'user', content: 'hello' }]);
   assert.equal(db.getStats().aiCalls, 4);
-  assert.equal(db.getMeta('schemaVersion'), '3');
+  assert.equal(db.getMeta('schemaVersion'), '4');
+  db.db.close();
 });
 
 test('BotDatabase provides RBAC, feature flags, policy rules and audit logs', async (t) => {
