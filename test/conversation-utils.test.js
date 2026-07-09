@@ -51,3 +51,27 @@ test('buildConversationHistory preserves complete tool bundles', () => {
   assert.equal(history[2].role, 'tool');
   assert.equal(history[3].content, 'answer');
 });
+
+test('buildConversationHistory applies a character budget without orphaning tool results', () => {
+  const history = buildConversationHistory(
+    [
+      { role: 'user', content: 'old '.repeat(100) },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'web_search', arguments: '{}' } }]
+      },
+      { role: 'tool', tool_call_id: 'call-1', content: '{"result":"' + 'x'.repeat(300) + '"}' },
+      { role: 'assistant', content: 'A concise recent answer.' },
+      { role: 'user', content: 'A recent follow-up.' }
+    ],
+    32,
+    160
+  );
+
+  assert.deepEqual(history, [
+    { role: 'assistant', content: 'A concise recent answer.' },
+    { role: 'user', content: 'A recent follow-up.' }
+  ]);
+  assert.equal(history.some((message) => message.role === 'tool'), false);
+});

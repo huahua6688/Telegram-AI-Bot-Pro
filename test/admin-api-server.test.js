@@ -15,7 +15,6 @@ function logger() {
 test('Admin API authenticates token and enforces RBAC', async (t) => {
   ensureBuiltInAIProvidersRegistered();
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-ai-bot-pro-admin-api-'));
-  t.after(() => fs.rm(tempDir, { recursive: true, force: true }));
 
   const db = new BotDatabase(path.join(tempDir, 'bot-data.db'));
   await db.init();
@@ -39,7 +38,13 @@ test('Admin API authenticates token and enforces RBAC', async (t) => {
   };
   const accessControl = new AccessControlService({ config, db, logger: logger() });
   const server = startAdminApiServer({ config, db, logger: logger(), accessControl, port: 0 });
-  t.after(() => server?.close());
+  t.after(async () => {
+    if (server) {
+      await new Promise((resolve) => server.close(resolve));
+    }
+    db.close();
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
   const port = server.address().port;
 
   const unauthorized = await fetch(`http://127.0.0.1:${port}/admin/api/v1/users`);

@@ -12,12 +12,23 @@ function logger() {
   return { info() {}, warn() {}, error() {}, debug() {} };
 }
 
+function closeServer(server) {
+  if (!server) return Promise.resolve();
+  return new Promise((resolve) => server.close(() => resolve()));
+}
+
 test('fault injection: admin api returns 500 for injected db fault and recovers', async (t) => {
   ensureBuiltInAIProvidersRegistered();
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-ai-bot-pro-fault-'));
-  t.after(() => fs.rm(tempDir, { recursive: true, force: true }));
+  let db;
+  let server;
+  t.after(async () => {
+    await closeServer(server);
+    db?.close?.();
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
 
-  const db = new BotDatabase(path.join(tempDir, 'bot-data.db'));
+  db = new BotDatabase(path.join(tempDir, 'bot-data.db'));
   await db.init();
   await db.upsertUser({ id: 5001, username: 'admin', first_name: 'Admin', language_code: 'en' });
   db.setUserRoles('5001', ['admin']);
@@ -37,8 +48,7 @@ test('fault injection: admin api returns 500 for injected db fault and recovers'
   };
 
   const accessControl = new AccessControlService({ config, db, logger: logger() });
-  const server = startAdminApiServer({ config, db, logger: logger(), accessControl, port: 0 });
-  t.after(() => server?.close());
+  server = startAdminApiServer({ config, db, logger: logger(), accessControl, port: 0 });
 
   const port = server.address().port;
   const authHeader = ['Bearer', config.adminApiToken].join(' ');
@@ -62,19 +72,25 @@ test('fault injection: admin api returns 500 for injected db fault and recovers'
 
 test('fault injection: sqlite state survives process restart', async (t) => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-ai-bot-pro-restart-'));
-  t.after(() => fs.rm(tempDir, { recursive: true, force: true }));
+  let first;
+  let second;
+  t.after(async () => {
+    first?.close?.();
+    second?.close?.();
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
 
   const databaseFile = path.join(tempDir, 'bot-data.db');
-  const first = new BotDatabase(databaseFile);
+  first = new BotDatabase(databaseFile);
   await first.init();
   await first.setConversation('3:8:main', [
     { role: 'user', content: 'before restart' },
     { role: 'assistant', content: 'persist me' }
   ]);
   await first.write();
-  first.db.close();
+  first.close();
 
-  const second = new BotDatabase(databaseFile);
+  second = new BotDatabase(databaseFile);
   await second.init();
   const conversation = second.getConversation('3:8:main');
   assert.equal(conversation.length, 2);

@@ -98,9 +98,15 @@ export async function createApplication() {
         });
       },
       async stop(signal) {
-        healthServer.close();
-        adminServer?.close();
-        await bot.stop(signal);
+        try {
+          await bot.stop(signal);
+        } finally {
+          await Promise.all([
+            new Promise((resolve) => healthServer.close(resolve)),
+            adminServer ? new Promise((resolve) => adminServer.close(resolve)) : Promise.resolve()
+          ]);
+          db.close?.();
+        }
       }
     };
   } catch (error) {

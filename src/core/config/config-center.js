@@ -72,6 +72,7 @@ function toProfile(rawConfig) {
     },
     limits: {
       maxHistoryMessages: rawConfig.maxHistoryMessages,
+      maxContextChars: rawConfig.maxContextChars,
       maxInputChars: rawConfig.maxInputChars,
       maxOutputChars: rawConfig.maxOutputChars,
       rateLimitWindowMs: rawConfig.rateLimitWindowMs,

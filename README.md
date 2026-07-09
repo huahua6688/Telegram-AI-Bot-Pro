@@ -222,6 +222,7 @@ npm run dev
 | `ENABLE_STREAMING_REPLIES` | 是否启用流式输出 | `true` |
 | `STREAMING_EDIT_INTERVAL_MS` | 流式编辑间隔（毫秒） | `350` |
 | `MAX_HISTORY_MESSAGES` | 单会话最大历史消息条数 | `32` |
+| `MAX_CONTEXT_CHARS` | 发送给模型的历史上下文字符预算 | `48000` |
 | `MAX_INPUT_CHARS` / `MAX_OUTPUT_CHARS` | 输入/输出字符上限 | `12000` / `3500` |
 | `REQUEST_TIMEOUT_MS` | 请求超时（毫秒） | `120000` |
 | `DATABASE_FILE` | SQLite 数据库文件 | `./data/bot-data.db` |

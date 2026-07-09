@@ -18,6 +18,7 @@ export function validateConfig(raw) {
   ensure(Boolean(raw.aiProvider), 'AI provider is required.', { key: 'AI_PROVIDER' });
   ensure(Boolean(raw.defaultModel), 'AI model is required.', { key: 'AI_MODEL' });
   ensure(raw.maxHistoryMessages > 0, 'MAX_HISTORY_MESSAGES must be greater than zero.');
+  ensure(raw.maxContextChars > 0, 'MAX_CONTEXT_CHARS must be greater than zero.');
   ensure(raw.maxInputChars > 0, 'MAX_INPUT_CHARS must be greater than zero.');
   ensure(raw.maxOutputChars > 0, 'MAX_OUTPUT_CHARS must be greater than zero.');
   ensure(raw.requestTimeoutMs > 0, 'REQUEST_TIMEOUT_MS must be greater than zero.');

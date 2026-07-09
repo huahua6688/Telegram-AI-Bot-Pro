@@ -7,7 +7,6 @@ import { BotDatabase } from '../src/db.js';
 
 test('BotDatabase imports legacy JSON data into SQLite', async (t) => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-ai-bot-pro-db-'));
-  t.after(() => fs.rm(tempDir, { recursive: true, force: true }));
 
   const databaseFile = path.join(tempDir, 'bot-data.db');
   const legacyFile = path.join(tempDir, 'bot-data.json');
@@ -62,6 +61,10 @@ test('BotDatabase imports legacy JSON data into SQLite', async (t) => {
   );
 
   const db = new BotDatabase(databaseFile, legacyFile);
+  t.after(() => {
+    db.close();
+    return fs.rm(tempDir, { recursive: true, force: true });
+  });
   await db.init();
 
   assert.equal(db.findUser('100')?.username, 'alice');
@@ -69,14 +72,16 @@ test('BotDatabase imports legacy JSON data into SQLite', async (t) => {
   assert.deepEqual(db.getConversation('200:100:main'), [{ role: 'user', content: 'hello' }]);
   assert.equal(db.getStats().aiCalls, 4);
   assert.equal(db.getMeta('schemaVersion'), '4');
-  db.db.close();
 });
 
 test('BotDatabase provides RBAC, feature flags, policy rules and audit logs', async (t) => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-ai-bot-pro-db-'));
-  t.after(() => fs.rm(tempDir, { recursive: true, force: true }));
 
   const db = new BotDatabase(path.join(tempDir, 'bot-data.db'));
+  t.after(() => {
+    db.close();
+    return fs.rm(tempDir, { recursive: true, force: true });
+  });
   await db.init();
   await db.upsertUser({ id: 77, username: 'rbac-user', first_name: 'Rbac', language_code: 'en' });
 
@@ -116,9 +121,12 @@ test('BotDatabase provides RBAC, feature flags, policy rules and audit logs', as
 
 test('BotDatabase persists updates, quota counters, and favorites', async (t) => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-ai-bot-pro-db-'));
-  t.after(() => fs.rm(tempDir, { recursive: true, force: true }));
 
   const db = new BotDatabase(path.join(tempDir, 'bot-data.db'));
+  t.after(() => {
+    db.close();
+    return fs.rm(tempDir, { recursive: true, force: true });
+  });
   await db.init();
   await db.upsertUser({ id: 1, username: 'tester', first_name: 'Test', language_code: 'zh-CN' });
   await db.upsertChat({ id: 2, type: 'private', title: '' }, { triggerMode: 'smart', keyword: 'ai' });
@@ -158,9 +166,12 @@ test('BotDatabase persists updates, quota counters, and favorites', async (t) =>
 
 test('BotDatabase tracks assistant regenerate message versions', async (t) => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-ai-bot-pro-db-'));
-  t.after(() => fs.rm(tempDir, { recursive: true, force: true }));
 
   const db = new BotDatabase(path.join(tempDir, 'bot-data.db'));
+  t.after(() => {
+    db.close();
+    return fs.rm(tempDir, { recursive: true, force: true });
+  });
   await db.init();
 
   const sessionId = '200:100:main';
@@ -188,9 +199,12 @@ test('BotDatabase tracks assistant regenerate message versions', async (t) => {
 
 test('BotDatabase supports multi-session lifecycle and prompts', async (t) => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-ai-bot-pro-db-'));
-  t.after(() => fs.rm(tempDir, { recursive: true, force: true }));
 
   const db = new BotDatabase(path.join(tempDir, 'bot-data.db'));
+  t.after(() => {
+    db.close();
+    return fs.rm(tempDir, { recursive: true, force: true });
+  });
   await db.init();
 
   await db.setConversation('300:9:main', [{ role: 'user', content: 'hello' }]);
@@ -235,9 +249,12 @@ test('BotDatabase supports multi-session lifecycle and prompts', async (t) => {
 
 test('BotDatabase migration from legacy conversations to structured history is idempotent', async (t) => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-ai-bot-pro-db-'));
-  t.after(() => fs.rm(tempDir, { recursive: true, force: true }));
 
   const db = new BotDatabase(path.join(tempDir, 'bot-data.db'));
+  t.after(() => {
+    db.close();
+    return fs.rm(tempDir, { recursive: true, force: true });
+  });
   await db.init();
 
   await db.setConversation('888:7:main', [
