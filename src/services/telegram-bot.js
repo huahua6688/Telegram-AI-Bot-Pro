@@ -13,6 +13,7 @@ import { DocumentParser } from './document-parser.js';
 import { MultimodalActionService } from './multimodal-action-service.js';
 import { AudioOrchestrator } from './audio-orchestrator.js';
 import { MemoryManager } from './memory-manager.js';
+import { tryHandleNaturalAgent } from './natural-agent.js';
 import { tryHandleProductAgentRoute } from './product-agent.js';
 
 const LANGUAGE_NAMES = {
@@ -4527,6 +4528,8 @@ export class TelegramAIBot {
     const locale = this.getLocale(ctx, user);
 
     if (await this.handleBottomKeyboardAction(ctx)) return;
+
+    if (await tryHandleNaturalAgent(this, ctx)) return;
 
     if (await tryHandleProductAgentRoute(this, ctx)) return;
 
