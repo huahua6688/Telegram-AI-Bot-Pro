@@ -13,6 +13,7 @@ import { DocumentParser } from './document-parser.js';
 import { MultimodalActionService } from './multimodal-action-service.js';
 import { AudioOrchestrator } from './audio-orchestrator.js';
 import { MemoryManager } from './memory-manager.js';
+import { tryHandleProductAgentRoute } from './product-agent.js';
 
 const LANGUAGE_NAMES = {
   zh: '中文',
@@ -2643,30 +2644,6 @@ export class TelegramAIBot {
     const user = this.db.findUser(ctx.from.id);
     const locale = this.getLocale(ctx, user);
 
-    const directText = String(text || '').trim();
-
-    if (/^(你能做什么|你会什么|有什么功能|怎么用|帮助|help|what can you do)$/i.test(directText)) {
-      await this.handleHelp(ctx);
-      return;
-    }
-
-    const directUrl = directText.match(/https?:\/\/[^\s]+/i)?.[0] || '';
-    if (directUrl) {
-      await this.runUrlFetch(ctx, directUrl);
-      return;
-    }
-
-    const directWeather = directText.match(/^(?:天气|天氣|查天气|查天氣|weather)\s+(.+)$/i);
-    if (directWeather && typeof this.runWeather === 'function') {
-      await this.runWeather(ctx, directWeather[1].trim());
-      return;
-    }
-
-    const directSearch = directText.match(/^(?:搜索|搜一下|联网搜索|上网搜|查一下|web|search)\s+(.+)$/i);
-    if (directSearch) {
-      await this.runWebSearch(ctx, directSearch[1].trim());
-      return;
-    }
     const current = user?.preferredModel || this.config.defaultModel;
     const models = this.config.availableModels.length > 0 ? this.config.availableModels.join(', ') : this.config.defaultModel;
     await ctx.reply(
@@ -4550,6 +4527,8 @@ export class TelegramAIBot {
     const locale = this.getLocale(ctx, user);
 
     if (await this.handleBottomKeyboardAction(ctx)) return;
+
+    if (await tryHandleProductAgentRoute(this, ctx)) return;
 
     const translationRequest = text ? this.parseTranslationRequest(text) : null;
     if (translationRequest) {

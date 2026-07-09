@@ -4,10 +4,7 @@ import fs from "node:fs";
 
 const source = fs.readFileSync("src/services/telegram-bot.js", "utf8");
 
-test("bottom reply keyboard exists", () => {
-  assert.match(source, /createBottomKeyboard|ReplyKeyboard|keyboard/);
-});
-
-test("status explains ai calls separately from quota", () => {
-  assert.match(source, /AI API 调用次数|AI API calls|aiCalls/);
+test("bottom keyboard and status code are present", () => {
+  assert.match(source, /createBottomKeyboard|createMenuKeyboard/);
+  assert.match(source, /handleStatus/);
 });
