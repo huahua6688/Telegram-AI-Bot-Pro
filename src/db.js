@@ -225,6 +225,12 @@ export class BotDatabase {
     this.ensureStatsRow(this.getStats().startedAt || now());
   }
 
+  close() {
+    if (!this.db) return;
+    this.db.close();
+    this.db = null;
+  }
+
   runMigrations() {
     const currentVersion = Number.parseInt(this.getMeta('schemaVersion') || '0', 10) || 0;
     for (let version = currentVersion + 1; version <= CURRENT_SCHEMA_VERSION; version += 1) {

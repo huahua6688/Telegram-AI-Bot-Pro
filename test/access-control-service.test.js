@@ -8,9 +8,12 @@ import { AccessControlService } from '../src/services/access-control-service.js'
 
 test('AccessControlService applies block > allow > default and admin role checks', async (t) => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-ai-bot-pro-access-'));
-  t.after(() => fs.rm(tempDir, { recursive: true, force: true }));
 
   const db = new BotDatabase(path.join(tempDir, 'bot-data.db'));
+  t.after(() => {
+    db.close();
+    return fs.rm(tempDir, { recursive: true, force: true });
+  });
   await db.init();
   await db.upsertUser({ id: 100, username: 'alice', first_name: 'Alice', language_code: 'en' });
   await db.upsertUser({ id: 101, username: 'bob', first_name: 'Bob', language_code: 'en' });

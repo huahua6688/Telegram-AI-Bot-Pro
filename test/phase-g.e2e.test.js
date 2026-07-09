@@ -16,7 +16,6 @@ function logger() {
 test('e2e: provider switch + persistence + admin api flow', async (t) => {
   ensureBuiltInAIProvidersRegistered();
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-ai-bot-pro-e2e-'));
-  t.after(() => fs.rm(tempDir, { recursive: true, force: true }));
 
   const db = new BotDatabase(path.join(tempDir, 'bot-data.db'));
   await db.init();
@@ -45,10 +44,14 @@ test('e2e: provider switch + persistence + admin api flow', async (t) => {
   const accessControl = new AccessControlService({ config, db, logger: logger() });
   const healthServer = startHealthServer({ port: 0, db, config, logger: logger() });
   const adminServer = startAdminApiServer({ config, db, logger: logger(), accessControl, port: 0 });
-  t.after(() => {
-    healthServer.close();
-    adminServer?.close();
+  t.after(async () => {
+    await Promise.all([
+      new Promise((resolve) => healthServer.close(resolve)),
+      adminServer ? new Promise((resolve) => adminServer.close(resolve)) : Promise.resolve()
+    ]);
+    db.close();
   });
+  t.after(() => fs.rm(tempDir, { recursive: true, force: true }));
 
   const healthPort = healthServer.address().port;
   const adminPort = adminServer.address().port;

@@ -8,9 +8,13 @@ import { BotDatabase } from '../src/db.js';
 
 test('load: database handles message burst within baseline threshold', async (t) => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-ai-bot-pro-load-'));
-  t.after(() => fs.rm(tempDir, { recursive: true, force: true }));
+  let db;
+  t.after(async () => {
+    db?.close?.();
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
 
-  const db = new BotDatabase(path.join(tempDir, 'bot-data.db'));
+  db = new BotDatabase(path.join(tempDir, 'bot-data.db'));
   await db.init();
   await db.upsertUser({ id: 1, username: 'load', first_name: 'Load', language_code: 'en' });
   await db.upsertChat({ id: 1, type: 'private', title: '' }, { triggerMode: 'smart', keyword: 'ai' });

@@ -57,7 +57,67 @@ export function sanitizeConversationMessages(messages = []) {
   return sanitized;
 }
 
-export function buildConversationHistory(messages = [], maxMessages = 0) {
-  const limit = maxMessages > 0 ? maxMessages * 3 : messages.length;
-  return sanitizeConversationMessages(messages.slice(-limit));
+function messageCharCost(message = {}) {
+  const content =
+    typeof message.content === 'string'
+      ? message.content
+      : JSON.stringify(message.content || '');
+  const toolCalls = Array.isArray(message.tool_calls)
+    ? JSON.stringify(message.tool_calls)
+    : '';
+  return content.length + toolCalls.length + 24;
+}
+
+function groupConversationMessages(messages = []) {
+  const groups = [];
+
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+
+    if (!isAssistantToolCallMessage(message)) {
+      groups.push([message]);
+      continue;
+    }
+
+    const group = [message];
+    const expectedIds = new Set(
+      message.tool_calls.map((toolCall) => toolCall?.id).filter(Boolean)
+    );
+
+    while (index + 1 < messages.length && messages[index + 1]?.role === 'tool') {
+      const toolMessage = messages[index + 1];
+      if (!expectedIds.has(toolMessage.tool_call_id)) break;
+      group.push(toolMessage);
+      expectedIds.delete(toolMessage.tool_call_id);
+      index += 1;
+    }
+
+    groups.push(group);
+  }
+
+  return groups;
+}
+
+export function buildConversationHistory(messages = [], maxMessages = 0, maxChars = 0) {
+  const sanitized = sanitizeConversationMessages(messages);
+  const groups = groupConversationMessages(sanitized);
+  const messageLimit = maxMessages > 0 ? maxMessages * 3 : Number.POSITIVE_INFINITY;
+  const charLimit = maxChars > 0 ? maxChars : Number.POSITIVE_INFINITY;
+  const selected = [];
+  let selectedMessages = 0;
+  let selectedChars = 0;
+
+  for (let index = groups.length - 1; index >= 0; index -= 1) {
+    const group = groups[index];
+    const groupChars = group.reduce((total, message) => total + messageCharCost(message), 0);
+
+    if (selectedMessages + group.length > messageLimit) break;
+    if (selectedChars + groupChars > charLimit) break;
+
+    selected.unshift(group);
+    selectedMessages += group.length;
+    selectedChars += groupChars;
+  }
+
+  return selected.flat();
 }

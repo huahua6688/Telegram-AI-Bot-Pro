@@ -3,6 +3,15 @@ import { ToolAccessPolicy } from './tool-access-policy.js';
 
 const USER_AGENT = 'Telegram-AI-Bot-Pro';
 
+function toolError(code, message, { retryable = false } = {}) {
+  return JSON.stringify({
+    ok: false,
+    error: code,
+    message,
+    retryable
+  });
+}
+
 async function fetchUrlText(url) {
   const response = await fetch(url, {
     headers: {
@@ -252,14 +261,21 @@ export class ToolRegistry {
   }
 
   async execute(toolCall, context = {}) {
-    const name = toolCall.function.name;
-    const args = JSON.parse(toolCall.function.arguments || '{}');
+    const name = String(toolCall?.function?.name || '').trim();
+    let args;
+
+    try {
+      args = JSON.parse(toolCall?.function?.arguments || '{}');
+    } catch {
+      return toolError('TOOL_ARGS_INVALID', `Arguments for ${name || 'the tool'} were not valid JSON.`);
+    }
+
     const usage = context.toolUsage || { count: 0 };
 
     const decision = this.policy.authorize(name, context);
     this.policy.audit(decision, name, context);
     if (!decision.allowed) {
-      return JSON.stringify({ error: decision.code, message: decision.message });
+      return toolError(decision.code, decision.message);
     }
 
     if (usage.count >= this.config.toolMaxCallsPerMessage) {
@@ -269,7 +285,7 @@ export class ToolRegistry {
         message: `Tool call limit (${this.config.toolMaxCallsPerMessage}) reached for this request.`
       };
       this.policy.audit(limitDecision, name, context);
-      return JSON.stringify({ error: limitDecision.code, message: limitDecision.message });
+      return toolError(limitDecision.code, limitDecision.message);
     }
 
     if (!this.validateArgs(name, args)) {
@@ -279,24 +295,37 @@ export class ToolRegistry {
         message: `Invalid arguments for ${name}.`
       };
       this.policy.audit(invalidDecision, name, context);
-      return JSON.stringify({ error: invalidDecision.code, message: invalidDecision.message });
+      return toolError(invalidDecision.code, invalidDecision.message);
     }
 
-    switch (name) {
-      case 'get_time':
-        usage.count += 1;
-        return JSON.stringify({ utc: new Date().toISOString() });
-      case 'fetch_url':
-        usage.count += 1;
-        return fetchUrlText(args.url);
-      case 'web_search':
-        usage.count += 1;
-        return searchWeb(args.query);
-      case 'get_weather':
-        usage.count += 1;
-        return getWeather(args.location);
-      default:
-        throw new Error(`Unsupported tool: ${name}`);
+    try {
+      switch (name) {
+        case 'get_time':
+          usage.count += 1;
+          return JSON.stringify({ utc: new Date().toISOString() });
+        case 'fetch_url':
+          usage.count += 1;
+          return await fetchUrlText(args.url);
+        case 'web_search':
+          usage.count += 1;
+          return await searchWeb(args.query);
+        case 'get_weather':
+          usage.count += 1;
+          return await getWeather(args.location);
+        default:
+          return toolError('TOOL_NOT_FOUND', `The requested tool "${name}" is not available.`);
+      }
+    } catch (error) {
+      this.logger?.warn?.('Tool execution failed', {
+        tool: name,
+        source: context.source || '',
+        error: String(error?.message || error)
+      });
+      return toolError(
+        'TOOL_EXECUTION_FAILED',
+        'The tool could not complete the request. Try another available approach or explain the limitation.',
+        { retryable: true }
+      );
     }
   }
 }

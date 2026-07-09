@@ -123,6 +123,7 @@ export function loadConfig() {
     enableLiveAudio: parseBoolean(process.env.ENABLE_LIVE_AUDIO, true),
     enableLiveTranslate: parseBoolean(process.env.ENABLE_LIVE_TRANSLATE, true),
     maxHistoryMessages: parseInteger(process.env.MAX_HISTORY_MESSAGES, 32),
+    maxContextChars: parseInteger(process.env.MAX_CONTEXT_CHARS, 48000),
     maxInputChars: parseInteger(process.env.MAX_INPUT_CHARS, 12000),
     maxOutputChars: parseInteger(process.env.MAX_OUTPUT_CHARS, 3500),
     requestTimeoutMs: parseInteger(process.env.REQUEST_TIMEOUT_MS, 120000),
