@@ -25,7 +25,9 @@ DATA_FILE=/data/bot-data.json
 
 BOT_TOKEN=
 AI_PROVIDER=gemini
-AI_MODEL=gemini-2.0-flash
+AI_MODEL=gemini-3.5-flash
+AI_FALLBACK_MODELS=gemini-3.1-flash-lite,gemini-2.5-flash
+ENABLE_GEMINI_GOOGLE_SEARCH=true
 GEMINI_API_KEY=
 DATABASE_FILE=/data/bot-data.db
 PORT=8080

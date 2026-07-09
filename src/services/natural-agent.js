@@ -472,6 +472,10 @@ async function runSearch(bot, ctx, query, originalText = query) {
   const keyword = String(query || '').trim();
 
   if (!keyword) return false;
+  if (typeof bot.runWebSearch === 'function') {
+    await bot.runWebSearch(ctx, keyword);
+    return true;
+  }
 
   try {
     await ctx.sendChatAction('typing');
@@ -717,26 +721,8 @@ export async function tryHandleNaturalAgent(bot, ctx) {
     return true;
   }
 
-  const routed = await classifyNaturally(bot, ctx, text);
-
-  if (routed.action === 'help') {
-    await bot.handleHelp(ctx);
-    return true;
-  }
-
-  if (routed.action === 'translate') {
-    await bot.runTranslation(
-      ctx,
-      routed.text || text,
-      routed.targetLanguage ? bot.normalizeTranslationTarget(routed.targetLanguage) : 'auto'
-    );
-    return true;
-  }
-
-  if (routed.action === 'fetch_url') return runUrl(bot, ctx, routed.url || url, text);
-  if (routed.action === 'weather') return runWeather(bot, ctx, routed.location || routed.query || text, text);
-  if (routed.action === 'web_search') return runSearch(bot, ctx, routed.query || text, text);
-
+  // Keep only deterministic shortcuts here. Ordinary messages are handled by
+  // the main model with conversation history and tools in a single agent loop.
   return false;
 }
 

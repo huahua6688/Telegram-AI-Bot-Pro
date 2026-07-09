@@ -66,6 +66,7 @@ function toProfile(rawConfig) {
     features: {
       toolCalls: rawConfig.enableToolCalls,
       webSearch: rawConfig.enableWebSearch,
+      geminiGoogleSearch: rawConfig.enableGeminiGoogleSearch,
       urlFetch: rawConfig.enableUrlFetch,
       streamingReplies: rawConfig.enableStreamingReplies
     },

@@ -212,6 +212,7 @@ npm run dev
 | `AI_SYSTEM_PROMPT` | 默认系统提示词 | `You are a powerful Telegram AI assistant.` |
 | `ENABLE_TOOL_CALLS` | 是否启用工具调用 | `true` |
 | `ENABLE_WEB_SEARCH` | 是否启用联网搜索 | `true` |
+| `ENABLE_GEMINI_GOOGLE_SEARCH` | Gemini 3+ 是否启用原生 Google Search Grounding | `true` |
 | `ENABLE_URL_FETCH` | 是否允许抓取 URL | `true` |
 | `TOOL_ALLOWED_*` / `TOOL_BLOCKED_*` | 工具调用用户/群组白名单与黑名单 | `TOOL_ALLOWED_USER_IDS=123456,789012` |
 | `TOOL_MAX_CALLS_PER_MESSAGE` | 单次请求工具调用上限 | `4` |
@@ -220,7 +221,7 @@ npm run dev
 | `ENABLE_LIVE_AUDIO` / `ENABLE_LIVE_TRANSLATE` | Live Audio/Translate 编排开关 | `true` / `true` |
 | `ENABLE_STREAMING_REPLIES` | 是否启用流式输出 | `true` |
 | `STREAMING_EDIT_INTERVAL_MS` | 流式编辑间隔（毫秒） | `350` |
-| `MAX_HISTORY_MESSAGES` | 单会话最大历史消息条数 | `16` |
+| `MAX_HISTORY_MESSAGES` | 单会话最大历史消息条数 | `32` |
 | `MAX_INPUT_CHARS` / `MAX_OUTPUT_CHARS` | 输入/输出字符上限 | `12000` / `3500` |
 | `REQUEST_TIMEOUT_MS` | 请求超时（毫秒） | `120000` |
 | `DATABASE_FILE` | SQLite 数据库文件 | `./data/bot-data.db` |
@@ -281,7 +282,9 @@ AI_MODEL=claude-3-5-sonnet-latest
 ```env
 AI_PROVIDER=gemini
 GEMINI_API_KEY=AIza...
-AI_MODEL=gemini-2.0-flash
+AI_MODEL=gemini-3.5-flash
+AI_FALLBACK_MODELS=gemini-3.1-flash-lite,gemini-2.5-flash
+ENABLE_GEMINI_GOOGLE_SEARCH=true
 ```
 
 ### 5) Qwen（通义千问）官方

@@ -60,6 +60,97 @@ async function searchWeb(query) {
   );
 }
 
+function weatherDescription(code) {
+  const descriptions = new Map([
+    [0, 'Clear sky'],
+    [1, 'Mainly clear'],
+    [2, 'Partly cloudy'],
+    [3, 'Overcast'],
+    [45, 'Fog'],
+    [48, 'Rime fog'],
+    [51, 'Light drizzle'],
+    [53, 'Drizzle'],
+    [55, 'Heavy drizzle'],
+    [61, 'Light rain'],
+    [63, 'Rain'],
+    [65, 'Heavy rain'],
+    [71, 'Light snow'],
+    [73, 'Snow'],
+    [75, 'Heavy snow'],
+    [80, 'Rain showers'],
+    [81, 'Rain showers'],
+    [82, 'Heavy rain showers'],
+    [95, 'Thunderstorm'],
+    [96, 'Thunderstorm with hail'],
+    [99, 'Thunderstorm with heavy hail']
+  ]);
+  return descriptions.get(Number(code)) || 'Unknown';
+}
+
+async function getWeather(location) {
+  const geocodingUrl = new URL('https://geocoding-api.open-meteo.com/v1/search');
+  geocodingUrl.searchParams.set('name', location);
+  geocodingUrl.searchParams.set('count', '1');
+  geocodingUrl.searchParams.set('language', 'en');
+  geocodingUrl.searchParams.set('format', 'json');
+
+  const geocodingResponse = await fetch(geocodingUrl, {
+    headers: { 'User-Agent': USER_AGENT }
+  });
+  if (!geocodingResponse.ok) {
+    throw new Error(`Weather location lookup failed (${geocodingResponse.status})`);
+  }
+
+  const place = (await geocodingResponse.json()).results?.[0];
+  if (!place) {
+    return JSON.stringify({ error: 'LOCATION_NOT_FOUND', message: `Location not found: ${location}` });
+  }
+
+  const forecastUrl = new URL('https://api.open-meteo.com/v1/forecast');
+  forecastUrl.searchParams.set('latitude', String(place.latitude));
+  forecastUrl.searchParams.set('longitude', String(place.longitude));
+  forecastUrl.searchParams.set(
+    'current',
+    'temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m'
+  );
+  forecastUrl.searchParams.set(
+    'daily',
+    'weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max'
+  );
+  forecastUrl.searchParams.set('forecast_days', '3');
+  forecastUrl.searchParams.set('timezone', 'auto');
+
+  const forecastResponse = await fetch(forecastUrl, {
+    headers: { 'User-Agent': USER_AGENT }
+  });
+  if (!forecastResponse.ok) {
+    throw new Error(`Weather forecast failed (${forecastResponse.status})`);
+  }
+
+  const data = await forecastResponse.json();
+  const daily = (data.daily?.time || []).map((date, index) => ({
+    date,
+    weather: weatherDescription(data.daily?.weather_code?.[index]),
+    maxC: data.daily?.temperature_2m_max?.[index],
+    minC: data.daily?.temperature_2m_min?.[index],
+    precipitationProbability: data.daily?.precipitation_probability_max?.[index]
+  }));
+
+  return JSON.stringify({
+    location: [place.name, place.admin1, place.country].filter(Boolean).join(', '),
+    timezone: data.timezone,
+    current: {
+      time: data.current?.time,
+      weather: weatherDescription(data.current?.weather_code),
+      temperatureC: data.current?.temperature_2m,
+      apparentTemperatureC: data.current?.apparent_temperature,
+      humidityPercent: data.current?.relative_humidity_2m,
+      windSpeedKmh: data.current?.wind_speed_10m
+    },
+    forecast: daily
+  });
+}
+
 export class ToolRegistry {
   constructor(config, logger, accessControl) {
     this.config = config;
@@ -123,6 +214,25 @@ export class ToolRegistry {
           }
         }
       });
+
+      tools.push({
+        type: 'function',
+        function: {
+          name: 'get_weather',
+          description: 'Get current weather and a three-day forecast for a city or place.',
+          parameters: {
+            type: 'object',
+            properties: {
+              location: {
+                type: 'string',
+                description: 'City or place name, including country when ambiguous.'
+              }
+            },
+            required: ['location'],
+            additionalProperties: false
+          }
+        }
+      });
     }
 
     return tools;
@@ -134,6 +244,9 @@ export class ToolRegistry {
     }
     if (name === 'web_search') {
       return typeof args.query === 'string' && args.query.trim().length > 0;
+    }
+    if (name === 'get_weather') {
+      return typeof args.location === 'string' && args.location.trim().length > 0;
     }
     return true;
   }
@@ -179,6 +292,9 @@ export class ToolRegistry {
       case 'web_search':
         usage.count += 1;
         return searchWeb(args.query);
+      case 'get_weather':
+        usage.count += 1;
+        return getWeather(args.location);
       default:
         throw new Error(`Unsupported tool: ${name}`);
     }

@@ -66,19 +66,57 @@ function stripUnsupportedSchemaFields(schema) {
   };
 }
 
-function mapToolDefinitions(definitions = []) {
-  if (definitions.length === 0) return undefined;
-  return [
-    {
-      functionDeclarations: definitions.map((tool) => ({
+function supportsBuiltInGoogleSearch(model = '') {
+  const match = String(model).match(/^gemini-(\d+)(?:\.|[-_])/i);
+  return Number(match?.[1] || 0) >= 3;
+}
+
+function mapToolDefinitions(definitions = [], { enableGoogleSearch = false } = {}) {
+  const customDefinitions = enableGoogleSearch
+    ? definitions.filter((tool) => tool.function?.name !== 'web_search')
+    : definitions;
+  const tools = [];
+
+  if (customDefinitions.length > 0) {
+    tools.push({
+      functionDeclarations: customDefinitions.map((tool) => ({
         name: tool.function.name,
         description: tool.function.description || '',
         parameters: stripUnsupportedSchemaFields(
           tool.function.parameters || { type: 'object', properties: {} }
         )
       }))
-    }
-  ];
+    });
+  }
+
+  if (enableGoogleSearch) {
+    tools.push({ google_search: {} });
+  }
+
+  return tools.length > 0 ? tools : undefined;
+}
+
+function candidateText(candidate = {}) {
+  return (candidate.content?.parts || [])
+    .filter((part) => typeof part.text === 'string')
+    .map((part) => part.text)
+    .join('\n')
+    .trim();
+}
+
+function appendGroundingSources(text = '', groundingMetadata = null) {
+  const sources = [];
+  for (const chunk of groundingMetadata?.groundingChunks || []) {
+    const url = String(chunk?.web?.uri || '').trim();
+    const title = String(chunk?.web?.title || '').trim();
+    if (!url || sources.some((item) => item.url === url)) continue;
+    sources.push({ title: title || url, url });
+    if (sources.length >= 5) break;
+  }
+
+  if (sources.length === 0) return text;
+  const references = sources.map((source, index) => `${index + 1}. ${source.title} — ${source.url}`);
+  return `${text}\n\nSources:\n${references.join('\n')}`.trim();
 }
 
 export class GeminiClient {
@@ -111,10 +149,18 @@ export class GeminiClient {
     }
   }
 
-  toGeminiPayload(messages, tools = [], temperature = this.config.temperature) {
+  toGeminiPayload(messages, tools = [], temperature = this.config.temperature, model = '') {
     const systemParts = [];
     const contents = [];
     const toolCallNameMap = new Map();
+    const hasWebSearchTool = tools.some((tool) => tool.function?.name === 'web_search');
+    const enableGoogleSearch =
+      Boolean(this.config.enableGeminiGoogleSearch) &&
+      Boolean(this.config.enableWebSearch) &&
+      hasWebSearchTool &&
+      supportsBuiltInGoogleSearch(model);
+    const mappedTools = mapToolDefinitions(tools, { enableGoogleSearch });
+    const hasCustomTools = (mappedTools || []).some((tool) => Array.isArray(tool.functionDeclarations));
 
     for (const item of messages) {
       if (item.role === 'system') {
@@ -175,10 +221,10 @@ export class GeminiClient {
     return {
       systemInstruction: systemParts.length > 0 ? { parts: [{ text: systemParts.join('\n\n') }] } : undefined,
       contents,
-      tools: mapToolDefinitions(tools),
+      tools: mappedTools,
       generationConfig: { temperature },
       toolConfig:
-        tools.length > 0
+        hasCustomTools
           ? {
               functionCallingConfig: { mode: 'AUTO' }
             }
@@ -187,7 +233,7 @@ export class GeminiClient {
   }
 
   async chatCompletion({ model, messages, tools = [], temperature = this.config.temperature }) {
-    const payload = this.toGeminiPayload(messages, tools, temperature);
+    const payload = this.toGeminiPayload(messages, tools, temperature, model);
     return this.request(model, payload);
   }
 
@@ -202,11 +248,7 @@ export class GeminiClient {
       }
 
       const parts = candidate.content.parts;
-      const text = parts
-        .filter((part) => typeof part.text === 'string')
-        .map((part) => part.text)
-        .join('\n')
-        .trim();
+      const text = appendGroundingSources(candidateText(candidate), candidate.groundingMetadata);
       const toolCalls = parts
         .filter((part) => part.functionCall?.name)
         .map((part, index) => ({
@@ -244,15 +286,54 @@ export class GeminiClient {
     }
 
     const finalResponse = await this.chatCompletion({ model, messages: workingMessages, temperature });
-    const finalText = (finalResponse.candidates?.[0]?.content?.parts || [])
-      .filter((part) => typeof part.text === 'string')
-      .map((part) => part.text)
-      .join('\n')
-      .trim();
+    const finalCandidate = finalResponse.candidates?.[0] || {};
+    const finalText = appendGroundingSources(
+      candidateText(finalCandidate),
+      finalCandidate.groundingMetadata
+    );
     return {
       text: finalText,
       messages: [...workingMessages, { role: 'assistant', content: finalText }],
       raw: finalResponse
+    };
+  }
+
+  async searchWeb({ model = this.config.defaultModel, query = '' } = {}) {
+    const text = String(query || '').trim();
+    if (!text) throw new Error('Search query is required.');
+    if (!supportsBuiltInGoogleSearch(model)) {
+      throw new UnsupportedClientFeatureError('gemini', 'Google Search grounding');
+    }
+
+    const response = await this.chatCompletion({
+      model,
+      messages: [
+        {
+          role: 'system',
+          content: 'Answer with current, verified information. Synthesize the result clearly and do not invent sources.'
+        },
+        { role: 'user', content: text }
+      ],
+      tools: [
+        {
+          type: 'function',
+          function: {
+            name: 'web_search',
+            description: 'Search Google for current information.',
+            parameters: {
+              type: 'object',
+              properties: { query: { type: 'string' } },
+              required: ['query']
+            }
+          }
+        }
+      ],
+      temperature: 0.2
+    });
+    const candidate = response.candidates?.[0] || {};
+    return {
+      text: appendGroundingSources(candidateText(candidate), candidate.groundingMetadata),
+      raw: response
     };
   }
 

@@ -2,7 +2,7 @@ import 'dotenv/config';
 import path from 'node:path';
 
 const personaPresets = {
-  default: 'You are a powerful all-purpose Telegram AI assistant. Be accurate, practical, concise, and proactive when useful.',
+  default: 'You are a capable, context-aware Telegram AI assistant. Understand the user intent before answering, use tools when facts must be current or verified, ask one concise clarifying question when essential information is missing, and give practical answers without pretending to know what you cannot verify.',
   coder: 'You are a senior software engineer assistant. Prefer clear technical reasoning, debugging help, and production-safe advice.',
   translator: 'You are a translation assistant. Preserve meaning, tone, and formatting, and explain ambiguities briefly when useful.',
   teacher: 'You are a patient teacher. Explain step by step, but stay concise and adapt to the user\'s likely level.',
@@ -46,7 +46,7 @@ export function loadConfig() {
   const providerDefaultModels = {
     'openai-compatible': 'gpt-4.1-mini',
     anthropic: 'claude-3-5-sonnet-latest',
-    gemini: 'gemini-2.0-flash',
+    gemini: 'gemini-3.5-flash',
     'gemini-live': 'gemini-2.5-flash-preview-native-audio-dialog',
     qwen: 'qwen-plus',
     grok: 'grok-3-mini-beta',
@@ -96,8 +96,8 @@ export function loadConfig() {
     ttsVoice: process.env.TTS_VOICE || 'alloy',
     translationModel: process.env.TRANSLATION_MODEL || defaultModel,
     routerModel: process.env.ROUTER_MODEL || process.env.TRANSLATION_MODEL || defaultModel,
-    enableAiRouter: parseBoolean(process.env.ENABLE_AI_ROUTER, true),
-    aiRouterMode: process.env.AI_ROUTER_MODE || 'smart',
+    enableAiRouter: parseBoolean(process.env.ENABLE_AI_ROUTER, false),
+    aiRouterMode: process.env.AI_ROUTER_MODE || 'single-pass',
     enableMemorySummary: parseBoolean(process.env.ENABLE_MEMORY_SUMMARY, true),
     memorySummaryInterval: Math.max(1, Number.parseInt(process.env.MEMORY_SUMMARY_INTERVAL || '5', 10) || 5),
     imageModel: process.env.IMAGE_MODEL || 'gpt-image-1',
@@ -107,8 +107,9 @@ export function loadConfig() {
     documentMaxChars: parseInteger(process.env.DOCUMENT_MAX_CHARS, 12000),
     enableToolCalls: parseBoolean(process.env.ENABLE_TOOL_CALLS, true),
     enableWebSearch: parseBoolean(process.env.ENABLE_WEB_SEARCH, true),
+    enableGeminiGoogleSearch: parseBoolean(process.env.ENABLE_GEMINI_GOOGLE_SEARCH, true),
     enableUrlFetch: parseBoolean(process.env.ENABLE_URL_FETCH, true),
-    toolAllowedNames: new Set(parseList(process.env.TOOL_ALLOWED_NAMES || 'get_time,fetch_url,web_search')),
+    toolAllowedNames: new Set(parseList(process.env.TOOL_ALLOWED_NAMES || 'get_time,get_weather,fetch_url,web_search')),
     toolAllowedUserIds: new Set(parseList(process.env.TOOL_ALLOWED_USER_IDS).map(String)),
     toolAllowedChatIds: new Set(parseList(process.env.TOOL_ALLOWED_CHAT_IDS).map(String)),
     toolBlockedUserIds: new Set(parseList(process.env.TOOL_BLOCKED_USER_IDS).map(String)),
@@ -121,7 +122,7 @@ export function loadConfig() {
     networkToolAllowedChatIds: new Set(parseList(process.env.NETWORK_TOOL_ALLOWED_CHAT_IDS).map(String)),
     enableLiveAudio: parseBoolean(process.env.ENABLE_LIVE_AUDIO, true),
     enableLiveTranslate: parseBoolean(process.env.ENABLE_LIVE_TRANSLATE, true),
-    maxHistoryMessages: parseInteger(process.env.MAX_HISTORY_MESSAGES, 16),
+    maxHistoryMessages: parseInteger(process.env.MAX_HISTORY_MESSAGES, 32),
     maxInputChars: parseInteger(process.env.MAX_INPUT_CHARS, 12000),
     maxOutputChars: parseInteger(process.env.MAX_OUTPUT_CHARS, 3500),
     requestTimeoutMs: parseInteger(process.env.REQUEST_TIMEOUT_MS, 120000),
