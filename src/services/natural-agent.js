@@ -105,6 +105,51 @@ function getRecentContext(bot, ctx) {
   }
 }
 
+
+function stripGeneratedReferences(answer = '') {
+  return String(answer || '')
+    .replace(/\n{0,2}(参考链接|参考来源|来源|References|Sources)\s*[:：]?[\s\S]*$/i, '')
+    .trim();
+}
+
+function stripBareUrls(text = '') {
+  return String(text || '')
+    .replace(/https?:\/\/[^\s<>)）]+/g, '')
+    .replace(/$begin:math:text$\\s\*$end:math:text$/g, '')
+    .replace(/（\s*）/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+async function rememberHandledInteraction(bot, ctx, userText = '', assistantText = '', model = '') {
+  try {
+    const sessionId = createSessionId(ctx);
+    const current = Array.isArray(bot.db.getConversation?.(sessionId))
+      ? bot.db.getConversation(sessionId)
+      : [];
+
+    const userContent = String(userText || '').trim();
+    const assistantContent = cleanPlainText(stripBareUrls(stripGeneratedReferences(assistantText))).trim();
+
+    if (!userContent || !assistantContent) return;
+
+    const next = [
+      ...current,
+      { role: 'user', content: userContent },
+      { role: 'assistant', content: truncateText(assistantContent, 8000), model: model || bot.config?.defaultModel || '' }
+    ];
+
+    const maxMessages = Math.max(20, Number(bot.config?.maxHistoryMessages || 20) * 3);
+    await bot.db.setConversation(sessionId, next.slice(-maxMessages));
+  } catch (error) {
+    bot.logger?.warn?.('Failed to remember natural-agent interaction', {
+      error: bot.formatLogError ? bot.formatLogError(error) : String(error?.message || error)
+    });
+  }
+}
+
+
 function hasUsefulToolResult(raw = '') {
   try {
     const data = JSON.parse(String(raw || '').trim());
@@ -220,7 +265,8 @@ function compactToolPayload(raw = '') {
 
 function appendClickableReferences(answer = '', raw = '') {
   const links = extractReferenceLinks(raw);
-  const body = escapeHtml(cleanPlainText(answer));
+  const cleanedAnswer = stripBareUrls(stripGeneratedReferences(answer));
+  const body = escapeHtml(cleanPlainText(cleanedAnswer));
 
   if (!links.length) return body;
 
@@ -353,6 +399,12 @@ async function executeTool(bot, ctx, name, args, source = 'natural_agent') {
   );
 }
 
+
+function modelName(bot) {
+  return bot.config?.routerModel || bot.config?.translationModel || bot.config?.defaultModel || '';
+}
+
+
 async function composeHumanAnswer(bot, ctx, { userText, toolName, raw, title }) {
   const locale = bot.getLocale(ctx);
   const model = bot.config.routerModel || bot.config.translationModel || bot.config.defaultModel;
@@ -457,7 +509,9 @@ async function runSearch(bot, ctx, query, originalText = query) {
       title: '联网搜索结果'
     });
 
-    await replyHtml(ctx, appendClickableReferences(answer, raw), bot.config.maxOutputChars);
+    const finalText = appendClickableReferences(answer, raw);
+    await replyHtml(ctx, finalText, bot.config.maxOutputChars);
+    await rememberHandledInteraction(bot, ctx, originalText, answer, modelName(bot));
     return true;
   } catch (error) {
     await ctx.reply(bot.formatUserFacingError(error, locale));
@@ -493,7 +547,9 @@ async function runUrl(bot, ctx, url, originalText = url) {
       title: '网页摘要'
     });
 
-    await replyHtml(ctx, appendClickableReferences(answer, raw || JSON.stringify({ results: [{ title: '打开网页', url: targetUrl }] })), bot.config.maxOutputChars);
+    const finalText = appendClickableReferences(answer, raw || JSON.stringify({ results: [{ title: '打开网页', url: targetUrl }] }));
+    await replyHtml(ctx, finalText, bot.config.maxOutputChars);
+    await rememberHandledInteraction(bot, ctx, originalText, answer, modelName(bot));
     return true;
   } catch {
     await ctx.reply(locale === 'en' ? 'This page cannot be fetched right now.' : '这个网页暂时抓不到，可能是网站禁止机器人访问。');
@@ -518,7 +574,9 @@ async function runWeather(bot, ctx, location, originalText = location) {
       title: '天气'
     });
 
-    await replyHtml(ctx, appendClickableReferences(answer, raw), bot.config.maxOutputChars);
+    const finalText = appendClickableReferences(answer, raw);
+    await replyHtml(ctx, finalText, bot.config.maxOutputChars);
+    await rememberHandledInteraction(bot, ctx, originalText, answer, modelName(bot));
     return true;
   } catch {
     if (typeof bot.runWeather === 'function') {
@@ -530,6 +588,12 @@ async function runWeather(bot, ctx, location, originalText = location) {
     return true;
   }
 }
+
+
+function isFollowUpOnly(text = '') {
+  return /^(还有吗|还有么|还有没有|继续|接着说|然后呢|那呢|这个呢|它呢|再说点|more|continue)$/i.test(String(text || '').trim());
+}
+
 
 async function classifyNaturally(bot, ctx, text) {
   const locale = bot.getLocale(ctx);
@@ -603,6 +667,11 @@ export async function tryHandleNaturalAgent(bot, ctx) {
   if (typeof bot.getActiveMode === 'function' && bot.getActiveMode(ctx)) return false;
 
   const locale = bot.getLocale(ctx);
+
+  if (isFollowUpOnly(text)) {
+    return false;
+  }
+
   const url = text.match(/https?:\/\/[^\s]+/i)?.[0] || '';
 
   if (url) return runUrl(bot, ctx, url, text);
@@ -672,6 +741,10 @@ export async function tryHandleNaturalAgent(bot, ctx) {
 }
 
 export const naturalAgentInternals = {
+  stripBareUrls,
+  stripGeneratedReferences,
+  rememberHandledInteraction,
+  isFollowUpOnly,
   cleanPlainText,
   getRecentContext,
   hasUsefulToolResult,
