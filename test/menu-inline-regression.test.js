@@ -1,31 +1,50 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import fs from 'node:fs';
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
 
-const source = fs.readFileSync('src/services/telegram-bot.js', 'utf8');
+const bot = fs.readFileSync("src/services/telegram-bot.js", "utf8");
+const agent = fs.readFileSync("src/services/natural-agent.js", "utf8");
 
-function extractBetween(startMarker, endMarker) {
-  const start = source.indexOf(startMarker);
-  assert.notEqual(start, -1, `missing start marker: ${startMarker}`);
-
-  const end = source.indexOf(endMarker, start + startMarker.length);
-  assert.notEqual(end, -1, `missing end marker: ${endMarker}`);
-
-  return source.slice(start, end);
+function methodSlice(source, signature, nextSignature) {
+  const start = source.indexOf(signature);
+  assert.ok(start >= 0, `missing ${signature}`);
+  const end = nextSignature ? source.indexOf(nextSignature, start + signature.length) : -1;
+  return end > start ? source.slice(start, end) : source.slice(start);
 }
 
-test('main menu uses inline buttons attached to the message', () => {
-  const block = extractBetween('  createMenuKeyboard(locale) {', '\n\n  createModelKeyboard');
-
-  assert.match(block, /Markup\.inlineKeyboard\(/);
-  assert.doesNotMatch(block, /Markup\.keyboard\(/);
-  assert.match(block, /menu:chat/);
-  assert.match(block, /menu:translate/);
-  assert.match(block, /menu:models/);
+test("normal messages are owned by natural agent", () => {
+  assert.match(bot, /tryHandleNaturalAgent/);
+  assert.doesNotMatch(bot, /tryHandleProductAgentRoute/);
+  assert.match(agent, /classifyNaturally/);
+  assert.match(agent, /continueFromContext/);
 });
 
-test('main menu callback handler is registered', () => {
-  assert.match(source, /this\.bot\.action\(\/\^menu:\(\.\+\)\$\//);
-  assert.match(source, /async handleMenuCallback\(ctx\)/);
-  assert.match(source, /async handleMenuAction\(ctx, naturalAction/);
+test("visible main menu is minimal", () => {
+  const menu = methodSlice(bot, "createMenuKeyboard", "createSettingsKeyboard");
+  assert.match(menu, /menu:help/);
+  assert.match(menu, /menu:settings/);
+  assert.match(menu, /menu:admin/);
+  assert.match(menu, /menu:close/);
+
+  assert.doesNotMatch(menu, /menu:chat/);
+  assert.doesNotMatch(menu, /menu:translate/);
+  assert.doesNotMatch(menu, /menu:file/);
+  assert.doesNotMatch(menu, /menu:web/);
+  assert.doesNotMatch(menu, /menu:image/);
+  assert.doesNotMatch(menu, /menu:tts/);
+  assert.doesNotMatch(menu, /menu:toolbox/);
+});
+
+test("visible settings menu has no toolbox entry", () => {
+  const settings = methodSlice(bot, "createSettingsKeyboard", "createToolboxKeyboard");
+  assert.doesNotMatch(settings, /settings_pick:toolbox/);
+  assert.doesNotMatch(settings, /toolbox:/);
+});
+
+test("bottom assistant buttons remain minimal", () => {
+  assert.match(bot, /🆘 帮助/);
+  assert.match(bot, /⚙️ 设置/);
+  assert.match(bot, /🛠 管理/);
+  assert.match(bot, /退出模式/);
+  assert.match(bot, /关闭菜单|Close menu/);
 });

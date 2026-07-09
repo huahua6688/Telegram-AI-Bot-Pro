@@ -14,7 +14,6 @@ import { MultimodalActionService } from './multimodal-action-service.js';
 import { AudioOrchestrator } from './audio-orchestrator.js';
 import { MemoryManager } from './memory-manager.js';
 import { tryHandleNaturalAgent } from './natural-agent.js';
-import { tryHandleProductAgentRoute } from './product-agent.js';
 
 const LANGUAGE_NAMES = {
   zh: '中文',
@@ -779,34 +778,15 @@ export class TelegramAIBot {
   }
 
   createMenuKeyboard(locale) {
-    const labels = this.getMenuLabels(locale);
     return Markup.inlineKeyboard([
       [
-        Markup.button.callback(labels.chat, 'menu:chat'),
-        Markup.button.callback(labels.translate, 'menu:translate')
+        Markup.button.callback(locale === 'en' ? '🆘 Help' : '🆘 帮助', 'menu:help'),
+        Markup.button.callback(locale === 'en' ? '⚙️ Settings' : '⚙️ 设置', 'menu:settings')
       ],
       [
-        Markup.button.callback(labels.memory, 'menu:memory'),
-        Markup.button.callback(labels.models, 'menu:models')
-      ],
-      [
-        Markup.button.callback(labels.document, 'menu:file'),
-        Markup.button.callback(labels.web, 'menu:web')
-      ],
-      [
-        Markup.button.callback(labels.image, 'menu:image'),
-        Markup.button.callback(labels.tts, 'menu:tts')
-      ],
-      [
-        Markup.button.callback(labels.admin, 'menu:admin'),
-        Markup.button.callback(labels.toolbox, 'menu:toolbox')
-      ],
-      [Markup.button.callback(locale === 'en' ? '⚙️ Settings' : '⚙️ 设置中心', 'menu:settings')],
-      [
-        Markup.button.callback(labels.reset, 'menu:reset'),
-        Markup.button.callback(labels.help, 'menu:help')
-      ],
-      [Markup.button.callback(locale === 'en' ? '❌ Close menu' : '❌ 关闭菜单', 'menu:close')]
+        Markup.button.callback(locale === 'en' ? '🛠 Admin' : '🛠 管理', 'menu:admin'),
+        Markup.button.callback(locale === 'en' ? '❌ Close menu' : '❌ 关闭菜单', 'menu:close')
+      ]
     ]);
   }
 
@@ -821,10 +801,9 @@ export class TelegramAIBot {
             language: '🌍 Language',
             memory: '🧠 Memory',
             clear: '🧹 Clear',
-            toolbox: '🧰 Toolbox',
             admin: '🛠 Admin',
             main: '⬅️ Main menu',
-            close: '❌ Close'
+            close: '❌ Close menu'
           }
         : {
             overview: '📊 当前设置',
@@ -833,10 +812,9 @@ export class TelegramAIBot {
             language: '🌍 语言',
             memory: '🧠 记忆',
             clear: '🧹 清空',
-            toolbox: '🧰 工具箱',
             admin: '🛠 管理',
             main: '⬅️ 返回主菜单',
-            close: '❌ 关闭'
+            close: '❌ 关闭菜单'
           };
 
     return Markup.inlineKeyboard([
@@ -851,65 +829,24 @@ export class TelegramAIBot {
       ],
       [
         Markup.button.callback(labels.clear, 'settings_pick:clear'),
-        Markup.button.callback(labels.toolbox, 'settings_pick:toolbox')
+        Markup.button.callback(labels.admin, 'settings_pick:admin')
       ],
       [
-        Markup.button.callback(labels.admin, 'settings_pick:admin'),
-        Markup.button.callback(labels.main, 'menu:back')
-      ],
-      [Markup.button.callback(labels.close, 'menu:close')]
+        Markup.button.callback(labels.main, 'menu:back'),
+        Markup.button.callback(labels.close, 'menu:close')
+      ]
     ]);
   }
 
   createToolboxKeyboard(locale = 'zh') {
-    const labels =
-      locale === 'en'
-        ? {
-            web: '🌐 Web search',
-            translate: '🌍 Translate',
-            memory: '🧠 Memory',
-            clear: '🧹 Clear memory',
-            image: '🖼 Image',
-            voice: '🎤 Voice',
-            file: '📎 File',
-            admin: '🛠 Admin',
-            main: '⬅️ Main menu',
-            close: '❌ Close'
-          }
-        : {
-            web: '🌐 联网搜索',
-            translate: '🌍 翻译',
-            memory: '🧠 记忆管理',
-            clear: '🧹 清空记忆',
-            image: '🖼 图片',
-            voice: '🎤 语音',
-            file: '📎 文件',
-            admin: '🛠 管理',
-            main: '⬅️ 返回主菜单',
-            close: '❌ 关闭'
-          };
-
     return Markup.inlineKeyboard([
       [
-        Markup.button.callback(labels.web, 'toolbox:web'),
-        Markup.button.callback(labels.translate, 'toolbox:translate')
+        Markup.button.callback(locale === 'en' ? '🆘 Help' : '🆘 帮助', 'menu:help'),
+        Markup.button.callback(locale === 'en' ? '⚙️ Settings' : '⚙️ 设置', 'menu:settings')
       ],
       [
-        Markup.button.callback(labels.image, 'toolbox:image'),
-        Markup.button.callback(labels.voice, 'toolbox:voice')
-      ],
-      [
-        Markup.button.callback(labels.file, 'toolbox:file'),
-        Markup.button.callback(labels.memory, 'toolbox:memory')
-      ],
-      [
-        Markup.button.callback(labels.clear, 'toolbox:clear'),
-        Markup.button.callback(labels.admin, 'toolbox:admin')
-      ],
-      [Markup.button.callback(locale === 'en' ? '⚙️ Settings' : '⚙️ 设置中心', 'settings_pick:overview')],
-      [
-        Markup.button.callback(labels.main, 'menu:back'),
-        Markup.button.callback(labels.close, 'menu:close')
+        Markup.button.callback(locale === 'en' ? '🛠 Admin' : '🛠 管理', 'menu:admin'),
+        Markup.button.callback(locale === 'en' ? '❌ Close menu' : '❌ 关闭菜单', 'menu:close')
       ]
     ]);
   }
@@ -4487,19 +4424,20 @@ export class TelegramAIBot {
 
     if (await this.handleBottomKeyboardAction(ctx)) return;
 
-    if (await tryHandleNaturalAgent(this, ctx)) return;
-
-    if (await tryHandleProductAgentRoute(this, ctx)) return;
-
-    const translationRequest = text ? this.parseTranslationRequest(text) : null;
-    if (translationRequest) {
-      return this.runTranslation(ctx, translationRequest.text, translationRequest.targetLanguage);
-    }
-
     const activeMode = this.getActiveMode(ctx);
     if (activeMode) {
       const handled = await this.handleActiveMode(ctx, activeMode);
       if (handled) return;
+    }
+
+    if (await tryHandleNaturalAgent(this, ctx)) return;
+
+
+
+
+    const translationRequest = text ? this.parseTranslationRequest(text) : null;
+    if (translationRequest) {
+      return this.runTranslation(ctx, translationRequest.text, translationRequest.targetLanguage);
     }
 
     const naturalAction = text ? this.parseNaturalLanguageAction(text, locale) : null;
