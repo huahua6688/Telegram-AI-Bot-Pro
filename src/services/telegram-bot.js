@@ -284,13 +284,24 @@ function createSystemPrompt(config, chatSettings, userSettings, locale) {
   const personaPrompt = userSettings.customSystemPrompt || personaPresets[userSettings.persona] || config.systemPrompt;
   const chatPrompt = chatSettings.systemPrompt ? `\n\nChat instructions: ${chatSettings.systemPrompt}` : '';
   const languagePrompt = LANGUAGE_PROMPTS[locale] || LANGUAGE_PROMPTS.zh;
+  const currentTime = new Date().toISOString();
   const productRules = [
-    'Telegram product rules:',
+    `Current UTC time: ${currentTime}`,
+    '',
+    'Reasoning and tool rules:',
+    '- First infer the user’s real goal from the latest message, conversation history, and relevant memory.',
+    '- Answer directly when existing knowledge is sufficient.',
+    '- Use an available tool for current events, prices, schedules, weather, web pages, calculations, or facts that may have changed.',
+    '- Never claim to have searched, opened a URL, or verified a fact unless a tool actually returned that information.',
+    '- If a request is ambiguous and a wrong assumption would materially change the answer, ask one short clarifying question.',
+    '- Treat memory as potentially stale. Prefer the user’s latest message whenever memory conflicts with it.',
+    '- State uncertainty plainly instead of inventing details.',
+    '',
+    'Telegram response rules:',
     '- Use plain text. Do not use Markdown bold symbols or decorative bullet spam.',
     '- Do not expose internal tool names such as get_time, fetch_url, web_search, or get_weather.',
-    '- Do not claim you searched or fetched a page unless the bot actually routed that tool.',
     '- If the user asks what you can do, answer briefly and suggest using the toolbox.',
-    '- Keep replies natural, direct, and practical.'
+    '- Keep replies natural, direct, useful, and proportionate to the question.'
   ].join('\n');
 
   return `${personaPrompt}${chatPrompt}\n\n${languagePrompt}\n\n${productRules}`.trim();
@@ -1966,7 +1977,7 @@ export class TelegramAIBot {
       'Memory and topic context:',
       memoryText,
       '',
-      'Use the memory above only when it is relevant. If the user asks a side question, answer it clearly and then keep the previous main task in mind.'
+      'Use this memory only when relevant. It may be stale or incomplete; the user’s latest message always wins. Never mention hidden memory unless the user asks.'
     ].join('\n');
   }
 
@@ -2884,6 +2895,32 @@ export class TelegramAIBot {
 
     try {
       await ctx.sendChatAction('typing');
+      const preferredModel =
+        this.db.findUser(ctx.from?.id)?.preferredModel || this.config.defaultModel;
+
+      if (
+        this.config.enableGeminiGoogleSearch &&
+        typeof this.aiClient.searchWeb === 'function'
+      ) {
+        try {
+          const grounded = await this.aiClient.searchWeb({
+            model: preferredModel,
+            query
+          });
+          if (grounded?.text) {
+            await this.db.incrementStats('toolCalls');
+            await this.db.incrementStats('aiCalls');
+            await sendTextReply(ctx, grounded.text, this.config.maxOutputChars);
+            return;
+          }
+        } catch (error) {
+          this.logger.warn('Gemini grounded search unavailable; using fallback search', {
+            model: preferredModel,
+            error: this.formatLogError(error)
+          });
+        }
+      }
+
       const raw = await this.toolRegistry.execute({
         function: {
           name: 'web_search',
@@ -4485,10 +4522,6 @@ export class TelegramAIBot {
 
     let memoryContext = null;
     try {
-      this.memoryManager.rememberProjectDefaults({
-        userId: ctx.from.id,
-        chatId: ctx.chat.id
-      });
       memoryContext = this.memoryManager.getMemoryContext({
         userId: ctx.from.id,
         chatId: ctx.chat.id,
@@ -4505,23 +4538,10 @@ export class TelegramAIBot {
       memoryContext = null;
     }
 
-    let routedIntent = null;
-    if (text && this.shouldUseAiRouter(text)) {
-      routedIntent = await this.classifyUserIntent(ctx, text, memoryContext);
-
-      if (routedIntent?.topicId && memoryContext) {
-        memoryContext.topicId = routedIntent.topicId;
-        if (routedIntent.isSideQuestion && routedIntent.returnTopicId) {
-          memoryContext.isSideQuestion = true;
-          memoryContext.returnTopicId = routedIntent.returnTopicId;
-        }
-      }
-
-      if (routedIntent?.intent && routedIntent.intent !== 'chat') {
-        const routedHandled = await this.handleRoutedIntent(ctx, routedIntent, locale);
-        if (routedHandled) return;
-      }
-    }
+    // Explicit commands and deterministic shortcuts are handled above. All other
+    // messages go through one model/tool loop so context is not lost to a second
+    // intent-classification request.
+    const routedIntent = null;
 
     let activeAiModel = user?.preferredModel || chat?.defaultModel || this.config.defaultModel;
 

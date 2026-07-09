@@ -12,11 +12,12 @@ function methodSlice(source, signature, nextSignature) {
   return end > start ? source.slice(start, end) : source.slice(start);
 }
 
-test("normal messages are owned by natural agent", () => {
+test("normal messages use the main single-pass agent", () => {
   assert.match(bot, /tryHandleNaturalAgent/);
   assert.doesNotMatch(bot, /tryHandleProductAgentRoute/);
-  assert.match(agent, /classifyNaturally/);
-  assert.match(agent, /continueFromContext/);
+  const handler = methodSlice(agent, "export async function tryHandleNaturalAgent", "export const naturalAgentInternals");
+  assert.doesNotMatch(handler, /await classifyNaturally/);
+  assert.match(bot, /const routedIntent = null/);
 });
 
 test("visible main menu is minimal", () => {

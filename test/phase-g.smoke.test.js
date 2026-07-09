@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { once } from 'node:events';
 import { loadConfig } from '../src/config.js';
 import { BotDatabase } from '../src/db.js';
 import { startHealthServer } from '../src/services/health-server.js';
@@ -37,8 +38,6 @@ test('smoke: config defaults remain valid for deployment baseline', () => {
 
 test('smoke: health endpoint is reachable with sqlite runtime', async (t) => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-ai-bot-pro-smoke-'));
-  t.after(() => fs.rm(tempDir, { recursive: true, force: true }));
-
   const db = new BotDatabase(path.join(tempDir, 'bot-data.db'));
   await db.init();
 
@@ -48,12 +47,17 @@ test('smoke: health endpoint is reachable with sqlite runtime', async (t) => {
     config: { defaultModel: 'gpt-4.1-mini' },
     logger: logger()
   });
-  t.after(() => server.close());
-
-  const port = server.address().port;
-  const res = await fetch(`http://127.0.0.1:${port}/`);
-  assert.equal(res.status, 200);
-  const payload = await res.json();
-  assert.equal(payload.ok, true);
-  assert.equal(payload.model, 'gpt-4.1-mini');
+  try {
+    if (!server.listening) await once(server, 'listening');
+    const port = server.address().port;
+    const res = await fetch(`http://127.0.0.1:${port}/`);
+    assert.equal(res.status, 200);
+    const payload = await res.json();
+    assert.equal(payload.ok, true);
+    assert.equal(payload.model, 'gpt-4.1-mini');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    db.db?.close();
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
 });

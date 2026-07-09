@@ -1,4 +1,4 @@
-const NETWORK_TOOLS = new Set(['web_search', 'fetch_url']);
+const NETWORK_TOOLS = new Set(['web_search', 'fetch_url', 'get_weather']);
 
 export class ToolAccessPolicy {
   constructor(config, logger, accessControl = null) {

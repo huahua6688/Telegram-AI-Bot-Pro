@@ -19,9 +19,9 @@
 
 推荐：
 
-    AI_FALLBACK_MODELS=gemini-2.0-flash,gemini-2.5-flash-lite
-    TRANSLATION_MODEL=gemini-2.5-flash-lite
-    ROUTER_MODEL=gemini-2.5-flash-lite
+    AI_FALLBACK_MODELS=gemini-3.1-flash-lite,gemini-2.5-flash
+    TRANSLATION_MODEL=gemini-3.1-flash-lite
+    ROUTER_MODEL=gemini-3.1-flash-lite
 
 ## /status 没权限
 
