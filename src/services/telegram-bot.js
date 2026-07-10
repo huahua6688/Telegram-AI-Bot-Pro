@@ -184,8 +184,8 @@ const UI_TEXT = {
     modelSwitched: '已切换到模型：{model}',
     currentPersona: '当前人格：{persona}\n可选：{options}',
     personaUnsupported: '不支持的人格。可选：{options}',
-    personaSwitched: '已切换人格：{persona}',
-    webUsage: '用法：/web 你的搜索关键词',
+    personaSwitched: '已切换人格：{persona}。从下一条消息开始生效。',
+    webUsage: '请发送要搜索的内容，例如：今天马来西亚有什么重要新闻',
     webResult: '联网搜索结果：\n{result}',
     searchFailed: '搜索失败：{error}',
     imageUsage: '用法：/image 你的图片描述',
@@ -225,7 +225,7 @@ const UI_TEXT = {
     documentTooLarge: '文件 {filename} 过大，当前超出可处理上限，请拆分后重试。',
     documentParseFailed: '文件 {filename} 解析失败：{error}',
     continuePrompt: '请继续。',
-    menu: '常用功能按钮已显示在下方。',
+    menu: '想使用哪项功能？也可以直接发送问题。',
     currentLanguage: '当前语言：{language}',
     languageUsage: '用法：/language zh 或 /language en',
     languageUnsupported: '暂不支持该语言。可选：zh, en',
@@ -307,8 +307,8 @@ const UI_TEXT = {
     modelSwitched: 'Switched to model: {model}',
     currentPersona: 'Current persona: {persona}\nOptions: {options}',
     personaUnsupported: 'Unsupported persona. Options: {options}',
-    personaSwitched: 'Switched persona: {persona}',
-    webUsage: 'Usage: /web your search query',
+    personaSwitched: 'Persona switched to {persona}. It will apply to your next message.',
+    webUsage: 'Send what you want to search for, for example: important Malaysia news today',
     webResult: 'Web search result:\n{result}',
     searchFailed: 'Search failed: {error}',
     imageUsage: 'Usage: /image your prompt',
@@ -348,7 +348,7 @@ const UI_TEXT = {
     documentTooLarge: 'The file {filename} is too large to parse directly. Ask the user to split it.',
     documentParseFailed: 'Failed to parse file {filename}: {error}',
     continuePrompt: 'Please continue.',
-    menu: 'Common action buttons are shown below.',
+    menu: 'Choose a feature, or just send me a question.',
     currentLanguage: 'Current language: {language}',
     languageUsage: 'Usage: /language zh or /language en',
     languageUnsupported: 'Unsupported language. Options: zh, en',
@@ -2597,38 +2597,38 @@ export class TelegramAIBot {
   async handleStart(ctx) {
     const locale = this.getLocale(ctx);
     const adminLine = this.isAdmin(ctx)
-      ? '\n\n管理员可点底部「🛠 管理」进入管理面板。'
+      ? locale === 'en'
+        ? '\n\nAs an admin, use the 🛠 Admin button to open the admin panel.'
+        : '\n\n管理员可点底部「🛠 管理」进入管理面板。'
       : '';
 
     const text =
       locale === 'en'
         ? [
-            'Hi, I am ready.',
+            'Hi, I am your AI assistant.',
             '',
-            'You can type naturally. No commands are required.',
+            'Tell me what you want to accomplish in natural language—no commands to memorize.',
             '',
-            'I can help with:',
-            '- chat, project troubleshooting, translation',
-            '- current news and web search',
-            '- URL reading and summaries',
-            '- weather, images, voice, files when enabled',
+            'Try asking me to:',
+            '• search today’s news or current information',
+            '• diagnose code, deployment, or error logs',
+            '• translate, rewrite, or summarize content',
+            '• read a web page, image, voice message, or file',
             '',
-            'Use bottom buttons only for Help, Settings, Admin, or Exit mode.'
+            'Use Settings to switch model, persona, or language. Send /menu to open every tool.'
           ].join('\n')
         : [
-            '你好，我已经准备好了。',
+            '你好，我是你的 AI 助手。',
             '',
-            '你可以直接像正常聊天一样输入，不需要记指令。',
+            '直接告诉我你想完成什么，不需要记任何指令。',
             '',
-            '我会自动判断要做什么：',
-            '- 普通聊天、代码/部署排错',
-            '- 翻译、改写、解释',
-            '- 最新新闻、联网搜索',
-            '- 读取网页并总结',
-            '- 查询天气',
-            '- 图片、语音、文件处理（取决于已启用能力）',
+            '你可以让我：',
+            '• 搜索今天的新闻和实时资料',
+            '• 分析代码、部署问题和报错日志',
+            '• 翻译、改写、解释或总结内容',
+            '• 阅读网页、图片、语音和文件',
             '',
-            '底部只保留：帮助、设置、管理、退出模式。其他功能直接说就行。' + adminLine
+            '需要切换模型、人格或语言，请点「设置」；发送 /menu 可打开全部工具。' + adminLine
           ].join('\n');
 
     await ctx.reply(text, this.createBottomKeyboard(locale));
@@ -2675,33 +2675,35 @@ export class TelegramAIBot {
     const helpText =
       locale === 'en'
         ? [
-            'Help',
+            'How to use this assistant',
             '',
-            'Just type naturally. Examples:',
-            '- What happened in Malaysia today?',
-            '- Will it rain in Kuala Lumpur?',
-            '- Summarize this page: https://example.com',
-            '- Translate “I miss you” to Khmer',
-            '- Explain this error log',
+            'Just describe the result you want. For example:',
+            '• Search for important Malaysia news today',
+            '• Will it rain in Kuala Lumpur tomorrow?',
+            '• Summarize this page: https://example.com',
+            '• Translate “I miss you” to Khmer',
+            '• Explain this error and suggest a fix',
             '',
-            'Bottom buttons:',
-            'Help / Settings / Admin / Exit mode'
+            'Settings: switch model, persona, language, and memory.',
+            'Menu → Toolbox: search, translation, images, voice, and files.',
+            'Persona changes apply from your next message.'
           ].join('\n')
         : [
-            '帮助',
+            '使用帮助',
             '',
-            '直接输入就行，不用记指令。例如：',
-            '- 今天马来西亚有什么新闻',
-            '- 吉隆坡会不会下雨',
-            '- 这个网页讲什么 https://example.com',
-            '- 把“我很担心你”翻成高棉语',
-            '- 帮我看这个报错怎么修',
+            '直接描述你想要的结果。例如：',
+            '• 搜索今天马来西亚的重要新闻',
+            '• 明天吉隆坡会不会下雨',
+            '• 总结这个网页：https://example.com',
+            '• 把“我很担心你”翻成高棉语',
+            '• 分析这段报错并告诉我怎么修',
             '',
-            '底部按钮只做辅助：',
-            '帮助 / 设置 / 管理 / 退出模式'
+            '「设置」：切换模型、人格、语言和记忆。',
+            '「菜单 → 工具箱」：联网搜索、翻译、图片、语音和文件。',
+            '切换人格后，会从你的下一条消息开始生效。'
           ].join('\n');
 
-    await sendTextReply(ctx, helpText, this.config.maxOutputChars, this.createBottomKeyboard(locale));
+    await sendTextReply(ctx, helpText, this.config.maxOutputChars, this.createMenuKeyboard(locale));
   }
 
 
@@ -2911,14 +2913,6 @@ export class TelegramAIBot {
 
   async handleMenu(ctx) {
     const locale = this.getLocale(ctx);
-
-    await ctx.reply(
-      locale === 'en'
-        ? 'Bottom shortcuts are enabled.'
-        : '底部快捷键已开启。',
-      this.createBottomKeyboard(locale)
-    );
-
     await ctx.reply(this.t(locale, 'menu'), this.createMenuKeyboard(locale));
   }
 
@@ -2991,7 +2985,7 @@ export class TelegramAIBot {
   }
 
   async handlePersona(ctx) {
-    const arg = extractCommandArgs(ctx.message.text || '');
+    const arg = extractCommandArgs(ctx.message?.text || '');
     const user = this.db.findUser(ctx.from.id);
     const locale = this.getLocale(ctx, user);
 
@@ -3016,7 +3010,7 @@ export class TelegramAIBot {
   }
 
   async handleLanguage(ctx) {
-    const rawArg = extractCommandArgs(ctx.message.text || '');
+    const rawArg = extractCommandArgs(ctx.message?.text || '');
     const arg = this.normalizeLanguageInput(rawArg);
     const user = this.db.findUser(ctx.from.id);
     const locale = this.getLocale(ctx, user);
@@ -3269,7 +3263,7 @@ export class TelegramAIBot {
     }
   }
 
-  async runWebSearch(ctx, query = extractCommandArgs(ctx.message.text || '')) {
+  async runWebSearch(ctx, query = extractCommandArgs(ctx.message?.text || '')) {
     const locale = this.getLocale(ctx);
     if (!query) {
       await ctx.reply(this.t(locale, 'webUsage'));
@@ -3282,25 +3276,31 @@ export class TelegramAIBot {
         this.db.findUser(ctx.from?.id)?.preferredModel || this.config.defaultModel;
 
       if (
+        this.config.enableWebSearch &&
         this.config.enableGeminiGoogleSearch &&
         typeof this.aiClient.searchWeb === 'function'
       ) {
-        try {
-          const grounded = await this.aiClient.searchWeb({
-            model: preferredModel,
-            query
-          });
-          if (grounded?.text) {
-            await this.db.incrementStats('toolCalls');
-            await this.db.incrementStats('aiCalls');
-            await sendTextReply(ctx, grounded.text, this.config.maxOutputChars);
-            return;
+        const searchModels = Array.from(new Set([
+          preferredModel,
+          this.config.defaultModel,
+          ...(this.config.availableModels || [])
+        ].filter(Boolean)));
+
+        for (const model of searchModels) {
+          try {
+            const grounded = await this.aiClient.searchWeb({ model, query });
+            if (grounded?.text) {
+              await this.db.incrementStats('toolCalls');
+              await this.db.incrementStats('aiCalls');
+              await sendTextReply(ctx, grounded.text, this.config.maxOutputChars);
+              return;
+            }
+          } catch (error) {
+            this.logger.warn('Gemini grounded search unavailable; trying another search path', {
+              model,
+              error: this.formatLogError(error)
+            });
           }
-        } catch (error) {
-          this.logger.warn('Gemini grounded search unavailable; using fallback search', {
-            model: preferredModel,
-            error: this.formatLogError(error)
-          });
         }
       }
 
@@ -4885,6 +4885,13 @@ export class TelegramAIBot {
       if (handled) return;
     }
 
+    // 用户点击功能按钮后的下一条输入必须优先执行，不能被普通聊天代理截走。
+    const pendingAction = this.takePendingMenuAction(ctx);
+    if (pendingAction) {
+      const handled = await this.handlePendingMenuAction(ctx, pendingAction);
+      if (handled !== false) return;
+    }
+
     if (await tryHandleNaturalAgent(this, ctx)) return;
 
 
@@ -4897,16 +4904,8 @@ export class TelegramAIBot {
 
     const naturalAction = text ? this.parseNaturalLanguageAction(text, locale) : null;
 
-    // 先处理按钮本身，避免“上一个按钮”等待输入时把新按钮当成内容
     if (naturalAction) {
       if (await this.handleMenuAction(ctx, naturalAction, locale)) return;
-    }
-
-    // 只有不是按钮的新消息，才作为上一个按钮的输入
-    const pendingAction = this.takePendingMenuAction(ctx);
-    if (pendingAction) {
-      const handled = await this.handlePendingMenuAction(ctx, pendingAction);
-      if (handled !== false) return;
     }
 
     const shouldRespond = shouldRespondToMessage({

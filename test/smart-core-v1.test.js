@@ -71,7 +71,7 @@ test('memory no longer seeds repository-specific facts into every user', () => {
   assert.doesNotMatch(compatibilityMethod, /upsertMemoryItem/);
 });
 
-test('Gemini 3 uses native Google Search while older models keep custom search', () => {
+test('Gemini search-capable models use native Google Search safely', () => {
   const client = new GeminiClient(
     {
       temperature: 0.4,
@@ -91,13 +91,46 @@ test('Gemini 3 uses native Google Search while older models keep custom search',
   );
   assert.deepEqual(currentPayload.tools, [{ google_search: {} }]);
 
-  const legacyPayload = client.toGeminiPayload(
+  const gemini25Payload = client.toGeminiPayload(
     messages,
     [webSearchDefinition()],
     0.2,
     'gemini-2.5-flash'
   );
-  assert.equal(legacyPayload.tools[0].functionDeclarations[0].name, 'web_search');
+  assert.deepEqual(gemini25Payload.tools, [{ google_search: {} }]);
+
+  const mixedGemini25Payload = client.toGeminiPayload(
+    messages,
+    [
+      webSearchDefinition(),
+      {
+        type: 'function',
+        function: {
+          name: 'get_time',
+          description: 'Get current time.',
+          parameters: { type: 'object', properties: {} }
+        }
+      }
+    ],
+    0.2,
+    'gemini-2.5-flash'
+  );
+  assert.equal(mixedGemini25Payload.tools.length, 1);
+  assert.equal(mixedGemini25Payload.tools[0].functionDeclarations[0].name, 'web_search');
+});
+
+test('explicit button input is handled before the natural chat agent', () => {
+  const incomingHandler = extractBetween(
+    telegramBotSource,
+    '  async handleIncomingMessage(ctx) {',
+    '\n  async prepareUserMessage'
+  );
+
+  assert.ok(
+    incomingHandler.indexOf('this.takePendingMenuAction(ctx)') <
+      incomingHandler.indexOf('tryHandleNaturalAgent(this, ctx)'),
+    'pending tool input must run before the natural chat agent'
+  );
 });
 
 test('Gemini defaults favor the current model and a larger conversation window', () => {

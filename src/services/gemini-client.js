@@ -67,6 +67,19 @@ function stripUnsupportedSchemaFields(schema) {
 }
 
 function supportsBuiltInGoogleSearch(model = '') {
+  const normalized = String(model).trim().toLowerCase();
+  const major = Number(normalized.match(/^gemini-(\d+)(?:\.|[-_])/)?.[1] || 0);
+
+  if (major >= 3) return true;
+  if (/^gemini-2\.0-flash(?:$|-)/.test(normalized)) return true;
+  if (/^gemini-2\.5-(?:pro|flash|flash-lite)(?:$|-)/.test(normalized)) {
+    return !/(?:image|tts|native-audio|live)/.test(normalized);
+  }
+
+  return false;
+}
+
+function supportsCombinedGoogleSearchTools(model = '') {
   const match = String(model).match(/^gemini-(\d+)(?:\.|[-_])/i);
   return Number(match?.[1] || 0) >= 3;
 }
@@ -154,11 +167,13 @@ export class GeminiClient {
     const contents = [];
     const toolCallNameMap = new Map();
     const hasWebSearchTool = tools.some((tool) => tool.function?.name === 'web_search');
+    const hasOtherTools = tools.some((tool) => tool.function?.name !== 'web_search');
     const enableGoogleSearch =
       Boolean(this.config.enableGeminiGoogleSearch) &&
       Boolean(this.config.enableWebSearch) &&
       hasWebSearchTool &&
-      supportsBuiltInGoogleSearch(model);
+      supportsBuiltInGoogleSearch(model) &&
+      (!hasOtherTools || supportsCombinedGoogleSearchTools(model));
     const mappedTools = mapToolDefinitions(tools, { enableGoogleSearch });
     const hasCustomTools = (mappedTools || []).some((tool) => Array.isArray(tool.functionDeclarations));
 

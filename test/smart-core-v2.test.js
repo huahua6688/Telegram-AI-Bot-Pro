@@ -245,3 +245,37 @@ test('toolbox exposes real feature callbacks and unknown buttons get a visible f
   assert.match(answers[0], /no longer available/i);
   assert.match(replies[0].message, /open the menu/i);
 });
+
+test('persona settings open from a callback without a message payload', async () => {
+  const bot = Object.create(TelegramAIBot.prototype);
+  bot.db = {
+    findUser() {
+      return { persona: 'coder' };
+    }
+  };
+  bot.getLocale = () => 'zh';
+
+  const replies = [];
+  await bot.handlePersona({
+    from: { id: 1 },
+    reply: async (message, extra) => replies.push({ message, extra })
+  });
+
+  assert.equal(replies.length, 1);
+  assert.match(replies[0].message, /当前：coder/);
+});
+
+test('opening the main menu does not send a shortcut status message', async () => {
+  const bot = Object.create(TelegramAIBot.prototype);
+  bot.getLocale = () => 'zh';
+  bot.t = () => '请选择功能：';
+  bot.createMenuKeyboard = () => ({ reply_markup: { inline_keyboard: [] } });
+
+  const replies = [];
+  await bot.handleMenu({
+    reply: async (message, extra) => replies.push({ message, extra })
+  });
+
+  assert.deepEqual(replies.map((item) => item.message), ['请选择功能：']);
+  assert.doesNotMatch(replies[0].message, /快捷键已开启/);
+});
