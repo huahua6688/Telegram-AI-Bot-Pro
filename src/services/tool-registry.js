@@ -1,7 +1,7 @@
 import { stripHtml, truncateText } from '../utils/text.js';
 import { ToolAccessPolicy } from './tool-access-policy.js';
 
-const USER_AGENT = 'Telegram-AI-Bot-Pro';
+const USER_AGENT = 'Mozilla/5.0 (compatible; Telegram-AI-Bot-Pro/1.0; +https://github.com/huahua6688/Telegram-AI-Bot-Pro)';
 
 function toolError(code, message, { retryable = false } = {}) {
   return JSON.stringify({
@@ -32,7 +32,75 @@ async function fetchUrlText(url) {
   return truncateText(stripHtml(html), 6000);
 }
 
-async function searchWeb(query) {
+function decodeSearchText(value = '') {
+  const decoded = String(value)
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(Number.parseInt(code, 16)))
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number.parseInt(code, 10)))
+    .replace(/&amp;/gi, '&')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>');
+  return stripHtml(decoded);
+}
+
+function normalizeSearchResultUrl(value = '') {
+  let href = String(value).replace(/&amp;/gi, '&').trim();
+  if (href.startsWith('//')) href = `https:${href}`;
+
+  try {
+    const parsed = new URL(href);
+    const redirected = parsed.searchParams.get('uddg');
+    return redirected || parsed.toString();
+  } catch {
+    return href;
+  }
+}
+
+async function searchDuckDuckGoHtml(query) {
+  const url = new URL('https://html.duckduckgo.com/html/');
+  url.searchParams.set('q', query);
+
+  const response = await fetch(url, {
+    headers: {
+      'User-Agent': USER_AGENT,
+      Accept: 'text/html,application/xhtml+xml',
+      'Accept-Language': 'en-US,en;q=0.8'
+    }
+  });
+  if (!response.ok) {
+    throw new Error(`HTML search request failed (${response.status})`);
+  }
+
+  const html = await response.text();
+  const results = [];
+  const anchorPattern = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
+
+  for (const match of html.matchAll(anchorPattern)) {
+    const attributes = match[1] || '';
+    if (!/\bresult__a\b/i.test(attributes)) continue;
+
+    const hrefMatch = attributes.match(/\bhref\s*=\s*(["'])(.*?)\1/i);
+    const title = decodeSearchText(match[2]);
+    const resultUrl = normalizeSearchResultUrl(hrefMatch?.[2] || '');
+    if (!title || !/^https?:\/\//i.test(resultUrl)) continue;
+    if (results.some((item) => item.url === resultUrl)) continue;
+
+    const tail = html.slice((match.index || 0) + match[0].length, (match.index || 0) + match[0].length + 2400);
+    const snippetMatch = tail.match(/<[^>]+class=["'][^"']*result__snippet[^"']*["'][^>]*>([\s\S]*?)<\/(?:a|div)>/i);
+    results.push({
+      title,
+      url: resultUrl,
+      snippet: decodeSearchText(snippetMatch?.[1] || '')
+    });
+
+    if (results.length >= 5) break;
+  }
+
+  return results;
+}
+
+async function searchDuckDuckGoInstant(query) {
   const url = new URL('https://api.duckduckgo.com/');
   url.searchParams.set('q', query);
   url.searchParams.set('format', 'json');
@@ -54,19 +122,36 @@ async function searchWeb(query) {
     .slice(0, 5)
     .map((item) => ({ text: item.Text, url: item.FirstURL }));
 
-  return truncateText(
-    JSON.stringify(
-      {
-        heading: data.Heading,
-        abstract: data.AbstractText,
-        answer: data.Answer,
-        topics
-      },
-      null,
-      2
-    ),
-    5000
-  );
+  return {
+    heading: data.Heading,
+    abstract: data.AbstractText,
+    answer: data.Answer,
+    topics
+  };
+}
+
+async function searchWeb(query) {
+  let htmlSearchError = null;
+
+  try {
+    const results = await searchDuckDuckGoHtml(query);
+    if (results.length > 0) {
+      return truncateText(JSON.stringify({ provider: 'duckduckgo', query, results }, null, 2), 5000);
+    }
+  } catch (error) {
+    htmlSearchError = error;
+  }
+
+  try {
+    const instant = await searchDuckDuckGoInstant(query);
+    if (instant.heading || instant.abstract || instant.answer || instant.topics.length > 0) {
+      return truncateText(JSON.stringify({ provider: 'duckduckgo', query, ...instant }, null, 2), 5000);
+    }
+  } catch (error) {
+    if (!htmlSearchError) htmlSearchError = error;
+  }
+
+  throw htmlSearchError || new Error('Search returned no useful results.');
 }
 
 function weatherDescription(code) {

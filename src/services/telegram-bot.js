@@ -42,6 +42,54 @@ const LANGUAGE_NAMES = {
   nl: 'Nederlands'
 };;
 
+const BOT_COMMAND_NAMES = [
+  'start',
+  'menu',
+  'help',
+  'web',
+  'models',
+  'persona',
+  'language',
+  'reset',
+  'whoami',
+  'status'
+];
+
+const BOT_COMMAND_DESCRIPTIONS = {
+  zh: ['打开助手', '打开功能菜单', '查看使用帮助', '联网搜索', '切换 AI 模型', '切换人格', '切换语言', '清空当前对话', '查看 Telegram ID', '管理员状态'],
+  'zh-hant': ['開啟助手', '開啟功能選單', '查看使用說明', '連網搜尋', '切換 AI 模型', '切換人格', '切換語言', '清除目前對話', '查看 Telegram ID', '管理員狀態'],
+  en: ['Open assistant', 'Open feature menu', 'Show help', 'Search the web', 'Switch AI model', 'Switch persona', 'Switch language', 'Clear current chat', 'Show Telegram ID', 'Admin status'],
+  km: ['បើកជំនួយការ', 'បើកម៉ឺនុយមុខងារ', 'មើលជំនួយ', 'ស្វែងរកតាមអ៊ីនធឺណិត', 'ប្ដូរម៉ូដែល AI', 'ប្ដូរបុគ្គលិកលក្ខណៈ', 'ប្ដូរភាសា', 'សម្អាតការសន្ទនា', 'មើល Telegram ID', 'ស្ថានភាពអ្នកគ្រប់គ្រង'],
+  ms: ['Buka pembantu', 'Buka menu fungsi', 'Lihat bantuan', 'Cari di web', 'Tukar model AI', 'Tukar persona', 'Tukar bahasa', 'Kosongkan perbualan', 'Lihat ID Telegram', 'Status admin'],
+  id: ['Buka asisten', 'Buka menu fitur', 'Lihat bantuan', 'Cari di web', 'Ganti model AI', 'Ganti persona', 'Ganti bahasa', 'Hapus percakapan', 'Lihat ID Telegram', 'Status admin'],
+  ko: ['도우미 열기', '기능 메뉴 열기', '도움말 보기', '웹 검색', 'AI 모델 변경', '페르소나 변경', '언어 변경', '현재 대화 지우기', 'Telegram ID 보기', '관리자 상태'],
+  ja: ['アシスタントを開く', '機能メニューを開く', 'ヘルプを表示', 'ウェブ検索', 'AIモデルを切り替え', 'ペルソナを切り替え', '言語を切り替え', '現在の会話を消去', 'Telegram IDを表示', '管理者状態'],
+  th: ['เปิดผู้ช่วย', 'เปิดเมนูฟังก์ชัน', 'ดูวิธีใช้', 'ค้นหาเว็บ', 'เปลี่ยนโมเดล AI', 'เปลี่ยนบุคลิก', 'เปลี่ยนภาษา', 'ล้างบทสนทนา', 'ดู Telegram ID', 'สถานะแอดมิน'],
+  vi: ['Mở trợ lý', 'Mở menu tính năng', 'Xem trợ giúp', 'Tìm kiếm web', 'Đổi mô hình AI', 'Đổi persona', 'Đổi ngôn ngữ', 'Xóa cuộc trò chuyện', 'Xem Telegram ID', 'Trạng thái admin'],
+  es: ['Abrir asistente', 'Abrir menú de funciones', 'Ver ayuda', 'Buscar en la web', 'Cambiar modelo de IA', 'Cambiar personalidad', 'Cambiar idioma', 'Borrar conversación', 'Ver ID de Telegram', 'Estado de administrador'],
+  fr: ["Ouvrir l’assistant", 'Ouvrir le menu', "Afficher l’aide", 'Rechercher sur le web', 'Changer de modèle IA', 'Changer de persona', 'Changer de langue', 'Effacer la conversation', "Voir l’ID Telegram", 'Statut administrateur'],
+  de: ['Assistent öffnen', 'Funktionsmenü öffnen', 'Hilfe anzeigen', 'Im Web suchen', 'KI-Modell wechseln', 'Persona wechseln', 'Sprache wechseln', 'Chat löschen', 'Telegram-ID anzeigen', 'Adminstatus'],
+  it: ["Apri l’assistente", 'Apri menu funzioni', 'Mostra aiuto', 'Cerca sul web', 'Cambia modello IA', 'Cambia persona', 'Cambia lingua', 'Cancella conversazione', 'Mostra ID Telegram', 'Stato amministratore'],
+  pt: ['Abrir assistente', 'Abrir menu de funções', 'Ver ajuda', 'Pesquisar na web', 'Trocar modelo de IA', 'Trocar persona', 'Trocar idioma', 'Limpar conversa', 'Ver ID do Telegram', 'Status do administrador'],
+  ru: ['Открыть помощника', 'Открыть меню функций', 'Показать помощь', 'Поиск в интернете', 'Сменить модель ИИ', 'Сменить персону', 'Сменить язык', 'Очистить диалог', 'Показать Telegram ID', 'Статус администратора'],
+  tr: ['Asistanı aç', 'Özellik menüsünü aç', 'Yardımı göster', 'Web’de ara', 'AI modelini değiştir', 'Personayı değiştir', 'Dili değiştir', 'Sohbeti temizle', 'Telegram ID göster', 'Yönetici durumu'],
+  ar: ['فتح المساعد', 'فتح قائمة الميزات', 'عرض المساعدة', 'البحث في الويب', 'تغيير نموذج الذكاء', 'تغيير الشخصية', 'تغيير اللغة', 'مسح المحادثة', 'عرض معرف Telegram', 'حالة المسؤول'],
+  fa: ['باز کردن دستیار', 'باز کردن منوی امکانات', 'نمایش راهنما', 'جستجوی وب', 'تغییر مدل هوش مصنوعی', 'تغییر شخصیت', 'تغییر زبان', 'پاک کردن گفتگو', 'نمایش شناسه Telegram', 'وضعیت مدیر'],
+  hi: ['सहायक खोलें', 'फ़ीचर मेनू खोलें', 'सहायता देखें', 'वेब खोजें', 'AI मॉडल बदलें', 'व्यक्तित्व बदलें', 'भाषा बदलें', 'वर्तमान चैट साफ़ करें', 'Telegram ID देखें', 'एडमिन स्थिति'],
+  uk: ['Відкрити помічника', 'Відкрити меню функцій', 'Показати довідку', 'Пошук в інтернеті', 'Змінити модель ШІ', 'Змінити персону', 'Змінити мову', 'Очистити діалог', 'Показати Telegram ID', 'Статус адміністратора'],
+  pl: ['Otwórz asystenta', 'Otwórz menu funkcji', 'Pokaż pomoc', 'Szukaj w sieci', 'Zmień model AI', 'Zmień personę', 'Zmień język', 'Wyczyść rozmowę', 'Pokaż Telegram ID', 'Status administratora'],
+  nl: ['Assistent openen', 'Functiemenu openen', 'Help tonen', 'Op internet zoeken', 'AI-model wijzigen', 'Persona wijzigen', 'Taal wijzigen', 'Gesprek wissen', 'Telegram-ID tonen', 'Beheerderstatus']
+};
+
+function createLocalizedBotCommands(locale = 'en') {
+  const normalized = normalizeLanguageCode(locale, 'en');
+  const descriptions = BOT_COMMAND_DESCRIPTIONS[normalized] || BOT_COMMAND_DESCRIPTIONS.en;
+  return BOT_COMMAND_NAMES.map((command, index) => ({
+    command,
+    description: descriptions[index] || BOT_COMMAND_DESCRIPTIONS.en[index]
+  }));
+}
+
 const LANGUAGE_PROMPTS = {
   zh: 'Always answer in Simplified Chinese unless the user explicitly asks for another language.',
   en: 'Always answer in English unless the user explicitly asks for another language.'
@@ -1953,7 +2001,26 @@ export class TelegramAIBot {
       raw.includes('temporarily unavailable') ||
       raw.includes('service unavailable') ||
       raw.includes('overloaded') ||
-      raw.includes('upstream')
+      raw.includes('upstream') ||
+      raw.includes('empty response') ||
+      raw.includes('empty result') ||
+      raw.includes('no candidates')
+    );
+  }
+
+  isAiModelUnavailableError(error) {
+    const raw = String(error?.message || error || '').toLowerCase();
+    return (
+      /\b404\b/.test(raw) ||
+      raw.includes('model not found') ||
+      raw.includes('model is not found') ||
+      raw.includes('model unavailable') ||
+      raw.includes('model is unavailable') ||
+      raw.includes('unsupported model') ||
+      raw.includes('model is not supported') ||
+      raw.includes('unknown model') ||
+      raw.includes('deprecated model') ||
+      (/\b400\b/.test(raw) && raw.includes('model'))
     );
   }
 
@@ -2055,6 +2122,7 @@ export class TelegramAIBot {
     const skippedCooldowns = [];
     let lastQuotaError = null;
     let lastTransientError = null;
+    let lastModelError = null;
 
     for (const candidate of candidates) {
       const cooldown = this.getAiCooldown(scope, candidate);
@@ -2068,9 +2136,14 @@ export class TelegramAIBot {
           ...request,
           model: candidate
         });
+        const normalizedResult = this.normalizeAiResult(result, request.messages || []);
+
+        if (!normalizedResult.text.trim()) {
+          throw new Error('AI provider returned an empty response.');
+        }
 
         return {
-          result: this.normalizeAiResult(result, request.messages || []),
+          result: normalizedResult,
           model: candidate
         };
       } catch (error) {
@@ -2096,6 +2169,17 @@ export class TelegramAIBot {
           continue;
         }
 
+        if (this.isAiModelUnavailableError(error)) {
+          lastModelError = error;
+          this.setAiCooldown(scope, candidate, error, 300);
+          this.logger.warn('AI model unavailable, trying fallback model', {
+            scope,
+            model: candidate,
+            error: this.formatLogError(error)
+          });
+          continue;
+        }
+
         throw error;
       }
     }
@@ -2109,6 +2193,10 @@ export class TelegramAIBot {
 
     if (lastTransientError && !lastQuotaError) {
       throw new Error(`AI service temporarily unavailable. Please retry in ${retrySeconds}s.`);
+    }
+
+    if (lastModelError && !lastQuotaError && !lastTransientError) {
+      throw new Error('All configured AI models are unavailable. Check AI_MODEL and AI_FALLBACK_MODELS.');
     }
 
     throw new Error(`AI quota exceeded. Please retry in ${retrySeconds}s.`);
@@ -2407,75 +2495,39 @@ export class TelegramAIBot {
   }
 
   async setLocalizedBotCommands() {
-    const commands = [
-      { command: 'start', description: 'Open assistant / 打开助手' },
-      { command: 'menu', description: 'Open menu / 打开菜单' },
-      { command: 'whoami', description: 'Show Telegram ID / 查看 Telegram ID' },
-      { command: 'status', description: 'Admin status / 管理员状态' }
-    ];
+    await this.bot.telegram.setMyCommands(createLocalizedBotCommands('en'));
 
-    await this.bot.telegram.setMyCommands(commands);
-
-    const localized = {
-      zh: [
-        { command: 'start', description: '打开助手' },
-        { command: 'menu', description: '打开菜单' },
-        { command: 'whoami', description: '查看 Telegram ID' },
-        { command: 'status', description: '管理员状态' }
-      ],
-      en: [
-        { command: 'start', description: 'Open assistant' },
-        { command: 'menu', description: 'Open menu' },
-        { command: 'whoami', description: 'Show Telegram ID' },
-        { command: 'status', description: 'Admin status' }
-      ],
-      km: [
-        { command: 'start', description: 'បើកជំនួយការ' },
-        { command: 'menu', description: 'បើកម៉ឺនុយ' },
-        { command: 'whoami', description: 'បង្ហាញ Telegram ID' },
-        { command: 'status', description: 'ស្ថានភាពអ្នកគ្រប់គ្រង' }
-      ],
-      ms: [
-        { command: 'start', description: 'Buka pembantu' },
-        { command: 'menu', description: 'Buka menu' },
-        { command: 'whoami', description: 'Tunjuk Telegram ID' },
-        { command: 'status', description: 'Status admin' }
-      ],
-      ko: [
-        { command: 'start', description: '도우미 열기' },
-        { command: 'menu', description: '메뉴 열기' },
-        { command: 'whoami', description: 'Telegram ID 보기' },
-        { command: 'status', description: '관리자 상태' }
-      ],
-      ja: [
-        { command: 'start', description: 'アシスタントを開く' },
-        { command: 'menu', description: 'メニューを開く' },
-        { command: 'whoami', description: 'Telegram ID を表示' },
-        { command: 'status', description: '管理者状態' }
-      ],
-      th: [
-        { command: 'start', description: 'เปิดผู้ช่วย' },
-        { command: 'menu', description: 'เปิดเมนู' },
-        { command: 'whoami', description: 'แสดง Telegram ID' },
-        { command: 'status', description: 'สถานะแอดมิน' }
-      ],
-      vi: [
-        { command: 'start', description: 'Mở trợ lý' },
-        { command: 'menu', description: 'Mở menu' },
-        { command: 'whoami', description: 'Hiển thị Telegram ID' },
-        { command: 'status', description: 'Trạng thái admin' }
-      ]
-    };
-
-    for (const [languageCode, list] of Object.entries(localized)) {
+    for (const languageCode of Object.keys(BOT_COMMAND_DESCRIPTIONS)) {
+      if (!/^[a-z]{2,3}$/.test(languageCode)) continue;
       try {
-        await this.bot.telegram.setMyCommands(list, { language_code: languageCode });
+        await this.bot.telegram.setMyCommands(createLocalizedBotCommands(languageCode), {
+          language_code: languageCode
+        });
       } catch (error) {
         this.logger?.warn?.('Failed to set localized bot commands', {
           languageCode,
           error: error.message
         });
       }
+    }
+  }
+
+  async setChatBotCommands(ctx, locale = 'en') {
+    const chatId = ctx.chat?.id;
+    if (!chatId) return false;
+
+    try {
+      await this.bot.telegram.setMyCommands(createLocalizedBotCommands(locale), {
+        scope: { type: 'chat', chat_id: chatId }
+      });
+      return true;
+    } catch (error) {
+      this.logger?.warn?.('Failed to update chat bot commands', {
+        chatId,
+        locale,
+        error: error.message
+      });
+      return false;
     }
   }
 
@@ -2526,6 +2578,9 @@ export class TelegramAIBot {
     this.bot.command('topic', (ctx) => this.handleTopicShow(ctx));
     this.bot.command('topics', (ctx) => this.handleTopicsShow(ctx));
     this.bot.command('help', (ctx) => this.handleHelp(ctx));
+    this.bot.command('web', (ctx) => this.runWebSearch(ctx, extractCommandArgs(ctx.message?.text || '')));
+    this.bot.command('persona', (ctx) => this.handlePersona(ctx));
+    this.bot.command('language', (ctx) => this.handleLanguage(ctx));
     this.bot.command('status', (ctx) => this.handleStatus(ctx));
     this.bot.command('whoami', (ctx) => this.handleWhoami(ctx));
     this.bot.command('translate', (ctx) => this.runTranslation(ctx, extractCommandArgs(ctx.message.text || ''), 'auto'));
@@ -3036,6 +3091,7 @@ export class TelegramAIBot {
 
     await this.db.setUserSettings(ctx.from.id, { preferredLanguage: arg });
     const effective = arg === 'auto' ? detected : arg;
+    await this.setChatBotCommands(ctx, effective);
 
     await ctx.reply(
       this.t(effective, 'languageSet', { language: arg === 'auto' ? `${this.ui(effective, 'languageAuto')} → ${getLanguageDisplayName(effective)}` : getLanguageDisplayName(effective) }),
@@ -4666,6 +4722,8 @@ export class TelegramAIBot {
     const display = language === 'auto'
       ? `${this.ui(effective, 'languageAuto')} → ${getLanguageDisplayName(effective)}`
       : getLanguageDisplayName(effective);
+
+    await this.setChatBotCommands(ctx, effective);
 
     await this.editAssistantMessageText(
       ctx,

@@ -50,6 +50,7 @@ function extractMethod(signature) {
 test("Telegram slash command menu is registered through localized command helper", () => {
   const init = extractMethod("async init()");
   const localized = extractMethod("async setLocalizedBotCommands()");
+  const perChat = extractMethod("async setChatBotCommands(ctx, locale = 'en')");
 
   assert.ok(
     init.includes("await this.setLocalizedBotCommands();"),
@@ -65,28 +66,34 @@ test("Telegram slash command menu is registered through localized command helper
     localized.includes("language_code"),
     "localized command helper should register language-specific commands"
   );
+
+  assert.ok(
+    perChat.includes("scope: { type: 'chat', chat_id: chatId }"),
+    "selected bot language should refresh the current chat command menu"
+  );
 });
 
-test("Telegram slash command menu only exposes button-first essentials", () => {
-  const localized = extractMethod("async setLocalizedBotCommands()");
+test("Telegram slash command menu exposes user-facing essentials", () => {
+  const start = source.indexOf("const BOT_COMMAND_NAMES = [");
+  const end = source.indexOf("const BOT_COMMAND_DESCRIPTIONS", start);
+  const commands = source.slice(start, end);
 
-  assert.match(localized, /command:\s*['"]start['"]/);
-  assert.match(localized, /command:\s*['"]menu['"]/);
-  assert.match(localized, /command:\s*['"]whoami['"]/);
-  assert.match(localized, /command:\s*['"]status['"]/);
+  for (const command of ['start', 'menu', 'help', 'web', 'models', 'persona', 'language', 'reset', 'whoami', 'status']) {
+    assert.match(commands, new RegExp(`['"]${command}['"]`));
+  }
 
-  assert.doesNotMatch(localized, /command:\s*['"]models['"]/);
-  assert.doesNotMatch(localized, /command:\s*['"]memory['"]/);
-  assert.doesNotMatch(localized, /command:\s*['"]translate['"]/);
-  assert.doesNotMatch(localized, /command:\s*['"]tr['"]/);
-  assert.doesNotMatch(localized, /command:\s*['"]reset['"]/);
-  assert.doesNotMatch(localized, /command:\s*['"]clear['"]/);
+  assert.doesNotMatch(commands, /['"]memory['"]/);
+  assert.doesNotMatch(commands, /['"]translate['"]/);
+  assert.doesNotMatch(commands, /['"]clear['"]/);
 });
 
 test("internal command handlers can still exist without showing in slash menu", () => {
   const register = extractMethod("registerCommands()");
 
   assert.match(register, /this\.bot\.command\('models'/);
+  assert.match(register, /this\.bot\.command\('web'/);
+  assert.match(register, /this\.bot\.command\('persona'/);
+  assert.match(register, /this\.bot\.command\('language'/);
   assert.match(register, /this\.bot\.command\('translate'/);
   assert.match(register, /this\.bot\.command\('help'/);
 });
