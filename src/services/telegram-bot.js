@@ -208,12 +208,21 @@ const UI_LABELS = {
   ar: { help: '🆘 مساعدة', settings: '⚙️ الإعدادات', admin: '🛠 الإدارة', exit: '❌ الخروج من الوضع', close: '❌ إغلاق القائمة', mainMenu: '⬅️ القائمة الرئيسية', settingsCenter: '⚙️ مركز الإعدادات', currentSettings: '📊 الإعدادات الحالية', model: '🤖 النموذج', persona: '🎭 الشخصية', language: '🌍 اللغة', memory: '🧠 الذاكرة', clear: '🧹 مسح', menuClosed: 'تم إغلاق القائمة.', languageSet: 'تم تغيير اللغة: {language}', languageAuto: 'اتباع لغة Telegram تلقائياً', currentLanguage: 'اللغة الحالية: {language}' }
 };
 
-function labelLocale(locale = 'en') {
+function uiTextLocale(locale = 'en') {
   const normalized = normalizeLanguageCode(locale, 'en');
-  if (UI_LABELS[normalized]) return normalized;
-  const base = normalized.split('-')[0];
-  if (UI_LABELS[base]) return base;
   return normalized.startsWith('zh') ? 'zh' : 'en';
+}
+
+function isEnglishLocale(locale = 'en') {
+  return uiTextLocale(locale) === 'en';
+}
+
+function localText(locale = 'en', zh = '', en = '') {
+  return isEnglishLocale(locale) ? en : zh;
+}
+
+function labelLocale(locale = 'en') {
+  return uiTextLocale(locale);
 }
 
 function uiLabel(locale = 'en', key = '') {
@@ -750,8 +759,8 @@ export class TelegramAIBot {
 
   createModeKeyboard(locale = 'zh') {
     return Markup.inlineKeyboard([
-      [Markup.button.callback(locale === 'en' ? '❌ Exit current mode' : '❌ 退出当前模式', 'mode:clear')],
-      [Markup.button.callback(locale === 'en' ? '⬅️ Main menu' : '⬅️ 返回主菜单', 'menu:back')]
+      [Markup.button.callback(localText(locale, '❌ 退出当前模式', '❌ Exit current mode'), 'mode:clear')],
+      [Markup.button.callback(localText(locale, '⬅️ 返回主菜单', '⬅️ Main menu'), 'menu:back')]
     ]);
   }
 
@@ -763,11 +772,11 @@ export class TelegramAIBot {
 
     if (target === 'clear') {
       this.clearActiveMode(ctx);
-      await ctx.reply(locale === 'en' ? 'Exited current mode.' : '已退出当前模式。', this.createMenuKeyboard(locale));
+      await ctx.reply(localText(locale, '已退出当前模式。', 'Exited current mode.'), this.createMenuKeyboard(locale));
       return;
     }
 
-    await ctx.reply(locale === 'en' ? 'Current mode menu.' : '当前模式菜单。', this.createModeKeyboard(locale));
+    await ctx.reply(localText(locale, '当前模式菜单。', 'Current mode menu.'), this.createModeKeyboard(locale));
   }
 
   async handleActiveMode(ctx, mode) {
@@ -776,16 +785,18 @@ export class TelegramAIBot {
 
     if (/^(退出|退出模式|结束|结束模式|关闭|关闭模式|stop|exit|cancel)$/i.test(text)) {
       this.clearActiveMode(ctx);
-      await ctx.reply(locale === 'en' ? 'Exited current mode.' : '已退出当前模式。', this.createMenuKeyboard(locale));
+      await ctx.reply(localText(locale, '已退出当前模式。', 'Exited current mode.'), this.createMenuKeyboard(locale));
       return true;
     }
 
     if (mode?.type === 'translate') {
       if (!text) {
         await ctx.reply(
-          locale === 'en'
-            ? 'Translation mode is on. Send text to translate, or tap exit.'
-            : '翻译模式已开启。请发送要翻译的文字，或点击退出。',
+          localText(
+            locale,
+            '翻译模式已开启。请发送要翻译的文字，或点击退出。',
+            'Translation mode is on. Send text to translate, or tap exit.'
+          ),
           this.createModeKeyboard(locale)
         );
         return true;
@@ -827,14 +838,17 @@ export class TelegramAIBot {
         return this.handleIncomingMessage(ctx);
       }
 
-      await ctx.reply('请直接发送图片给我识别。', this.createImageActionKeyboard(locale));
+      await ctx.reply(localText(locale, '请直接发送图片给我识别。', 'Please send an image for me to inspect.'), this.createImageActionKeyboard(locale));
       return true;
     }
 
     if (pending.type === 'image_generate_prompt') {
       const prompt = text;
       if (!prompt) {
-        await ctx.reply('请直接发送图片描述，例如：一只赛博朋克风格的猫。', this.createImageActionKeyboard(locale));
+        await ctx.reply(
+          localText(locale, '请直接发送图片描述，例如：一只赛博朋克风格的猫。', 'Please send an image description, for example: a cyberpunk cat.'),
+          this.createImageActionKeyboard(locale)
+        );
         return true;
       }
 
@@ -845,12 +859,18 @@ export class TelegramAIBot {
     if (pending.type === 'image_edit_prompt') {
       const prompt = text || ctx.message?.caption || '';
       if (!ctx.message?.photo?.length) {
-        await ctx.reply('请发送要编辑的图片，并在图片说明里写编辑要求。', this.createImageActionKeyboard(locale));
+        await ctx.reply(
+          localText(locale, '请发送要编辑的图片，并在图片说明里写编辑要求。', 'Please send the image to edit and put the edit request in the caption.'),
+          this.createImageActionKeyboard(locale)
+        );
         return true;
       }
 
       if (!prompt) {
-        await ctx.reply('请在图片说明里写编辑要求，例如：把背景改成夜晚城市。', this.createImageActionKeyboard(locale));
+        await ctx.reply(
+          localText(locale, '请在图片说明里写编辑要求，例如：把背景改成夜晚城市。', 'Please write the edit request in the image caption, for example: change the background to a night city.'),
+          this.createImageActionKeyboard(locale)
+        );
         return true;
       }
 
@@ -864,13 +884,16 @@ export class TelegramAIBot {
         return true;
       }
 
-      await ctx.reply('请直接发送 Telegram 语音消息或音频文件。', this.createVoiceActionKeyboard(locale));
+      await ctx.reply(
+        localText(locale, '请直接发送 Telegram 语音消息或音频文件。', 'Please send a Telegram voice message or audio file.'),
+        this.createVoiceActionKeyboard(locale)
+      );
       return true;
     }
 
     if (pending.type === 'voice_tts_prompt') {
       if (!text) {
-        await ctx.reply('请直接发送要朗读的文字。', this.createVoiceActionKeyboard(locale));
+        await ctx.reply(localText(locale, '请直接发送要朗读的文字。', 'Please send the text to read aloud.'), this.createVoiceActionKeyboard(locale));
         return true;
       }
 
@@ -880,7 +903,11 @@ export class TelegramAIBot {
 
     if (pending.type === 'voice_live_prompt') {
       await ctx.reply(
-        '🎧 Gemini Live 入口已预留。\n\n当前 Telegram Bot API 里先保留入口，后续会接入 Gemini Live / Native Audio Dialog 的实时语音流程。\n\n现在可以先使用：\n- 🎙 语音转文字\n- 🔊 文字转语音',
+        localText(
+          locale,
+          '🎧 Gemini Live 入口已预留。\n\n当前 Telegram Bot API 里先保留入口，后续会接入 Gemini Live / Native Audio Dialog 的实时语音流程。\n\n现在可以先使用：\n- 🎙 语音转文字\n- 🔊 文字转语音',
+          '🎧 Gemini Live is reserved for a future real-time voice flow.\n\nFor now, Telegram Bot API mode supports:\n- 🎙 Voice to text\n- 🔊 Text to speech'
+        ),
         this.createVoiceActionKeyboard(locale)
       );
       return true;
@@ -893,7 +920,10 @@ export class TelegramAIBot {
       pending.type === 'file_translate_prompt'
     ) {
       if (!ctx.message?.document) {
-        await ctx.reply('请直接发送 PDF、DOCX、XLSX、TXT、MD、JSON、CSV 或 XML 文件。', this.createFileActionKeyboard(locale));
+        await ctx.reply(
+          localText(locale, '请直接发送 PDF、DOCX、XLSX、TXT、MD、JSON、CSV 或 XML 文件。', 'Please send a PDF, DOCX, XLSX, TXT, MD, JSON, CSV, or XML file.'),
+          this.createFileActionKeyboard(locale)
+        );
         return true;
       }
 
@@ -934,7 +964,7 @@ export class TelegramAIBot {
       }
 
       await ctx.reply(
-        locale === 'en' ? 'Exited current mode. You are back to normal chat.' : '已退出当前模式，回到普通聊天。',
+        localText(locale, '已退出当前模式，回到普通聊天。', 'Exited current mode. You are back to normal chat.'),
         this.createBottomKeyboard(locale)
       );
       return true;
@@ -961,7 +991,7 @@ export class TelegramAIBot {
         return true;
       }
 
-      await ctx.reply(locale === 'en' ? '🛠 Admin panel' : '🛠 管理员面板', this.createAdminActionKeyboard(locale));
+      await ctx.reply(localText(locale, '🛠 管理员面板', '🛠 Admin panel'), this.createAdminActionKeyboard(locale));
       return true;
     }
 
@@ -969,8 +999,7 @@ export class TelegramAIBot {
   }
 
   t(locale, key, params = {}) {
-    const normalized = normalizeLanguageCode(locale, 'en');
-    const dictionaryKey = normalized.startsWith('zh') ? 'zh' : normalized;
+    const dictionaryKey = uiTextLocale(locale);
     const dictionary = UI_TEXT[dictionaryKey] || UI_TEXT.en || UI_TEXT.zh;
     const fallback = UI_TEXT.en?.[key] || UI_TEXT.zh?.[key] || key;
     return formatText(dictionary[key] || fallback, params);
@@ -1007,9 +1036,7 @@ export class TelegramAIBot {
         ],
         resize_keyboard: true,
         is_persistent: true,
-        input_field_placeholder: locale === 'zh'
-          ? '直接输入任何问题，我会自动判断…'
-          : 'Ask anything naturally…'
+        input_field_placeholder: localText(locale, '直接输入任何问题，我会自动判断…', 'Ask anything naturally…')
       }
     };
   }
@@ -1064,7 +1091,7 @@ export class TelegramAIBot {
 
   createToolboxKeyboard(locale = 'zh') {
     const labels =
-      locale === 'en'
+      isEnglishLocale(locale)
         ? {
             web: 'Web search',
             translate: 'Translate',
@@ -1116,7 +1143,7 @@ export class TelegramAIBot {
 
   createAdminActionKeyboard(locale = 'zh') {
     const labels =
-      locale === 'en'
+      isEnglishLocale(locale)
         ? {
             status: '🤖 Bot status',
             whoami: '👤 My ID',
@@ -1156,8 +1183,8 @@ export class TelegramAIBot {
         Markup.button.callback(labels.configCheck, 'admin_pick:config_check')
       ],
       [
-        Markup.button.callback(locale === 'en' ? 'AI providers' : 'AI Provider', 'admin_pick:ai_providers'),
-        Markup.button.callback(locale === 'en' ? 'Test all' : '测试全部', 'admin_pick:ai_test_all')
+        Markup.button.callback(localText(locale, 'AI 平台', 'AI providers'), 'admin_pick:ai_providers'),
+        Markup.button.callback(localText(locale, '测试全部', 'Test all'), 'admin_pick:ai_test_all')
       ],
       [
         Markup.button.callback(labels.version, 'admin_pick:version'),
@@ -1167,7 +1194,7 @@ export class TelegramAIBot {
         Markup.button.callback(labels.quickHelp, 'admin_pick:quick_help')
       ],
       [Markup.button.callback(labels.cancel, 'admin_pick:cancel')],
-      [Markup.button.callback(locale === 'en' ? '⬅️ Main menu' : '⬅️ 返回主菜单', 'menu:back')]
+      [Markup.button.callback(localText(locale, '⬅️ 返回主菜单', '⬅️ Main menu'), 'menu:back')]
     ]);
   }
 
@@ -1176,28 +1203,28 @@ export class TelegramAIBot {
 
     return Markup.inlineKeyboard([
       [
-        Markup.button.url(locale === 'en' ? 'Zeabur' : 'Zeabur 部署', `${repo}/docs/ZEABUR.md`),
-        Markup.button.url(locale === 'en' ? 'Env vars' : '环境变量', `${repo}/docs/ENVIRONMENT.md`)
+        Markup.button.url(localText(locale, 'Zeabur 部署', 'Zeabur'), `${repo}/docs/ZEABUR.md`),
+        Markup.button.url(localText(locale, '环境变量', 'Env vars'), `${repo}/docs/ENVIRONMENT.md`)
       ],
       [
-        Markup.button.url(locale === 'en' ? 'Checklist' : '部署清单', `${repo}/docs/DEPLOY_CHECKLIST.md`),
-        Markup.button.url(locale === 'en' ? 'Troubleshooting' : '故障排查', `${repo}/docs/TROUBLESHOOTING.md`)
+        Markup.button.url(localText(locale, '部署清单', 'Checklist'), `${repo}/docs/DEPLOY_CHECKLIST.md`),
+        Markup.button.url(localText(locale, '故障排查', 'Troubleshooting'), `${repo}/docs/TROUBLESHOOTING.md`)
       ],
       [
-        Markup.button.url(locale === 'en' ? 'Commands' : '命令说明', `${repo}/docs/COMMANDS.md`),
-        Markup.button.url(locale === 'en' ? 'Security' : '安全说明', `${repo}/SECURITY.md`)
+        Markup.button.url(localText(locale, '命令说明', 'Commands'), `${repo}/docs/COMMANDS.md`),
+        Markup.button.url(localText(locale, '安全说明', 'Security'), `${repo}/SECURITY.md`)
       ],
-      [Markup.button.callback(locale === 'en' ? '⬅️ Admin panel' : '⬅️ 返回管理', 'admin_pick:back')]
+      [Markup.button.callback(localText(locale, '⬅️ 返回管理', '⬅️ Admin panel'), 'admin_pick:back')]
     ]);
   }
 
-  createModelKeyboard(currentModel) {
+  createModelKeyboard(currentModel, locale = 'zh') {
     const buttons = this.config.availableModels.map((model) =>
       Markup.button.callback(model === currentModel ? `✅ ${model}` : model, `set_model:${model}`)
     );
     return Markup.inlineKeyboard([
       ...chunkItems(buttons, 2),
-      [Markup.button.callback('返回主菜单 / Main menu', 'menu:back')]
+      [Markup.button.callback(localText(locale, '返回主菜单', 'Main menu'), 'menu:back')]
     ]);
   }
 
@@ -1232,10 +1259,10 @@ export class TelegramAIBot {
         const enabled = providerId === 'auto' || this.providerManager?.isEnabled?.(providerId);
         const current = providerId === currentProvider;
         const status = current
-          ? (locale === 'en' ? 'Current ' : '当前 ')
+          ? localText(locale, '当前 ', 'Current ')
           : configured && enabled
             ? ''
-            : (locale === 'en' ? 'Setup ' : '未配置 ');
+            : localText(locale, '未配置 ', 'Setup ');
         return Markup.button.callback(
           `${status}${AI_PROVIDER_ICONS[providerId] || this.getAIProviderLabel(providerId)}`,
           providerId === 'auto' ? 'ai:auto' : `ai:p:${providerId}`
@@ -1245,20 +1272,20 @@ export class TelegramAIBot {
     );
     const fallbackTarget = settings.fallbackEnabled ? 'off' : 'on';
     const fallbackLabel = settings.fallbackEnabled
-      ? (locale === 'en' ? 'Fallback: on' : '自动备用：开')
-      : (locale === 'en' ? 'Fallback: off' : '自动备用：关');
+      ? localText(locale, '自动备用：开', 'Fallback: on')
+      : localText(locale, '自动备用：关', 'Fallback: off');
 
     return Markup.inlineKeyboard([
       ...providerRows,
       [
-        Markup.button.callback(locale === 'en' ? 'Choose model' : '选择模型', 'ai:models'),
-        Markup.button.callback(locale === 'en' ? 'Test current' : '测试当前模型', 'ai:test')
+        Markup.button.callback(localText(locale, '选择模型', 'Choose model'), 'ai:models'),
+        Markup.button.callback(localText(locale, '测试当前模型', 'Test current'), 'ai:test')
       ],
       [
         Markup.button.callback(fallbackLabel, `ai:fb:${fallbackTarget}`),
-        Markup.button.callback(locale === 'en' ? 'Provider status' : 'Provider 状态', 'ai:status')
+        Markup.button.callback(localText(locale, '平台状态', 'Provider status'), 'ai:status')
       ],
-      [Markup.button.callback(locale === 'en' ? 'Main menu' : '返回主菜单', 'menu:back')]
+      [Markup.button.callback(localText(locale, '返回主菜单', 'Main menu'), 'menu:back')]
     ]);
   }
 
@@ -1266,14 +1293,14 @@ export class TelegramAIBot {
     const models = this.getProviderModelsForMenu(providerId);
     const buttons = models.map((model, index) =>
       Markup.button.callback(
-        `${model === currentModel ? (locale === 'en' ? 'Current ' : '当前 ') : ''}${model}`,
+        `${model === currentModel ? localText(locale, '当前 ', 'Current ') : ''}${model}`,
         `ai:m:${index}`
       )
     );
     return Markup.inlineKeyboard([
       ...chunkItems(buttons, 1),
-      [Markup.button.callback(locale === 'en' ? 'Back' : '返回', 'ai:back')],
-      [Markup.button.callback(locale === 'en' ? 'Main menu' : '返回主菜单', 'menu:back')]
+      [Markup.button.callback(localText(locale, '返回', 'Back'), 'ai:back')],
+      [Markup.button.callback(localText(locale, '返回主菜单', 'Main menu'), 'menu:back')]
     ]);
   }
 
@@ -1282,11 +1309,11 @@ export class TelegramAIBot {
     const modelId = settings.modelId || this.config.defaultModel;
     const provider = this.getAIProviderLabel(providerId);
     const fallback = settings.fallbackEnabled
-      ? (locale === 'en' ? 'on' : '已开启')
-      : (locale === 'en' ? 'off' : '已关闭');
+      ? localText(locale, '已开启', 'on')
+      : localText(locale, '已关闭', 'off');
     const status = this.providerManager?.listProviders?.().find((item) => item.id === providerId)?.status || 'unknown';
 
-    if (locale === 'en') {
+    if (isEnglishLocale(locale)) {
       return [
         'AI model',
         '',
@@ -1302,16 +1329,16 @@ export class TelegramAIBot {
     return [
       'AI 模型',
       '',
-      `当前 Provider：${provider}`,
+      `当前平台：${provider}`,
       `当前模型：${modelId || '-'}`,
       `自动备用：${fallback}`,
       `状态：${status}`,
       '',
-      '自动切换只有在备用 Provider 已填写 API Key 和模型后才会生效。未配置的平台会自动跳过。'
+      '自动切换只有在备用平台已填写 API Key 和模型后才会生效。未配置的平台会自动跳过。'
     ].join('\n');
   }
 
-  createPersonaKeyboard(currentPersona) {
+  createPersonaKeyboard(currentPersona, locale = 'zh') {
     const buttons = Object.keys(personaPresets).map((persona) =>
       Markup.button.callback(
         persona === currentPersona ? `✅ ${persona}` : persona,
@@ -1320,11 +1347,11 @@ export class TelegramAIBot {
     );
     return Markup.inlineKeyboard([
       ...chunkItems(buttons, 2),
-      [Markup.button.callback('返回主菜单 / Main menu', 'menu:back')]
+      [Markup.button.callback(localText(locale, '返回主菜单', 'Main menu'), 'menu:back')]
     ]);
   }
 
-  createLanguageKeyboard(currentLanguage) {
+  createLanguageKeyboard(currentLanguage, locale = 'zh') {
     const current = normalizeLanguageCode(currentLanguage || 'auto', 'auto');
     const buttons = Object.entries(LANGUAGE_NAMES).map(([code, name]) =>
       Markup.button.callback(
@@ -1334,7 +1361,7 @@ export class TelegramAIBot {
     );
     return Markup.inlineKeyboard([
       ...chunkItems(buttons, 2),
-      [Markup.button.callback('返回主菜单 / Main menu', 'menu:back')]
+      [Markup.button.callback(localText(locale, '返回主菜单', 'Main menu'), 'menu:back')]
     ]);
   }
 
@@ -1345,7 +1372,7 @@ export class TelegramAIBot {
       [Markup.button.callback(this.t(locale, 'memoryViewTopics'), 'memory_pick:topics')],
       [Markup.button.callback(this.t(locale, 'memoryClearAction'), 'memory_pick:clear')],
       [Markup.button.callback(this.t(locale, 'memoryCancel'), 'memory_pick:cancel')],
-      [Markup.button.callback(locale === 'en' ? 'Main menu' : '返回主菜单', 'menu:back')]
+      [Markup.button.callback(localText(locale, '返回主菜单', 'Main menu'), 'menu:back')]
     ]);
   }
 
@@ -1355,14 +1382,14 @@ export class TelegramAIBot {
       [Markup.button.callback(this.t(locale, 'clearLongMemory'), 'clear_pick:long')],
       [Markup.button.callback(this.t(locale, 'clearAllMemory'), 'clear_pick:all')],
       [Markup.button.callback(this.t(locale, 'clearCancel'), 'clear_pick:cancel')],
-      [Markup.button.callback(locale === 'en' ? 'Main menu' : '返回主菜单', 'menu:back')]
+      [Markup.button.callback(localText(locale, '返回主菜单', 'Main menu'), 'menu:back')]
     ]);
   }
 
 
   createVoiceActionKeyboard(locale = 'zh') {
     const labels =
-      locale === 'en'
+      isEnglishLocale(locale)
         ? {
             transcribe: '🎙 Voice to text',
             tts: '🔊 Text to speech',
@@ -1383,14 +1410,14 @@ export class TelegramAIBot {
       ],
       [Markup.button.callback(labels.live, 'voice_pick:live')],
       [Markup.button.callback(labels.cancel, 'voice_pick:cancel')],
-      [Markup.button.callback(locale === 'en' ? '⬅️ Main menu' : '⬅️ 返回主菜单', 'menu:back')]
+      [Markup.button.callback(localText(locale, '⬅️ 返回主菜单', '⬅️ Main menu'), 'menu:back')]
     ]);
   }
 
 
   createFileActionKeyboard(locale = 'zh') {
     const labels =
-      locale === 'en'
+      isEnglishLocale(locale)
         ? {
             summarize: '📄 Summarize file',
             keypoints: '🎯 Extract key points',
@@ -1409,7 +1436,7 @@ export class TelegramAIBot {
       [Markup.button.callback(labels.keypoints, 'file_pick:keypoints')],
       [Markup.button.callback(labels.translate, 'file_pick:translate')],
       [Markup.button.callback(labels.cancel, 'file_pick:cancel')],
-      [Markup.button.callback(locale === 'en' ? '⬅️ Main menu' : '⬅️ 返回主菜单', 'menu:back')]
+      [Markup.button.callback(localText(locale, '⬅️ 返回主菜单', '⬅️ Main menu'), 'menu:back')]
     ]);
   }
 
@@ -1425,16 +1452,16 @@ export class TelegramAIBot {
       ],
       [
         Markup.button.callback('繁体中文', 'translate_pick:zh_hant'),
-        Markup.button.callback(locale === 'en' ? 'Auto' : '自动判断', 'translate_pick:auto')
+        Markup.button.callback(localText(locale, '自动判断', 'Auto'), 'translate_pick:auto')
       ],
-      [Markup.button.callback(locale === 'en' ? 'Main menu' : '返回主菜单', 'menu:back')]
+      [Markup.button.callback(localText(locale, '返回主菜单', 'Main menu'), 'menu:back')]
     ]);
   }
 
 
   createImageActionKeyboard(locale = 'zh') {
     const labels =
-      locale === 'en'
+      isEnglishLocale(locale)
         ? {
             understand: '🔍 Understand image',
             generate: '🎨 Generate image',
@@ -1455,7 +1482,7 @@ export class TelegramAIBot {
       ],
       [Markup.button.callback(labels.edit, 'image_pick:edit')],
       [Markup.button.callback(labels.cancel, 'image_pick:cancel')],
-      [Markup.button.callback(locale === 'en' ? '⬅️ Main menu' : '⬅️ 返回主菜单', 'menu:back')]
+      [Markup.button.callback(localText(locale, '⬅️ 返回主菜单', '⬅️ Main menu'), 'menu:back')]
     ]);
   }
 
@@ -1514,7 +1541,7 @@ export class TelegramAIBot {
       ],
       [
         Markup.button.callback('繁体中文', `act:translate_pick:${token}:zh_hant`),
-        Markup.button.callback(locale === 'en' ? 'Auto' : '自动', `act:translate_pick:${token}:auto`)
+        Markup.button.callback(localText(locale, '自动', 'Auto'), `act:translate_pick:${token}:auto`)
       ],
       [Markup.button.callback(this.t(locale, 'actionBack'), `act:back:${token}`)]
     ]);
@@ -2276,7 +2303,7 @@ export class TelegramAIBot {
   formatQuotaCooldownMessage(cooldown, locale = 'zh') {
     const retrySeconds = Math.max(1, Number(cooldown?.retrySeconds || 0));
 
-    if (locale === 'en') {
+    if (isEnglishLocale(locale)) {
       return `AI quota is cooling down. Please try again in about ${retrySeconds} seconds.`;
     }
 
@@ -2479,7 +2506,7 @@ export class TelegramAIBot {
       }
     };
 
-    const lang = messages[locale] ? locale : 'zh';
+    const lang = uiTextLocale(locale);
     const t = messages[lang];
     const setupOnlyStatuses = ['unconfigured', 'disabled', 'model_missing', 'cooldown'];
     const cooldownOnly =
@@ -2688,7 +2715,7 @@ export class TelegramAIBot {
   async handleUnknownCallback(ctx) {
     const locale = this.getLocale(ctx);
     const message =
-      locale === 'en'
+      isEnglishLocale(locale)
         ? 'This button is no longer available. Please open the menu again.'
         : '这个按钮可能已过期，请重新打开菜单。';
 
@@ -2941,13 +2968,13 @@ export class TelegramAIBot {
   async handleStart(ctx) {
     const locale = this.getLocale(ctx);
     const adminLine = this.isAdmin(ctx)
-      ? locale === 'en'
+      ? isEnglishLocale(locale)
         ? '\n\nAs an admin, use the 🛠 Admin button to open the admin panel.'
         : '\n\n管理员可点底部「🛠 管理」进入管理面板。'
       : '';
 
     const text =
-      locale === 'en'
+      isEnglishLocale(locale)
         ? [
             'Hi, I am your AI assistant.',
             '',
@@ -2959,8 +2986,8 @@ export class TelegramAIBot {
             '• translate, rewrite, or summarize content',
             '• read a web page, image, voice message, or file',
             '',
-            'Use Settings to switch model, persona, or language. Send /menu to open every tool.'
-          ].join('\n')
+            'Use Settings to switch model, persona, or language. Send /menu to open every tool.',
+          ].join('\n') + adminLine
         : [
             '你好，我是你的 AI 助手。',
             '',
@@ -2986,7 +3013,7 @@ export class TelegramAIBot {
     const isAdmin = this.isAdmin(ctx) ? 'yes' : 'no';
 
     const text =
-      locale === 'en'
+      isEnglishLocale(locale)
         ? [
             '👤 Your Telegram info',
             '',
@@ -3017,7 +3044,7 @@ export class TelegramAIBot {
     const locale = this.getLocale(ctx);
 
     const helpText =
-      locale === 'en'
+      isEnglishLocale(locale)
         ? [
             'How to use this assistant',
             '',
@@ -3229,7 +3256,7 @@ export class TelegramAIBot {
     const topicCount = this.db.clearTopicStates?.({ userId, chatId }) || 0;
     this.db.clearActiveContext?.({ userId, chatId });
 
-    if (locale === 'en') {
+    if (isEnglishLocale(locale)) {
       await ctx.reply(`Long-term memory and topic state cleared.\nDeleted memory items: ${memoryCount}\nDeleted topics: ${topicCount}`, this.createMenuKeyboard(locale));
       return;
     }
@@ -3278,7 +3305,7 @@ export class TelegramAIBot {
     if (!arg) {
       await ctx.reply(
         this.t(locale, 'currentModel', { model: user?.preferredModel || this.config.defaultModel }),
-        this.createModelKeyboard(user?.preferredModel || this.config.defaultModel)
+        this.createModelKeyboard(user?.preferredModel || this.config.defaultModel, locale)
       );
       return;
     }
@@ -3286,20 +3313,20 @@ export class TelegramAIBot {
     if (!this.config.availableModels.includes(arg)) {
       await ctx.reply(
         this.t(locale, 'modelUnavailable', { models: this.config.availableModels.join(', ') }),
-        this.createModelKeyboard(user?.preferredModel || this.config.defaultModel)
+        this.createModelKeyboard(user?.preferredModel || this.config.defaultModel, locale)
       );
       return;
     }
 
     await this.db.setUserSettings(ctx.from.id, { preferredModel: arg });
     this.db.setUserModel?.(ctx.from.id, arg);
-    await ctx.reply(this.t(locale, 'modelSwitched', { model: arg }), this.createModelKeyboard(arg));
+    await ctx.reply(this.t(locale, 'modelSwitched', { model: arg }), this.createModelKeyboard(arg, locale));
   }
 
 
   formatPersonaOverview(currentPersona = 'default', locale = 'zh') {
     const descriptions =
-      locale === 'en'
+      isEnglishLocale(locale)
         ? {
             default: 'General assistant: accurate, practical, concise.',
             coder: 'Coding/debugging: better for code, deployment, errors, logs.',
@@ -3316,7 +3343,7 @@ export class TelegramAIBot {
           };
 
     const lines =
-      locale === 'en'
+      isEnglishLocale(locale)
         ? ['🎭 Persona', '', 'Current: ' + currentPersona, '', 'What it changes:', 'It changes the bot system prompt, not the model.', '']
         : ['🎭 人格', '', '当前：' + currentPersona, '', '它的作用：', '人格会改变 Bot 的系统提示词，不是换模型。', ''];
 
@@ -3335,7 +3362,7 @@ export class TelegramAIBot {
     if (!arg) {
       await ctx.reply(
         this.formatPersonaOverview(user?.persona || 'default', locale),
-        this.createPersonaKeyboard(user?.persona || 'default')
+        this.createPersonaKeyboard(user?.persona || 'default', locale)
       );
       return;
     }
@@ -3343,13 +3370,13 @@ export class TelegramAIBot {
     if (!(arg in personaPresets)) {
       await ctx.reply(
         this.t(locale, 'personaUnsupported', { options: Object.keys(personaPresets).join(', ') }),
-        this.createPersonaKeyboard(user?.persona || 'default')
+        this.createPersonaKeyboard(user?.persona || 'default', locale)
       );
       return;
     }
 
     await this.db.setUserSettings(ctx.from.id, { persona: arg, customSystemPrompt: '' });
-    await ctx.reply(this.formatPersonaOverview(arg, locale), this.createPersonaKeyboard(arg));
+    await ctx.reply(this.formatPersonaOverview(arg, locale), this.createPersonaKeyboard(arg, locale));
   }
 
   async handleLanguage(ctx) {
@@ -3367,13 +3394,13 @@ export class TelegramAIBot {
 
       await ctx.reply(
         this.t(locale, 'currentLanguage', { language: display }),
-        this.createLanguageKeyboard(preferred)
+        this.createLanguageKeyboard(preferred, locale)
       );
       return;
     }
 
     if (!arg) {
-      await ctx.reply(this.t(locale, 'languageUnsupported'), this.createLanguageKeyboard(preferred));
+      await ctx.reply(this.t(locale, 'languageUnsupported'), this.createLanguageKeyboard(preferred, locale));
       return;
     }
 
@@ -3401,7 +3428,10 @@ export class TelegramAIBot {
     const document = ctx.message?.document;
 
     if (!document) {
-      await ctx.reply('请直接发送 PDF、DOCX、XLSX、TXT、MD、JSON、CSV 或 XML 文件。', this.createFileActionKeyboard(locale));
+      await ctx.reply(
+        localText(locale, '请直接发送 PDF、DOCX、XLSX、TXT、MD、JSON、CSV 或 XML 文件。', 'Please send a PDF, DOCX, XLSX, TXT, MD, JSON, CSV, or XML file.'),
+        this.createFileActionKeyboard(locale)
+      );
       return;
     }
 
@@ -3440,21 +3470,21 @@ export class TelegramAIBot {
 
       const extracted = truncateText(parsed.text || '', this.config.maxInputChars);
       if (!extracted) {
-        await ctx.reply('文件里没有提取到可处理的文字内容。');
+        await ctx.reply(localText(locale, '文件里没有提取到可处理的文字内容。', 'No readable text could be extracted from the file.'));
         return;
       }
 
       const instructions = {
         summarize:
-          locale === 'en'
+          isEnglishLocale(locale)
             ? 'Summarize the file clearly. Include the main topic, important details, and conclusion.'
             : '请清楚总结这个文件。包括主题、重要内容、结论和需要注意的地方。',
         keypoints:
-          locale === 'en'
+          isEnglishLocale(locale)
             ? 'Extract the key points from the file. Use concise bullet points and keep important numbers, names, dates, and action items.'
             : '请提取这个文件的重点。用简洁条目列出，保留重要数字、名称、日期和待办事项。',
         translate:
-          locale === 'en'
+          isEnglishLocale(locale)
             ? 'Translate the file content into Simplified Chinese. Output only the translation unless a short note is necessary.'
             : '请把这个文件内容翻译成简体中文。如果原文已经是中文，请翻译成自然英文。除非必要，不要额外解释。'
       };
@@ -3574,7 +3604,7 @@ export class TelegramAIBot {
     const targetUrl = String(url || '').trim();
 
     if (!/^https?:\/\//i.test(targetUrl)) {
-      await ctx.reply(locale === 'en' ? 'Send a valid URL.' : '请发送一个有效的网址。');
+      await ctx.reply(localText(locale, '请发送一个有效的网址。', 'Send a valid URL.'));
       return;
     }
 
@@ -3597,7 +3627,7 @@ export class TelegramAIBot {
       try {
         const parsed = JSON.parse(raw);
         if (parsed?.error) {
-          await ctx.reply(locale === 'en' ? 'This page cannot be fetched right now.' : '这个网页暂时抓不到，可能是网站禁止机器人访问。');
+          await ctx.reply(localText(locale, '这个网页暂时抓不到，可能是网站禁止机器人访问。', 'This page cannot be fetched right now.'));
           return;
         }
       } catch {
@@ -3605,9 +3635,9 @@ export class TelegramAIBot {
       }
 
       await this.db.incrementStats('toolCalls');
-      await sendTextReply(ctx, this.formatToolResult(raw, locale === 'en' ? 'URL summary' : '网页摘要'), this.config.maxOutputChars);
+      await sendTextReply(ctx, this.formatToolResult(raw, localText(locale, '网页摘要', 'URL summary')), this.config.maxOutputChars);
     } catch {
-      await ctx.reply(locale === 'en' ? 'This page cannot be fetched right now.' : '这个网页暂时抓不到，可能是网站禁止机器人访问。');
+      await ctx.reply(localText(locale, '这个网页暂时抓不到，可能是网站禁止机器人访问。', 'This page cannot be fetched right now.'));
     }
   }
 
@@ -3674,7 +3704,7 @@ export class TelegramAIBot {
         // No-op, keep raw text path.
       }
       await this.db.incrementStats('toolCalls');
-      await sendTextReply(ctx, this.formatToolResult(raw, locale === 'en' ? 'Web search results' : '联网搜索结果'), this.config.maxOutputChars);
+      await sendTextReply(ctx, this.formatToolResult(raw, localText(locale, '联网搜索结果', 'Web search results')), this.config.maxOutputChars);
     } catch (error) {
       await ctx.reply(this.formatUserFacingError(error, locale));
     }
@@ -3763,7 +3793,10 @@ export class TelegramAIBot {
     const voice = ctx.message?.voice || ctx.message?.audio;
 
     if (!voice) {
-      await ctx.reply('请直接发送 Telegram 语音消息或音频文件。', this.createVoiceActionKeyboard(locale));
+      await ctx.reply(
+        localText(locale, '请直接发送 Telegram 语音消息或音频文件。', 'Please send a Telegram voice message or audio file.'),
+        this.createVoiceActionKeyboard(locale)
+      );
       return;
     }
 
@@ -3795,7 +3828,7 @@ export class TelegramAIBot {
 
       await this.db.incrementStats('voiceTranscriptions');
 
-      const title = locale === 'en' ? '🎙 Transcription:' : '🎙 语音转文字结果：';
+      const title = localText(locale, '🎙 语音转文字结果：', '🎙 Transcription:');
       await sendTextReply(ctx, `${title}\n\n${result.text || this.t(locale, 'noReply')}`, this.config.maxOutputChars, this.createMenuKeyboard(locale));
     } catch (error) {
       this.logger.warn('Voice transcription failed', {
@@ -3884,7 +3917,7 @@ export class TelegramAIBot {
     const userTotal = user?.totalMessages || 0;
 
     const lines =
-      locale === 'en'
+      isEnglishLocale(locale)
         ? [
             '🤖 Bot status',
             '',
@@ -3922,7 +3955,7 @@ export class TelegramAIBot {
             '🤖 Bot 状态',
             '',
             '模型配置：',
-            `- Provider：${this.getProviderName()}`,
+            `- 平台：${this.getProviderName()}`,
             `- 默认模型：${this.config.defaultModel || '-'}`,
             `- 翻译模型：${this.config.translationModel || this.config.defaultModel || '-'}`,
             `- Router 模型：${this.config.routerModel || this.config.defaultModel || '-'}`,
@@ -3965,7 +3998,7 @@ export class TelegramAIBot {
     }
 
     const lines =
-      locale === 'en'
+      isEnglishLocale(locale)
         ? [
             '⚙️ Admin quick guide',
             '',
@@ -4038,7 +4071,7 @@ export class TelegramAIBot {
       : String(this.config.defaultModel || '');
 
     const lines =
-      locale === 'en'
+      isEnglishLocale(locale)
         ? [
             '🧭 Config check',
             '',
@@ -4062,7 +4095,7 @@ export class TelegramAIBot {
             '',
             ...checkLines,
             '',
-            `Provider：${provider}`,
+            `平台：${provider}`,
             `默认模型：${this.config.defaultModel || '-'}`,
             `翻译模型：${this.config.translationModel || this.config.defaultModel || '-'}`,
             `Router 模型：${this.config.routerModel || this.config.defaultModel || '-'}`,
@@ -4101,7 +4134,7 @@ export class TelegramAIBot {
       'main';
 
     const lines =
-      locale === 'en'
+      isEnglishLocale(locale)
         ? [
             'ℹ️ Version info',
             '',
@@ -4119,7 +4152,7 @@ export class TelegramAIBot {
             `分支：${branch}`,
             `提交：${String(commit).slice(0, 12)}`,
             `运行时间：${this.formatUptime(process.uptime())}`,
-            `Provider：${this.getProviderName()}`,
+            `平台：${this.getProviderName()}`,
             `模型：${this.config.defaultModel || '-'}`
           ];
 
@@ -4164,7 +4197,7 @@ export class TelegramAIBot {
       const text = completion.result?.text || "";
 
       const lines =
-        locale === "en"
+        isEnglishLocale(locale)
           ? [
               "🧪 AI test passed",
               "",
@@ -4175,7 +4208,7 @@ export class TelegramAIBot {
           : [
               "🧪 AI 测试通过",
               "",
-              `Provider：${this.getProviderName()}`,
+              `平台：${this.getProviderName()}`,
               `实际模型：${usedModel}`,
               `模型回复：${text}`
             ];
@@ -4192,7 +4225,7 @@ export class TelegramAIBot {
       });
 
       const lines =
-        locale === "en"
+        isEnglishLocale(locale)
           ? [
               "🧪 AI test failed",
               "",
@@ -4221,7 +4254,7 @@ export class TelegramAIBot {
 
     const providers = this.providerManager?.listProviders?.() || [];
     const lines = [
-      locale === 'en' ? 'AI providers' : 'AI Provider 状态',
+      localText(locale, 'AI 平台状态', 'AI providers'),
       '',
       ...providers.map((item) => {
         const model = item.models?.[0] || '-';
@@ -4241,11 +4274,11 @@ export class TelegramAIBot {
     const providers = (this.providerManager?.listProviders?.() || [])
       .filter((item) => item.configured && item.enabled && item.models?.[0]);
     if (providers.length === 0) {
-      await ctx.reply(locale === 'en' ? 'No configured providers to test.' : '没有可测试的已配置 Provider。', this.createAdminActionKeyboard(locale));
+      await ctx.reply(localText(locale, '没有可测试的已配置平台。', 'No configured providers to test.'), this.createAdminActionKeyboard(locale));
       return;
     }
 
-    const lines = [locale === 'en' ? 'AI provider tests' : 'AI Provider 测试', ''];
+    const lines = [localText(locale, 'AI 平台测试', 'AI provider tests'), ''];
     for (const provider of providers) {
       try {
         const completion = await this.completeWithAiFallback({
@@ -4283,7 +4316,7 @@ export class TelegramAIBot {
       retrySeconds: Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000))
     })).filter((item) => item.retrySeconds > 0);
 
-    if (locale === 'en') {
+    if (isEnglishLocale(locale)) {
       const lines = [
         '📊 Quota status',
         '',
@@ -4440,9 +4473,11 @@ export class TelegramAIBot {
 
     await ctx.answerCbQuery();
     await ctx.reply(
-      locale === 'en'
-        ? `🌍 Translation mode is on. Target: ${targetLanguage === 'auto' ? 'auto' : targetLanguage}.\n\nEvery text message will be translated until you exit this mode.`
-        : `🌍 翻译模式已开启。目标语言：${targetLanguage === 'auto' ? 'auto' : targetLanguage}\n\n之后你发的每一句文字都会自动翻译，直到退出当前模式。`,
+      localText(
+        locale,
+        `🌍 翻译模式已开启。目标语言：${targetLanguage === 'auto' ? 'auto' : targetLanguage}\n\n之后你发的每一句文字都会自动翻译，直到退出当前模式。`,
+        `🌍 Translation mode is on. Target: ${targetLanguage === 'auto' ? 'auto' : targetLanguage}.\n\nEvery text message will be translated until you exit this mode.`
+      ),
       this.createModeKeyboard(locale)
     );
   }
@@ -4466,7 +4501,7 @@ export class TelegramAIBot {
     const isAdmin = this.isAdmin(ctx);
 
     const lines =
-      locale === 'en'
+      isEnglishLocale(locale)
         ? [
             '⚙️ Settings center',
             '',
@@ -4532,7 +4567,7 @@ export class TelegramAIBot {
     }
 
     if (target === 'toolbox') {
-      await ctx.reply(locale === 'en' ? '🧰 Toolbox' : '🧰 工具箱', this.createToolboxKeyboard(locale));
+      await ctx.reply(localText(locale, '🧰 工具箱', '🧰 Toolbox'), this.createToolboxKeyboard(locale));
       return;
     }
 
@@ -4543,7 +4578,7 @@ export class TelegramAIBot {
         return;
       }
 
-      await ctx.reply(locale === 'en' ? '🛠 Admin panel' : '🛠 管理员面板', this.createAdminActionKeyboard(locale));
+      await ctx.reply(localText(locale, '🛠 管理员面板', '🛠 Admin panel'), this.createAdminActionKeyboard(locale));
       return;
     }
 
@@ -4558,7 +4593,7 @@ export class TelegramAIBot {
 
     if (target === 'web') {
       this.setPendingMenuAction(ctx, 'web_prompt');
-      await ctx.reply(locale === 'en' ? 'Send the search keywords.' : '请发送要搜索的关键词。', this.createToolboxKeyboard(locale));
+      await ctx.reply(localText(locale, '请发送要搜索的关键词。', 'Send the search keywords.'), this.createToolboxKeyboard(locale));
       return;
     }
 
@@ -4568,17 +4603,17 @@ export class TelegramAIBot {
     }
 
     if (target === 'image') {
-      await ctx.reply(locale === 'en' ? 'Choose an image action:' : '请选择图片功能：', this.createImageActionKeyboard(locale));
+      await ctx.reply(localText(locale, '请选择图片功能：', 'Choose an image action:'), this.createImageActionKeyboard(locale));
       return;
     }
 
     if (target === 'voice') {
-      await ctx.reply(locale === 'en' ? 'Choose a voice action:' : '请选择语音功能：', this.createVoiceActionKeyboard(locale));
+      await ctx.reply(localText(locale, '请选择语音功能：', 'Choose a voice action:'), this.createVoiceActionKeyboard(locale));
       return;
     }
 
     if (target === 'file') {
-      await ctx.reply(locale === 'en' ? 'Choose a file action:' : '请选择文件功能：', this.createFileActionKeyboard(locale));
+      await ctx.reply(localText(locale, '请选择文件功能：', 'Choose a file action:'), this.createFileActionKeyboard(locale));
       return;
     }
 
@@ -4606,17 +4641,17 @@ export class TelegramAIBot {
       try {
         await ctx.deleteMessage();
       } catch {
-        await ctx.reply(locale === 'en' ? 'Menu closed.' : '菜单已关闭。');
+        await ctx.reply(localText(locale, '菜单已关闭。', 'Menu closed.'));
       }
       return;
     }
 
     if (target === 'admin') {
-      await ctx.reply(locale === 'en' ? '🛠 Admin panel' : '🛠 管理员面板', this.createAdminActionKeyboard(locale));
+      await ctx.reply(localText(locale, '🛠 管理员面板', '🛠 Admin panel'), this.createAdminActionKeyboard(locale));
       return;
     }
 
-    await ctx.reply(locale === 'en' ? '🧰 Toolbox' : '🧰 工具箱', this.createToolboxKeyboard(locale));
+    await ctx.reply(localText(locale, '🧰 工具箱', '🧰 Toolbox'), this.createToolboxKeyboard(locale));
   }
 
   async handleAdminActionCallback(ctx) {
@@ -4672,7 +4707,7 @@ export class TelegramAIBot {
     }
 
     if (target === 'back') {
-      await ctx.reply('🛠 管理员面板', this.createAdminActionKeyboard(locale));
+      await ctx.reply(localText(locale, '🛠 管理员面板', '🛠 Admin panel'), this.createAdminActionKeyboard(locale));
       return;
     }
 
@@ -4693,15 +4728,17 @@ export class TelegramAIBot {
 
     if (target === 'docs') {
       const text =
-        locale === 'en'
-          ? '📚 Deploy docs\n\nTap a button below to open the document.'
-          : '📚 部署文档\n\n点击下面按钮打开对应文档。';
+        localText(
+          locale,
+          '📚 部署文档\n\n点击下面按钮打开对应文档。',
+          '📚 Deploy docs\n\nTap a button below to open the document.'
+        );
 
       await ctx.reply(text, this.createDeployDocsKeyboard(locale));
       return;
     }
 
-    await ctx.reply('🛠 管理员面板', this.createAdminActionKeyboard(locale));
+    await ctx.reply(localText(locale, '🛠 管理员面板', '🛠 Admin panel'), this.createAdminActionKeyboard(locale));
   }
 
   async handleFileActionCallback(ctx) {
@@ -4722,7 +4759,7 @@ export class TelegramAIBot {
     };
 
     const titleMap =
-      locale === 'en'
+      isEnglishLocale(locale)
         ? {
             summarize: '📄 Summarize file',
             keypoints: '🎯 Extract key points',
@@ -4736,14 +4773,14 @@ export class TelegramAIBot {
 
     const pending = pendingMap[target];
     if (!pending) {
-      await ctx.reply('📎 请选择文件功能：', this.createFileActionKeyboard(locale));
+      await ctx.reply(localText(locale, '📎 请选择文件功能：', '📎 Choose a file action:'), this.createFileActionKeyboard(locale));
       return;
     }
 
     this.setPendingMenuAction(ctx, pending);
 
     await ctx.reply(
-      `${titleMap[target]}\n\n请直接发送 PDF、DOCX、XLSX、TXT、MD、JSON、CSV 或 XML 文件。`,
+      `${titleMap[target]}\n\n${localText(locale, '请直接发送 PDF、DOCX、XLSX、TXT、MD、JSON、CSV 或 XML 文件。', 'Please send a PDF, DOCX, XLSX, TXT, MD, JSON, CSV, or XML file.')}`,
       this.createMenuKeyboard(locale)
     );
   }
@@ -4761,26 +4798,36 @@ export class TelegramAIBot {
 
     if (target === 'transcribe') {
       this.setPendingMenuAction(ctx, 'voice_transcribe_prompt');
-      await ctx.reply('🎙 语音转文字\n\n请直接发送 Telegram 语音消息或音频文件。', this.createMenuKeyboard(locale));
+      await ctx.reply(
+        localText(locale, '🎙 语音转文字\n\n请直接发送 Telegram 语音消息或音频文件。', '🎙 Voice to text\n\nPlease send a Telegram voice message or audio file.'),
+        this.createMenuKeyboard(locale)
+      );
       return;
     }
 
     if (target === 'tts') {
       this.setPendingMenuAction(ctx, 'voice_tts_prompt');
-      await ctx.reply('🔊 文字转语音\n\n请直接发送要朗读的文字，不需要输入指令。', this.createMenuKeyboard(locale));
+      await ctx.reply(
+        localText(locale, '🔊 文字转语音\n\n请直接发送要朗读的文字，不需要输入指令。', '🔊 Text to speech\n\nPlease send the text to read aloud. No command is needed.'),
+        this.createMenuKeyboard(locale)
+      );
       return;
     }
 
     if (target === 'live') {
       this.setPendingMenuAction(ctx, 'voice_live_prompt');
       await ctx.reply(
-        '🎧 Gemini Live\n\n这个入口已预留。后续会接 Gemini Live / Native Audio Dialog。\n\n现在可先使用语音转文字和文字转语音。',
+        localText(
+          locale,
+          '🎧 Gemini Live\n\n这个入口已预留。后续会接 Gemini Live / Native Audio Dialog。\n\n现在可先使用语音转文字和文字转语音。',
+          '🎧 Gemini Live\n\nThis entry is reserved for Gemini Live / Native Audio Dialog.\n\nFor now, use voice to text or text to speech.'
+        ),
         this.createVoiceActionKeyboard(locale)
       );
       return;
     }
 
-    await ctx.reply('🎤 请选择语音功能：', this.createVoiceActionKeyboard(locale));
+    await ctx.reply(localText(locale, '🎤 请选择语音功能：', '🎤 Choose a voice action:'), this.createVoiceActionKeyboard(locale));
   }
 
   async handleImageActionCallback(ctx) {
@@ -4796,23 +4843,23 @@ export class TelegramAIBot {
 
     if (target === 'understand') {
       this.setPendingMenuAction(ctx, 'image_understand_prompt');
-      await ctx.reply('🔍 图片识别\n\n请直接发送图片给我。', this.createMenuKeyboard(locale));
+      await ctx.reply(localText(locale, '🔍 图片识别\n\n请直接发送图片给我。', '🔍 Image understanding\n\nPlease send an image.'), this.createMenuKeyboard(locale));
       return;
     }
 
     if (target === 'generate') {
       this.setPendingMenuAction(ctx, 'image_generate_prompt');
-      await ctx.reply('🎨 生成图片\n\n请直接发送图片描述，不需要输入指令。', this.createMenuKeyboard(locale));
+      await ctx.reply(localText(locale, '🎨 生成图片\n\n请直接发送图片描述，不需要输入指令。', '🎨 Generate image\n\nPlease send an image description. No command is needed.'), this.createMenuKeyboard(locale));
       return;
     }
 
     if (target === 'edit') {
       this.setPendingMenuAction(ctx, 'image_edit_prompt');
-      await ctx.reply('🛠 编辑图片\n\n请发送要编辑的图片，并在图片说明里写编辑要求。', this.createMenuKeyboard(locale));
+      await ctx.reply(localText(locale, '🛠 编辑图片\n\n请发送要编辑的图片，并在图片说明里写编辑要求。', '🛠 Edit image\n\nPlease send the image to edit and write the edit request in the caption.'), this.createMenuKeyboard(locale));
       return;
     }
 
-    await ctx.reply('🖼️ 请选择图片功能：', this.createImageActionKeyboard(locale));
+    await ctx.reply(localText(locale, '🖼️ 请选择图片功能：', '🖼️ Choose an image action:'), this.createImageActionKeyboard(locale));
   }
 
   async handleAssistantActionCallback(ctx) {
@@ -5110,7 +5157,7 @@ export class TelegramAIBot {
     if (kind === 'p') {
       const providerId = value;
       if (!AI_PROVIDER_MENU_ORDER.includes(providerId) || providerId === 'auto') {
-        await ctx.reply(locale === 'en' ? 'Unsupported provider.' : '不支持这个 Provider。');
+        await ctx.reply(localText(locale, '不支持这个平台。', 'Unsupported provider.'));
         return;
       }
       const defaultModel = this.providerManager?.getProviderModels?.(providerId)?.[0] || '';
@@ -5133,7 +5180,7 @@ export class TelegramAIBot {
       const models = this.getProviderModelsForMenu(settings.providerId);
       const model = Number.isInteger(index) ? models[index] : '';
       if (!model) {
-        await ctx.reply(locale === 'en' ? 'Model is not available.' : '这个模型不可用。');
+        await ctx.reply(localText(locale, '这个模型不可用。', 'Model is not available.'));
         return;
       }
       this.db.setUserModel?.(userId, model);
@@ -5150,7 +5197,7 @@ export class TelegramAIBot {
     if (action === 'models') {
       await this.editAssistantMessageText(
         ctx,
-        locale === 'en' ? 'Choose a model:' : '请选择模型：',
+        localText(locale, '请选择模型：', 'Choose a model:'),
         this.createAIModelKeyboard(settings.providerId, settings.modelId, locale)
       );
       return;
@@ -5171,7 +5218,7 @@ export class TelegramAIBot {
     if (action === 'status') {
       const rows = this.providerManager?.listProviders?.() || [];
       const lines = [
-        locale === 'en' ? 'Provider status' : 'Provider 状态',
+        localText(locale, '平台状态', 'Provider status'),
         '',
         ...rows.map((item) => `${item.name}: ${item.status}${item.models?.[0] ? ` (${item.models[0]})` : ''}`)
       ];
@@ -5200,16 +5247,16 @@ export class TelegramAIBot {
           }
         });
         const lines = [
-          locale === 'en' ? 'AI test passed' : 'AI 测试通过',
+          localText(locale, 'AI 测试通过', 'AI test passed'),
           '',
-          `Provider: ${this.getAIProviderLabel(completion.providerId || settings.providerId)}`,
-          `Model: ${completion.model || settings.modelId}`,
-          `Reply: ${completion.result?.text || ''}`
+          `${localText(locale, '平台', 'Provider')}: ${this.getAIProviderLabel(completion.providerId || settings.providerId)}`,
+          `${localText(locale, '模型', 'Model')}: ${completion.model || settings.modelId}`,
+          `${localText(locale, '回复', 'Reply')}: ${completion.result?.text || ''}`
         ];
         await this.editAssistantMessageText(ctx, lines.join('\n'), this.createAIProviderKeyboard(settings, locale));
       } catch (error) {
         const lines = [
-          locale === 'en' ? 'AI test failed' : 'AI 测试失败',
+          localText(locale, 'AI 测试失败', 'AI test failed'),
           '',
           this.formatUserFacingError(error, locale)
         ];
@@ -5235,7 +5282,7 @@ export class TelegramAIBot {
     }
     await this.db.setUserSettings(ctx.from.id, { preferredModel: model });
     this.db.setUserModel?.(ctx.from.id, model);
-    await this.editAssistantMessageText(ctx, this.t(locale, 'modelSwitched', { model }), this.createModelKeyboard(model));
+    await this.editAssistantMessageText(ctx, this.t(locale, 'modelSwitched', { model }), this.createModelKeyboard(model, locale));
   }
 
   async handlePersonaCallback(ctx) {
@@ -5247,7 +5294,7 @@ export class TelegramAIBot {
       return;
     }
     await this.db.setUserSettings(ctx.from.id, { persona, customSystemPrompt: '' });
-    await this.editAssistantMessageText(ctx, this.t(locale, 'personaSwitched', { persona }), this.createPersonaKeyboard(persona));
+    await this.editAssistantMessageText(ctx, this.t(locale, 'personaSwitched', { persona }), this.createPersonaKeyboard(persona, locale));
   }
 
   async handleLanguageCallback(ctx) {
@@ -5273,7 +5320,7 @@ export class TelegramAIBot {
     await this.editAssistantMessageText(
       ctx,
       this.t(effective, 'languageSet', { language: display }),
-      this.createLanguageKeyboard(language)
+      this.createLanguageKeyboard(language, effective)
     );
 
     await ctx.reply(this.t(effective, 'currentLanguage', { language: display }), this.createBottomKeyboard(effective));
@@ -5290,7 +5337,7 @@ export class TelegramAIBot {
       try {
         await ctx.deleteMessage();
       } catch {
-        await ctx.reply(locale === 'en' ? 'Menu closed.' : '菜单已关闭。');
+        await ctx.reply(localText(locale, '菜单已关闭。', 'Menu closed.'));
       }
       return;
     }
@@ -5367,34 +5414,34 @@ export class TelegramAIBot {
           persona: user?.persona || 'default',
           options: Object.keys(personaPresets).join(', ')
         }),
-        this.createPersonaKeyboard(user?.persona || 'default')
+        this.createPersonaKeyboard(user?.persona || 'default', locale)
       );
       return true;
     }
 
     if (type === 'language') {
-      await ctx.reply(this.t(locale, 'languagePrompt'), this.createLanguageKeyboard(locale));
+      await ctx.reply(this.t(locale, 'languagePrompt'), this.createLanguageKeyboard(locale, locale));
       return true;
     }
 
     if (type === 'web_prompt') {
       this.setPendingMenuAction(ctx, 'web_prompt');
-      await ctx.reply(locale === 'en' ? 'Send the search keywords.' : '请发送要搜索的关键词。', this.createMenuKeyboard(locale));
+      await ctx.reply(localText(locale, '请发送要搜索的关键词。', 'Send the search keywords.'), this.createMenuKeyboard(locale));
       return true;
     }
 
     if (type === 'image_menu') {
-      await ctx.reply(locale === 'en' ? 'Choose an image action:' : '请选择图片功能：', this.createImageActionKeyboard(locale));
+      await ctx.reply(localText(locale, '请选择图片功能：', 'Choose an image action:'), this.createImageActionKeyboard(locale));
       return true;
     }
 
     if (type === 'file_menu') {
-      await ctx.reply(locale === 'en' ? 'Choose a file action:' : '请选择文件功能：', this.createFileActionKeyboard(locale));
+      await ctx.reply(localText(locale, '请选择文件功能：', 'Choose a file action:'), this.createFileActionKeyboard(locale));
       return true;
     }
 
     if (type === 'voice_menu') {
-      await ctx.reply(locale === 'en' ? 'Choose a voice action:' : '请选择语音功能：', this.createVoiceActionKeyboard(locale));
+      await ctx.reply(localText(locale, '请选择语音功能：', 'Choose a voice action:'), this.createVoiceActionKeyboard(locale));
       return true;
     }
 
@@ -5405,7 +5452,7 @@ export class TelegramAIBot {
         return true;
       }
 
-      await ctx.reply(locale === 'en' ? '🛠 Admin panel' : '🛠 管理员面板', this.createAdminActionKeyboard(locale));
+      await ctx.reply(localText(locale, '🛠 管理员面板', '🛠 Admin panel'), this.createAdminActionKeyboard(locale));
       return true;
     }
 
@@ -5415,7 +5462,7 @@ export class TelegramAIBot {
     }
 
     if (type === 'toolbox_menu') {
-      await ctx.reply(locale === 'en' ? '🧰 Toolbox' : '🧰 工具箱', this.createToolboxKeyboard(locale));
+      await ctx.reply(localText(locale, '🧰 工具箱', '🧰 Toolbox'), this.createToolboxKeyboard(locale));
       return true;
     }
 
@@ -5641,7 +5688,7 @@ export class TelegramAIBot {
       const assistantText = result.text || this.t(locale, 'noReply');
       const visibleAssistantText = completion.switched
         ? [
-            locale === 'en'
+            isEnglishLocale(locale)
               ? `Current model was busy, switched to ${this.getAIProviderLabel(completion.providerId)}.`
               : `当前模型暂时繁忙，已自动切换到 ${this.getAIProviderLabel(completion.providerId)}。`,
             '',
