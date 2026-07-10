@@ -287,7 +287,7 @@ export class MemoryManager {
         temperature: 0
       });
 
-      const parsed = this.extractJsonObject(result.text || '');
+      const parsed = this.extractJsonObject(result?.text || '');
       if (!parsed || typeof parsed !== 'object') return null;
 
       return {

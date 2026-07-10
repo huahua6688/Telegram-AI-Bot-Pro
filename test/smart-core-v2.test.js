@@ -175,3 +175,73 @@ test('assistant replies are cleaned before the main Telegram send path', async (
   assert.equal(sent[0].text, '重点\n\n不要保留星号\n标题');
   assert.doesNotMatch(sent[0].text, /\*{2,}/);
 });
+
+test('AI fallback retries another model for transient provider failures', async () => {
+  const bot = Object.create(TelegramAIBot.prototype);
+  const attempts = [];
+  bot.config = {
+    defaultModel: 'primary',
+    translationModel: '',
+    routerModel: '',
+    availableModels: ['primary', 'backup']
+  };
+  bot.aiCooldowns = new Map();
+  bot.logger = logger();
+  bot.aiClient = {
+    async completeWithTools({ model }) {
+      attempts.push(model);
+      if (model === 'primary') {
+        throw new Error('AI request failed (503):');
+      }
+      return {
+        text: 'backup ok',
+        messages: [{ role: 'assistant', content: 'backup ok' }]
+      };
+    }
+  };
+
+  const completion = await bot.completeWithAiFallback({
+    scope: 'chat',
+    model: 'primary',
+    request: { messages: [{ role: 'user', content: 'hi' }] }
+  });
+
+  assert.deepEqual(attempts, ['primary', 'backup']);
+  assert.equal(completion.model, 'backup');
+  assert.equal(completion.result.text, 'backup ok');
+});
+
+test('empty AI results normalize instead of crashing text/message consumers', () => {
+  const bot = Object.create(TelegramAIBot.prototype);
+  const fallbackMessages = [{ role: 'user', content: 'hello' }];
+  const result = bot.normalizeAiResult(undefined, fallbackMessages);
+
+  assert.equal(result.text, '');
+  assert.equal(result.messages, fallbackMessages);
+});
+
+test('toolbox exposes real feature callbacks and unknown buttons get a visible fallback', async () => {
+  const bot = Object.create(TelegramAIBot.prototype);
+  bot.logger = logger();
+  bot.getLocale = () => 'en';
+  bot.createMenuKeyboard = () => ({ reply_markup: { inline_keyboard: [] } });
+
+  const keyboard = TelegramAIBot.prototype.createToolboxKeyboard.call(bot, 'en').reply_markup.inline_keyboard;
+  const callbacks = keyboard.flat().map((button) => button.callback_data);
+  assert.ok(callbacks.includes('toolbox:web'));
+  assert.ok(callbacks.includes('toolbox:translate'));
+  assert.ok(callbacks.includes('toolbox:back'));
+
+  const answers = [];
+  const replies = [];
+  await bot.handleUnknownCallback({
+    chat: { id: 1 },
+    from: { language_code: 'en' },
+    callbackQuery: { data: 'old:button' },
+    answerCbQuery: async (message) => answers.push(message),
+    reply: async (message, extra) => replies.push({ message, extra })
+  });
+
+  assert.match(answers[0], /no longer available/i);
+  assert.match(replies[0].message, /open the menu/i);
+});

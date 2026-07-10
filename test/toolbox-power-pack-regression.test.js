@@ -33,7 +33,7 @@ test("visible main menu is minimal", () => {
   assert.doesNotMatch(menu, /menu:web/);
   assert.doesNotMatch(menu, /menu:image/);
   assert.doesNotMatch(menu, /menu:tts/);
-  assert.doesNotMatch(menu, /menu:toolbox/);
+  assert.match(menu, /menu:toolbox/);
 });
 
 test("visible settings menu has no toolbox entry", () => {
