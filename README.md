@@ -1,230 +1,305 @@
 # Telegram-AI-Bot-Pro
 
-## Multi Provider AI
+中文 | [English](#english)
 
-This bot supports per-user AI provider and model selection from Telegram inline buttons. Open **AI 模型 / AI model** in the main menu to switch between:
+一个可部署到 Zeabur、Railway、Render、VPS 的 Telegram AI Bot。项目基于 Node.js + Telegraf，支持多 AI Provider、用户独立模型选择、自动故障转移、图片理解、语音处理、文件总结、联网搜索、管理员控制和 SQLite 持久化。
 
-- Gemini
-- Gemini Live
-- Groq
-- OpenRouter
-- GitHub Models
-- Hugging Face
-- Mistral
-- OpenAI
-- OpenAI-compatible custom gateways
-- Anthropic Claude
-- DeepSeek
-- Qwen
-- Grok
-- GLM
-- Doubao
+## 中文
 
-Gemini and Gemini Live are intentionally separate providers. Normal Gemini uses `generateContent` for text and vision. Gemini Live is reserved for live/audio-oriented transcription and TTS paths, and Telegram voice messages are handled as: voice file -> transcription provider -> normal AI reply. True continuous two-way WebSocket voice can be added later through a Web App surface.
+### 主要功能
 
-### Zeabur Minimum Config
+- 多轮 Telegram 私聊和群聊
+- Telegram 内联按钮切换 AI Provider 和模型
+- 每个用户独立保存 Provider、模型和自动备用设置
+- 跨 Provider 自动故障转移，支持重试、冷却和错误分类
+- Gemini 与 Gemini Live 分离：普通聊天走 Gemini，语音/Live 能力走 Gemini Live
+- 图片理解、语音转文字、文字转语音、图片生成/编辑、文件解析和总结
+- 联网搜索、URL 抓取、工具调用、人格/语言/记忆设置
+- 管理员菜单、用量限制、allow/block 控制、健康检查
+- SQLite 数据库，适合 Zeabur `/data` 持久化部署
 
-For a first deploy, set:
+### 已支持的 Provider
+
+| Provider ID | 平台 | 主要环境变量 | 说明 |
+| --- | --- | --- | --- |
+| `gemini` | Google Gemini | `GEMINI_API_KEY`, `GEMINI_MODEL` | 推荐主力 Provider，适合文字、图片理解和多模态 |
+| `gemini-live` | Google Gemini Live | `GEMINI_LIVE_API_KEY`, `GEMINI_LIVE_MODEL` | 与普通 Gemini 分开，用于语音、TTS、未来实时 Live |
+| `groq` | Groq | `GROQ_API_KEY`, `GROQ_MODEL` | OpenAI-compatible，适合高速文本备用 |
+| `openrouter` | OpenRouter | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` | 一个 API 调多个模型，适合备用和免费模型 |
+| `github-models` | GitHub Models | `GITHUB_MODELS_API_KEY`, `GITHUB_MODELS_MODEL` | 适合开发测试和多模型体验 |
+| `huggingface` | Hugging Face | `HUGGINGFACE_API_KEY`, `HUGGINGFACE_MODEL` | 适合开源模型和实验 |
+| `mistral` | Mistral AI | `MISTRAL_API_KEY`, `MISTRAL_MODEL` | Mistral 官方 API |
+| `openai` | OpenAI 官方 API | `OPENAI_API_KEY`, `OPENAI_MODEL` | OpenAI 官方平台 |
+| `openai-compatible` | 自定义 OpenAI-compatible 网关 | `AI_API_KEY`, `AI_BASE_URL`, `AI_MODEL` | 也可接第三方兼容网关 |
+| `anthropic` | Anthropic Claude | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` | Claude 官方 API |
+| `deepseek` | DeepSeek | `DEEPSEEK_API_KEY`, `DEEPSEEK_MODEL` | DeepSeek 官方 API |
+| `qwen` | 阿里云百炼 / Qwen | `QWEN_API_KEY`, `QWEN_MODEL` | 通义千问兼容接口 |
+| `grok` | xAI Grok | `GROK_API_KEY`, `GROK_MODEL` | xAI 官方 API |
+| `glm` | 智谱 GLM | `GLM_API_KEY`, `GLM_MODEL` | 智谱开放平台 |
+| `doubao` | 火山方舟 / 豆包 | `DOUBAO_API_KEY`, `DOUBAO_MODEL` | Volcengine Ark API |
+
+没有填写 Key 或模型的 Provider 会显示为 `not configured`，机器人会跳过它，不会因为可选 Provider 未配置而崩溃。
+
+### 你的环境变量还缺什么
+
+你现在给出的配置可以继续兼容旧版 `AI_PROVIDER=gemini` / `AI_MODEL=...`，但新架构建议补下面这些变量：
 
 ```env
-BOT_TOKEN=...
-ADMIN_USER_IDS=...
+DEFAULT_AI_PROVIDER=gemini
+DEFAULT_AI_MODEL=从控制台复制的模型ID
+
+ENABLE_USER_PROVIDER_SELECTION=true
+ENABLE_USER_MODEL_SELECTION=true
+
+ENABLE_PROVIDER_FALLBACK=true
+AI_PROVIDER_FALLBACK_ORDER=gemini,groq,openrouter
+AI_PROVIDER_MAX_RETRIES=1
+AI_PROVIDER_RETRY_DELAY_MS=800
+AI_PROVIDER_COOLDOWN_MS=60000
+MODEL_LIST_CACHE_TTL_MS=3600000
+
+GEMINI_MODEL=从 Google AI Studio 复制
+GEMINI_FALLBACK_MODELS=
+
+GROQ_API_KEY=
+GROQ_MODEL=
+
+OPENROUTER_API_KEY=
+OPENROUTER_MODEL=
+OPENROUTER_HTTP_REFERER=
+OPENROUTER_APP_TITLE=Telegram AI Bot Pro
+
+TRANSLATION_PROVIDER=gemini
+ROUTER_PROVIDER=gemini
+MEMORY_PROVIDER=gemini
+VISION_PROVIDER=gemini
+TRANSCRIPTION_PROVIDER=gemini-live
+TTS_PROVIDER=gemini-live
+IMAGE_PROVIDER=openai-compatible
+
+ADMIN_API_TOKEN=
+```
+
+`PASSWORD` 不是这个项目当前使用的变量；如果只是 Zeabur 里遗留的变量，可以不填或删除。后台 API 用的是 `ADMIN_API_TOKEN`。
+
+### 去哪里拿 API Key
+
+| 平台 | 获取 Key / 控制台 | 模型 ID 从哪里复制 |
+| --- | --- | --- |
+| Telegram Bot Token | [BotFather](https://t.me/BotFather) / [Telegram Bot 教程](https://core.telegram.org/bots/tutorial) | 不需要模型 ID |
+| Google Gemini / Gemini Live | [Google AI Studio API Keys](https://aistudio.google.com/app/apikey) / [Gemini API Key 文档](https://ai.google.dev/gemini-api/docs/api-key) | Google AI Studio 的模型列表 |
+| Groq | [Groq API Keys](https://console.groq.com/keys) / [Groq Quickstart](https://console.groq.com/docs/quickstart) | Groq Console 的 Models 页面 |
+| OpenRouter | [OpenRouter Keys](https://openrouter.ai/settings/keys) / [OpenRouter Quickstart](https://openrouter.ai/docs/quickstart) | OpenRouter Models 页面，免费模型通常带 `:free` |
+| GitHub Models | [GitHub Models](https://github.com/marketplace/models) / [GitHub Models 文档](https://docs.github.com/en/github-models/use-github-models/prototyping-with-ai-models) | GitHub Models 页面 |
+| Hugging Face | [HF Access Tokens](https://huggingface.co/settings/tokens) / [HF Token 文档](https://huggingface.co/docs/hub/security-tokens) | Hugging Face 模型或 Inference Providers 页面 |
+| Mistral | [Mistral Console](https://console.mistral.ai/api-keys/) / [Mistral Docs](https://docs.mistral.ai/) | Mistral Console / Docs 的模型列表 |
+| OpenAI | [OpenAI API Keys](https://platform.openai.com/api-keys) / [OpenAI Quickstart](https://platform.openai.com/docs/quickstart) | OpenAI Models 页面 |
+| Anthropic Claude | [Claude Console](https://console.anthropic.com/settings/keys) / [Anthropic API Docs](https://docs.anthropic.com/en/api/getting-started) | Anthropic Console / Docs |
+| DeepSeek | [DeepSeek API Keys](https://platform.deepseek.com/api_keys) / [DeepSeek Docs](https://api-docs.deepseek.com/) | DeepSeek 模型与价格页 |
+| Qwen / 阿里云百炼 | [百炼 API Key](https://bailian.console.aliyun.com/?apiKey=1) / [阿里云获取 API Key 文档](https://help.aliyun.com/zh/model-studio/get-api-key) | 百炼控制台模型页面 |
+| Grok / xAI | [xAI Console](https://console.x.ai/) / [xAI Quickstart](https://docs.x.ai/docs/quickstart) | xAI Console 模型页面 |
+| GLM / 智谱 | [智谱 API Keys](https://open.bigmodel.cn/usercenter/apikeys) / [智谱文档](https://docs.bigmodel.cn/cn/guide/start/introduction) | 智谱开放平台模型页面 |
+| Doubao / 火山方舟 | [火山方舟控制台](https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey) / [火山方舟文档](https://www.volcengine.com/docs/82379/1399008) | 火山方舟模型列表 |
+
+模型名、免费额度、限流和可用地区会变化。不要照抄旧教程里的模型名，应该从官方控制台复制当前可用的完整模型 ID。
+
+### Zeabur 最小可用配置
+
+只用 Gemini 先跑起来：
+
+```env
+BOT_TOKEN=你的 Telegram Bot Token
+ADMIN_USER_IDS=你的 Telegram 数字 ID
+
+DEFAULT_AI_PROVIDER=gemini
+DEFAULT_AI_MODEL=从 Google AI Studio 复制
+GEMINI_API_KEY=你的 Gemini API Key
+GEMINI_MODEL=从 Google AI Studio 复制
+
 DATABASE_FILE=/data/bot-data.db
 DATA_FILE=/data/bot-data.json
 PORT=8080
 HEALTH_PORT=8080
-
-DEFAULT_AI_PROVIDER=gemini
-DEFAULT_AI_MODEL=copy_from_google_ai_studio
-GEMINI_API_KEY=...
-GEMINI_MODEL=copy_from_google_ai_studio
 ```
 
-To enable automatic cross-provider fallback, add provider keys and current model IDs copied from the official consoles:
+加入 Groq 和 OpenRouter 作为自动备用：
 
 ```env
 ENABLE_PROVIDER_FALLBACK=true
 AI_PROVIDER_FALLBACK_ORDER=gemini,groq,openrouter
 
-GROQ_API_KEY=...
-GROQ_MODEL=copy_from_groq_console
+GROQ_API_KEY=你的 Groq Key
+GROQ_MODEL=从 Groq Console 复制
 
-OPENROUTER_API_KEY=...
-OPENROUTER_MODEL=copy_from_openrouter_models
+OPENROUTER_API_KEY=你的 OpenRouter Key
+OPENROUTER_MODEL=从 OpenRouter Models 复制
 OPENROUTER_HTTP_REFERER=
 OPENROUTER_APP_TITLE=Telegram AI Bot Pro
 ```
 
-Free model names and quotas change. Do not hardcode model IDs from old tutorials; copy the current ID from each provider dashboard.
+### 完整 Provider 环境变量模板
 
-### Provider Buttons
+只填你要启用的平台。没填的平台会自动跳过。
 
-The **AI 模型 / AI model** panel shows the current provider, current model, fallback setting, and provider health status. Callback data stays short (`ai:p:groq`, `ai:m:0`, `ai:auto`) so Telegram's 64-byte callback limit is not exceeded. User choices are saved in SQLite and survive restarts.
+```env
+# Google Gemini
+GEMINI_API_KEY=
+GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
+GEMINI_MODEL=
+GEMINI_FALLBACK_MODELS=
 
-Selecting **Auto** lets the bot choose by capability and health:
+# Gemini Live
+GEMINI_LIVE_API_KEY=
+GEMINI_LIVE_BASE_URL=https://generativelanguage.googleapis.com/v1beta
+GEMINI_LIVE_MODEL=
+GEMINI_LIVE_TRANSCRIPTION_MODEL=
+GEMINI_LIVE_TTS_MODEL=
 
-- Text chat: preferred provider, then configured fallback order.
-- Image understanding: `VISION_PROVIDER`, usually Gemini.
-- Translation/router/memory: their dedicated provider variables.
-- Speech transcription/TTS: `TRANSCRIPTION_PROVIDER` and `TTS_PROVIDER`, usually Gemini Live.
-- Image generation/editing: `IMAGE_PROVIDER`.
+# Groq
+GROQ_API_KEY=
+GROQ_BASE_URL=https://api.groq.com/openai/v1
+GROQ_MODEL=
+GROQ_FALLBACK_MODELS=
 
-If one provider returns 401/403/404/408/429/5xx, times out, returns invalid JSON, or returns an empty result, the manager records the failure, applies a short cooldown, and tries the next eligible provider when fallback is enabled. API keys are never printed in Telegram messages or doctor output.
+# OpenRouter
+OPENROUTER_API_KEY=
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+OPENROUTER_MODEL=
+OPENROUTER_FALLBACK_MODELS=
+OPENROUTER_HTTP_REFERER=
+OPENROUTER_APP_TITLE=Telegram AI Bot Pro
 
-### Common Errors
+# GitHub Models
+GITHUB_MODELS_API_KEY=
+GITHUB_MODELS_BASE_URL=https://models.github.ai/inference
+GITHUB_MODELS_MODEL=
+GITHUB_MODELS_FALLBACK_MODELS=
 
-- `401`: API key is wrong, expired, or attached to the wrong provider.
-- `403`: account, region, or model permission denied.
-- `404`: model ID is wrong or the provider removed it.
-- `429`: rate limit or free quota exhausted; fallback can switch provider.
-- Zeabur `BackOff`: check `BOT_TOKEN`, mounted `/data`, and `npm run doctor`.
-- Data lost after restart: mount persistent storage and keep `DATABASE_FILE=/data/bot-data.db`.
+# Hugging Face
+HUGGINGFACE_API_KEY=
+HUGGINGFACE_BASE_URL=https://router.huggingface.co/v1
+HUGGINGFACE_MODEL=
+HUGGINGFACE_FALLBACK_MODELS=
 
-Run checks locally:
+# Mistral
+MISTRAL_API_KEY=
+MISTRAL_BASE_URL=https://api.mistral.ai/v1
+MISTRAL_MODEL=
+MISTRAL_FALLBACK_MODELS=
 
-```bash
-npm run check:syntax
-npm run test:quick
-npm run doctor
+# OpenAI
+OPENAI_API_KEY=
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=
+OPENAI_FALLBACK_MODELS=
+
+# Custom OpenAI-compatible gateway
+AI_API_KEY=
+AI_BASE_URL=https://api.openai.com/v1
+AI_MODEL=
+AI_FALLBACK_MODELS=
+
+# Anthropic
+ANTHROPIC_API_KEY=
+ANTHROPIC_BASE_URL=https://api.anthropic.com
+ANTHROPIC_API_VERSION=2023-06-01
+ANTHROPIC_MODEL=
+ANTHROPIC_FALLBACK_MODELS=
+
+# DeepSeek
+DEEPSEEK_API_KEY=
+DEEPSEEK_BASE_URL=https://api.deepseek.com/v1
+DEEPSEEK_MODEL=
+DEEPSEEK_FALLBACK_MODELS=
+
+# Qwen
+QWEN_API_KEY=
+QWEN_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+QWEN_MODEL=
+QWEN_FALLBACK_MODELS=
+
+# Grok
+GROK_API_KEY=
+GROK_BASE_URL=https://api.x.ai/v1
+GROK_MODEL=
+GROK_FALLBACK_MODELS=
+
+# GLM
+GLM_API_KEY=
+GLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4
+GLM_MODEL=
+GLM_FALLBACK_MODELS=
+
+# Doubao
+DOUBAO_API_KEY=
+DOUBAO_BASE_URL=https://ark.cn-beijing.volces.com/api/v3
+DOUBAO_MODEL=
+DOUBAO_FALLBACK_MODELS=
 ```
 
-<!-- ZEABUR_DEPLOY_START -->
-## Zeabur 部署入口
+### 专用能力 Provider
 
-本项目推荐使用 Dockerfile 部署到 Zeabur。
+用户聊天选择 Groq 时，图片、语音、翻译仍然可以走更合适的 Provider：
 
-部署前检查：
+```env
+TRANSLATION_PROVIDER=gemini
+TRANSLATION_MODEL=
+ROUTER_PROVIDER=gemini
+ROUTER_MODEL=
+MEMORY_PROVIDER=gemini
+MEMORY_MODEL=
+VISION_PROVIDER=gemini
+VISION_MODEL=
+TRANSCRIPTION_PROVIDER=gemini-live
+TRANSCRIPTION_MODEL=
+TTS_PROVIDER=gemini-live
+TTS_MODEL=
+IMAGE_PROVIDER=openai-compatible
+IMAGE_MODEL=gpt-image-1
+IMAGE_SIZE=1024x1024
+TTS_VOICE=alloy
+```
 
-    npm run predeploy
+### Telegram 按钮怎么用
 
-Zeabur 环境变量模板：
+打开机器人主菜单，点击 `AI 模型 / AI model`：
 
-    .env.zeabur.example
+- 选择 Provider：Gemini、Groq、OpenRouter、Claude、DeepSeek、Qwen 等
+- 选择模型：机器人用短索引 callback，不会超过 Telegram 64 字节限制
+- 打开或关闭自动备用
+- 测试当前模型
+- 管理员可测试全部 Provider、查看 Provider 状态
 
-完整部署说明：
+用户选择会保存到 SQLite，重启后仍然有效。
 
-    docs/ZEABUR.md
+### 自动故障转移
 
-文档索引：
+启用：
 
-    docs/README.md
+```env
+ENABLE_PROVIDER_FALLBACK=true
+AI_PROVIDER_FALLBACK_ORDER=gemini,groq,openrouter
+```
 
-常用命令说明：
+当当前 Provider 出现 401、403、404、408、429、5xx、网络错误、JSON 解析错误、空结果或能力不支持时，机器人会：
 
-    docs/COMMANDS.md
+1. 判断错误类型
+2. 按配置重试
+3. 对失败 Provider 设置短冷却
+4. 切换到下一个已配置且支持该能力的 Provider
+5. 不把 API Key 或内部请求头发给用户
 
-安全说明：
+### Gemini 和 Gemini Live 的区别
 
-    SECURITY.md
+- `gemini`：普通文字聊天、图片理解、多模态分析
+- `gemini-live`：语音输入、语音输出、Live/实时语音预留
 
-最少需要在 Zeabur 填写：
+Telegram Bot 当前至少支持“用户发语音 -> 转写 -> AI 回复”。真正连续双向实时语音更适合通过 Telegram Web App 或独立 WebSocket 前端继续扩展。
 
-    BOT_TOKEN
-    AI_PROVIDER
-    GEMINI_API_KEY
-    AI_MODEL
-    ADMIN_USER_IDS
-
-不知道自己的 Telegram 用户 ID 时，部署后给机器人发送：
-
-    /whoami
-<!-- ZEABUR_DEPLOY_END -->
-
-
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/new/template?template=https://github.com/huahua6688/Telegram-AI-Bot-Pro)
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/huahua6688/Telegram-AI-Bot-Pro)
-[![Deploy on Zeabur](https://zeabur.com/button.svg)](https://zeabur.com/new?template=https://github.com/huahua6688/Telegram-AI-Bot-Pro)
-
-一个尽量全能的 Telegram AI Bot 项目，基于 **Node.js + Telegraf**，支持：
-
-- 多轮 AI 对话
-- 私聊 / 群聊触发
-- 多模型切换
-- 中英双语界面
-- 人格切换
-- 持久化会话记忆
-- 图片理解
-- 语音转文字
-- 文本转语音
-- 图片生成/编辑
-- 联网搜索
-- URL 内容抓取
-- 管理员控制（allow / block）
-- 速率限制与每日配额
-- 健康检查与 Docker 部署
-
-## 功能概览
-
-### Telegram 核心能力
-- 私聊直接对话
-- 群聊支持 `@机器人`、回复机器人、关键词触发
-- `/start`、`/help`、`/reset`、`/clear`
-- `/model`、`/models`
-- `/language`、`/menu`
-- `/persona`
-- `/stats`
-
-### AI 与多模态能力
-- 多平台 AI 提供商（OpenAI 兼容 / Anthropic / Gemini / Qwen / Grok / DeepSeek / GLM / Doubao）
-- 插件化能力注册（`src/plugins/*-plugin.js` 自动加载）
-- 图片输入分析
-- 语音转文字后继续对话
-- 文本转语音 `/tts`
-- 图片生成/编辑 `/image`
-- 文本文件读取与总结（TXT/MD/JSON/CSV/XML/PDF/DOCX/XLSX）
-- SQLite 持久化存储（兼容旧 JSON 数据自动迁移）
-
-### 智能增强能力
-- 工具调用架构
-- 联网搜索 `/web`
-- URL 抓取辅助上下文
-- 多人格预设
-- 常用功能按钮
-- 常见需求自然语言识别
-- 持久化会话记忆
-
-### 管理与运维
-- 用户 allow / block 控制
-- 后台管理 API（默认前缀 `/admin/api/v1`，基于 `ADMIN_API_TOKEN` 鉴权）
-- 环境变量驱动配置
-- 健康检查接口 `GET /`
-- Docker / docker-compose 部署
-
-## 快速开始
-
-### 0. 运行环境
-
-- Node.js `>=22.5.0`
-
-### 1. 安装依赖
+### 本地运行
 
 ```bash
 npm install
-```
-
-### 2. 配置环境变量
-
-复制示例文件：
-
-```bash
-cp .env.example .env
-```
-
-至少填写：
-
-```env
-BOT_TOKEN=你的Telegram机器人Token
-AI_PROVIDER=openai-compatible
-AI_API_KEY=你的AI接口Key
-AI_BASE_URL=https://api.openai.com/v1
-AI_MODEL=gpt-4.1-mini
-```
-
-如果你不用 OpenAI 官方，可在 `AI_PROVIDER` 中切换到其他原生平台（见下方“AI 提供商配置示例”）。
-
-### 3. 启动项目
-
-```bash
 npm start
 ```
 
@@ -234,373 +309,164 @@ npm start
 npm run dev
 ```
 
-## 常用命令
-
-- `/start` 启动说明
-- `/help` 查看帮助
-- `/reset` / `/clear` 清空当前会话记忆
-- `/models` 查看可用模型
-- `/model gpt-4.1-mini` 切换模型
-- `/persona coder` 切换人格
-- `/language en` 切换界面语言
-- `/menu` 显示常用功能按钮
-- `/web 最新 AI 新闻` 联网搜索
-- `/image 一只在赛博城市飞行的机械猫` 生成图片
-- `/tts 你好，这是测试语音` 生成语音
-- `/stats` 查看用量
-- 也支持直接发送：`搜索 OpenAI 最新消息`、`生成图片 一只机械猫`、`朗读 这段文本`
-
-## 群聊触发模式
-
-默认 `GROUP_TRIGGER_MODE=smart`，支持：
-
-- `smart`：@提及、回复机器人、包含关键词任一满足
-- `all`：群内所有消息都响应
-- `mention`：仅 @提及
-- `reply`：仅回复机器人
-- `keyword`：仅命中关键词
-
-群里可动态调整：
-
-- `/chatmode smart`
-- `/keyword ai`
-
-## 管理员命令
-
-通过 `ADMIN_USER_IDS` 配置管理员后，可使用：
-
-- `/block 用户ID`
-- `/unblock 用户ID`
-- `/allow 用户ID`
-- `/disallow 用户ID`
-
-## 主要环境变量
-
-| 变量 | 说明 | 示例 |
-| --- | --- | --- |
-| `BOT_TOKEN` | Telegram Bot Token | `123456789:AAF...` |
-| `AI_PROVIDER` | 提供商类型：`openai-compatible` / `anthropic` / `gemini` / `gemini-live` / `qwen` / `grok` / `deepseek` / `glm` / `doubao` | `openai-compatible` |
-| `AI_API_KEY` | AI 提供商 API Key | `sk-...` |
-| `AI_BASE_URL` | OpenAI 兼容接口地址（`openai-compatible` 时使用） | `https://api.openai.com/v1` |
-| `ANTHROPIC_API_KEY` | Anthropic API Key（可选，不填则复用 `AI_API_KEY`） | `sk-ant-...` |
-| `ANTHROPIC_BASE_URL` | Anthropic API 地址 | `https://api.anthropic.com` |
-| `ANTHROPIC_API_VERSION` | Anthropic API 版本头 | `2023-06-01` |
-| `GEMINI_API_KEY` | Gemini API Key（可选，不填则复用 `AI_API_KEY`） | `AIza...` |
-| `GEMINI_BASE_URL` | Gemini API 地址 | `https://generativelanguage.googleapis.com/v1beta` |
-| `GEMINI_LIVE_API_KEY` / `GEMINI_LIVE_BASE_URL` | Gemini Live API Key / 地址 | `AIza...` / `https://generativelanguage.googleapis.com/v1beta` |
-| `GEMINI_LIVE_TRANSCRIPTION_MODEL` / `GEMINI_LIVE_TTS_MODEL` | Gemini Live 语音转写 / 语音生成模型 | `gemini-2.5-flash-preview-native-audio-dialog` |
-| `QWEN_API_KEY` / `QWEN_BASE_URL` | 通义千问 API Key / 地址 | `sk-...` / `https://dashscope.aliyuncs.com/compatible-mode/v1` |
-| `GROK_API_KEY` / `GROK_BASE_URL` | Grok API Key / 地址 | `xai-...` / `https://api.x.ai/v1` |
-| `DEEPSEEK_API_KEY` / `DEEPSEEK_BASE_URL` | DeepSeek API Key / 地址 | `sk-...` / `https://api.deepseek.com/v1` |
-| `GLM_API_KEY` / `GLM_BASE_URL` | 智谱 GLM API Key / 地址 | `your_glm_key` / `https://open.bigmodel.cn/api/paas/v4` |
-| `DOUBAO_API_KEY` / `DOUBAO_BASE_URL` | 豆包 API Key / 地址 | `your_doubao_key` / `https://ark.cn-beijing.volces.com/api/v3` |
-| `AI_MODEL` | 默认模型 | `gpt-4.1-mini` |
-| `AI_FALLBACK_MODELS` | 可选模型列表，逗号分隔 | `gpt-4.1-mini,gpt-4o-mini` |
-| `DOCUMENT_MAX_BYTES` / `DOCUMENT_MAX_CHARS` / `DOCUMENT_CHUNK_CHARS` | 文档解析大小与分片限制 | `6291456` / `12000` / `1800` |
-| `AI_SYSTEM_PROMPT` | 默认系统提示词 | `You are a powerful Telegram AI assistant.` |
-| `ENABLE_TOOL_CALLS` | 是否启用工具调用 | `true` |
-| `ENABLE_WEB_SEARCH` | 是否启用联网搜索 | `true` |
-| `ENABLE_GEMINI_GOOGLE_SEARCH` | Gemini 3+ 是否启用原生 Google Search Grounding | `true` |
-| `ENABLE_URL_FETCH` | 是否允许抓取 URL | `true` |
-| `TOOL_ALLOWED_*` / `TOOL_BLOCKED_*` | 工具调用用户/群组白名单与黑名单 | `TOOL_ALLOWED_USER_IDS=123456,789012` |
-| `TOOL_MAX_CALLS_PER_MESSAGE` | 单次请求工具调用上限 | `4` |
-| `TOOL_USER_WINDOW_MS` / `TOOL_USER_MAX_CALLS` | 工具调用频率限制 | `60000` / `20` |
-| `NETWORK_TOOL_SCOPE` / `NETWORK_TOOL_ALLOWED_*` | 联网工具权限分层控制 | `all` |
-| `ENABLE_LIVE_AUDIO` / `ENABLE_LIVE_TRANSLATE` | Live Audio/Translate 编排开关 | `true` / `true` |
-| `ENABLE_STREAMING_REPLIES` | 是否启用流式输出 | `true` |
-| `STREAMING_EDIT_INTERVAL_MS` | 流式编辑间隔（毫秒） | `350` |
-| `MAX_HISTORY_MESSAGES` | 单会话最大历史消息条数 | `32` |
-| `MAX_CONTEXT_CHARS` | 发送给模型的历史上下文字符预算 | `48000` |
-| `MAX_INPUT_CHARS` / `MAX_OUTPUT_CHARS` | 输入/输出字符上限 | `12000` / `3500` |
-| `REQUEST_TIMEOUT_MS` | 请求超时（毫秒） | `120000` |
-| `DATABASE_FILE` | SQLite 数据库文件 | `./data/bot-data.db` |
-| `DATA_FILE` | 旧版 JSON 数据文件（首次启动可自动迁移） | `./data/bot-data.json` |
-| `RATE_LIMIT_WINDOW_MS` / `RATE_LIMIT_MAX_REQUESTS` | 速率限制窗口与最大请求数 | `60000` / `12` |
-| `DAILY_QUOTA` | 每用户每日配额 | `200` |
-| `HEALTH_PORT` | 健康检查端口 | `3000` |
-| `ADMIN_API_ENABLED` / `ADMIN_API_PORT` / `ADMIN_API_PREFIX` / `ADMIN_API_TOKEN` | 管理后台 API 开关、端口、路径前缀与访问令牌 | `true` / `3001` / `/admin/api/v1` / `your_secret_token` |
-| `ADMIN_USER_IDS` | 管理员用户 ID，逗号分隔 | `123456789,987654321` |
-| `ALLOWED_USER_IDS` / `ALLOWED_CHAT_IDS` | 允许使用的用户/群组 ID 白名单 | `123456789` / `-100987654321` |
-| `BLOCKED_USER_IDS` | 封禁用户 ID 黑名单 | `111222333` |
-| `GROUP_TRIGGER_MODE` | 默认群聊触发模式 | `smart` |
-| `GROUP_TRIGGER_KEYWORD` | 默认群聊触发关键词 | `ai` |
-
-## AI 提供商配置示例（重点）
-
-本项目当前已支持以下原生 provider：
-- `openai-compatible`（OpenAI / OpenRouter / 其他兼容网关）
-- `anthropic`（Claude 官方 API）
-- `gemini`（Google Gemini 官方 API）
-- `gemini-live`（Google Gemini Live 原生音频 API）
-- `qwen`（通义千问）
-- `grok`（xAI Grok）
-- `deepseek`（DeepSeek）
-- `glm`（智谱 GLM）
-- `doubao`（火山引擎豆包/Ark）
-
-第一批优先原生平台：`qwen`、`grok`、`deepseek`、`glm`、`doubao`。
-
-### 1) OpenAI 官方（兼容接口）
-
-```env
-AI_PROVIDER=openai-compatible
-AI_BASE_URL=https://api.openai.com/v1
-AI_API_KEY=sk-...
-AI_MODEL=gpt-4.1-mini
-```
-
-### 2) OpenRouter（兼容接口，可用 Gemini / Claude / DeepSeek 等）
-
-```env
-AI_PROVIDER=openai-compatible
-AI_BASE_URL=https://openrouter.ai/api/v1
-AI_API_KEY=sk-or-...
-AI_MODEL=google/gemini-2.0-flash-001
-```
-
-### 3) Anthropic 官方
-
-```env
-AI_PROVIDER=anthropic
-ANTHROPIC_API_KEY=sk-ant-...
-AI_MODEL=claude-3-5-sonnet-latest
-```
-
-### 4) Gemini 官方
-
-```env
-AI_PROVIDER=gemini
-GEMINI_API_KEY=AIza...
-AI_MODEL=gemini-3.5-flash
-AI_FALLBACK_MODELS=gemini-3.1-flash-lite,gemini-2.5-flash
-ENABLE_GEMINI_GOOGLE_SEARCH=true
-```
-
-### 5) Qwen（通义千问）官方
-
-```env
-AI_PROVIDER=qwen
-QWEN_API_KEY=sk-...
-AI_MODEL=qwen-plus
-```
-
-### 6) Gemini Live 官方（原生音频对话/转写/TTS）
-
-```env
-AI_PROVIDER=gemini-live
-GEMINI_LIVE_API_KEY=AIza...
-AI_MODEL=gemini-2.5-flash-preview-native-audio-dialog
-# 可选：语音专用模型，不填默认复用 AI_MODEL
-GEMINI_LIVE_TRANSCRIPTION_MODEL=gemini-2.5-flash-preview-native-audio-dialog
-GEMINI_LIVE_TTS_MODEL=gemini-2.5-flash-preview-native-audio-dialog
-```
-
-### 7) Grok（xAI）官方
-
-```env
-AI_PROVIDER=grok
-GROK_API_KEY=xai-...
-AI_MODEL=grok-3-mini-beta
-```
-
-### 8) DeepSeek 官方
-
-```env
-AI_PROVIDER=deepseek
-DEEPSEEK_API_KEY=sk-...
-AI_MODEL=deepseek-chat
-```
-
-### 9) 智谱 GLM 官方
-
-```env
-AI_PROVIDER=glm
-GLM_API_KEY=...
-AI_MODEL=glm-4-flash
-```
-
-### 10) 豆包（火山引擎 Ark）官方
-
-```env
-AI_PROVIDER=doubao
-DOUBAO_API_KEY=...
-AI_MODEL=doubao-seed-1-6-250615
-```
-
-> 注意：`AI_PROVIDER` 与密钥、模型必须是一组匹配配置，不能混用。
-> 另外请使用 `AI_API_KEY` 变量名（不是 `OPENAI_API_KEY`）作为统一兜底密钥变量。
-
-## 能力矩阵与降级策略
-
-| Provider | 文本对话 | 工具调用 | 图片理解 | 图片生成 | 图片编辑 | 语音转文字 | 文字转语音 | Live Audio |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| openai-compatible | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ❌ |
-| anthropic | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| gemini | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| gemini-live | ✅ | ❌ | ✅ | ❌ | ❌ | ✅ | ✅ | ✅ |
-| qwen | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| grok | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| deepseek | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| glm | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| doubao | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
-
-降级策略：
-- 不支持的 `/image`、`/tts` 会直接提示切换支持该能力的平台。
-- 不支持图片理解的平台收到图片时，会降级为文本提示，不会中断会话流程。
-- 不支持语音转写的平台收到语音时，会降级为文本提示，不会中断会话流程。
-- 不支持工具调用的平台会自动关闭工具调用，保持纯对话可用。
-
-## 数据持久化
-
-默认 SQLite 数据文件：
-
-```text
-data/bot-data.db
-```
-
-保存内容包括：
-- 用户资料与偏好
-- 群聊配置
-- 会话历史
-- 使用统计
-
-兼容旧版 `data/bot-data.json`：
-- 如果存在旧 JSON 数据，首次启动会自动导入到 SQLite
-- 导入后主存储以 `DATABASE_FILE` 为准
-
-## 部署与上线（Phase G 基线）
-
-### 平台无关主流程（先做这个）
-
-1. 准备环境变量最小集：
-   - `BOT_TOKEN`
-   - `AI_PROVIDER`
-   - `AI_MODEL`
-   - 平台密钥（`AI_API_KEY` 或对应原生平台专用 key）
-2. 准备持久化路径：
-   - 容器内统一使用 `DATABASE_FILE`（推荐：`/app/data/bot-data.db` 或 `/var/data/bot-data.db`）
-3. 启动前检查：
-   - 健康端口 `HEALTH_PORT=3000`
-   - 管理端口 `ADMIN_API_PORT=3001`
-   - 管理 API 令牌 `ADMIN_API_TOKEN` 已设置
-4. 发布前执行：
-   - PR 快速集：`npm run test:quick && npm run test:smoke`
-   - 主干全量集：`npm run test:full`
-   - 发布候选集：`npm run test:release`
-5. 通过 `docs/release/phase-g-go-no-go.md` 做 Go/No-Go 决策。
-
-### 两档部署模板
-
-#### A) 最小可用（开发/验收）
+检查配置：
 
 ```bash
-docker compose up -d --build
+npm run doctor
 ```
 
-- 使用 `docker-compose.yml`
-- 默认挂载 `./data -> /app/data`
-- 默认暴露 `3000`（健康）和 `3001`（管理 API）
-
-#### B) 生产推荐（长期运行）
+测试：
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+npm run verify
+npm run test:full
 ```
 
-- 使用 `docker-compose.prod.yml`
-- 端口仅绑定到 `127.0.0.1`
-- 启用日志滚动与 `restart: always`
+### 常见问题
 
-## 平台差异附录
+- `not configured`：代码支持该 Provider，但没有填 API Key 或模型 ID。
+- `401`：Key 错误、过期，或填到了错误的 Provider。
+- `403`：账号权限、地区、模型权限或额度限制。
+- `404`：模型 ID 写错或模型已下线。
+- `429`：限流或免费额度用完，可以依赖自动备用切到其他 Provider。
+- Zeabur `BackOff`：优先检查 `BOT_TOKEN`、`PORT=8080`、`DATABASE_FILE=/data/bot-data.db`。
+- 重启后数据丢失：Zeabur 需要挂载 `/data` 持久化存储。
 
-### Railway
+### 安全提醒
 
-- 使用 `railway.json + Dockerfile`
-- 建议变量：`AI_PROVIDER`、`AI_MODEL`、`DATABASE_FILE=/app/data/bot-data.db`
-- 开启卷并挂载 `/app/data`
+- 不要提交 `.env`
+- 不要把 API Key 写进代码或 Telegram 消息
+- 管理员 ID 用 `/whoami` 获取
+- `ADMIN_API_ENABLED=true` 时必须设置 `ADMIN_API_TOKEN`
+- 免费模型和额度会变，部署前先在对应控制台确认
 
-### Render
+---
 
-- 使用 `render.yaml`
-- 已统一 `AI_PROVIDER`、`HEALTH_PORT`、`ADMIN_API_PORT`、`DATABASE_FILE=/var/data/bot-data.db`
-- 持久化挂载目录 `/var/data`
+## English
 
-### Zeabur
+Telegram-AI-Bot-Pro is a deployable Telegram AI bot built with Node.js and Telegraf. It supports multiple AI providers, per-user model selection, cross-provider fallback, multimodal features, web tools, admin controls, and SQLite persistence.
 
-- 推荐 Dockerfile 部署；`zbpack.json` 作为节点构建回退模板
-- 建议变量：`AI_PROVIDER`、`AI_MODEL`、`DATABASE_FILE=/app/data/bot-data.db`
-- 挂载 `/app/data` 持久化卷
+### Features
 
-### VPS（Docker Compose）
+- Multi-turn Telegram private and group chat
+- Inline Telegram buttons for provider/model switching
+- Per-user provider, model, and fallback preferences
+- Cross-provider fallback with retry, cooldown, and error classification
+- Separate Gemini and Gemini Live providers
+- Image understanding, speech transcription, text-to-speech, image generation/editing, document parsing, and summarization
+- Web search, URL fetch, tool calling, personas, language settings, and memory
+- Admin menu, quotas, allow/block lists, and health checks
+- SQLite storage suitable for Zeabur `/data` persistence
+
+### Supported Providers
+
+| Provider ID | Platform | Main env vars | Notes |
+| --- | --- | --- | --- |
+| `gemini` | Google Gemini | `GEMINI_API_KEY`, `GEMINI_MODEL` | Recommended default for text, vision, and multimodal chat |
+| `gemini-live` | Google Gemini Live | `GEMINI_LIVE_API_KEY`, `GEMINI_LIVE_MODEL` | Kept separate for speech, TTS, and future live audio |
+| `groq` | Groq | `GROQ_API_KEY`, `GROQ_MODEL` | Fast OpenAI-compatible text fallback |
+| `openrouter` | OpenRouter | `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` | Multi-model gateway and fallback option |
+| `github-models` | GitHub Models | `GITHUB_MODELS_API_KEY`, `GITHUB_MODELS_MODEL` | Useful for development and testing |
+| `huggingface` | Hugging Face | `HUGGINGFACE_API_KEY`, `HUGGINGFACE_MODEL` | Open models and experiments |
+| `mistral` | Mistral AI | `MISTRAL_API_KEY`, `MISTRAL_MODEL` | Official Mistral API |
+| `openai` | OpenAI | `OPENAI_API_KEY`, `OPENAI_MODEL` | Official OpenAI API |
+| `openai-compatible` | Custom OpenAI-compatible gateway | `AI_API_KEY`, `AI_BASE_URL`, `AI_MODEL` | Generic gateway support |
+| `anthropic` | Anthropic Claude | `ANTHROPIC_API_KEY`, `ANTHROPIC_MODEL` | Official Claude API |
+| `deepseek` | DeepSeek | `DEEPSEEK_API_KEY`, `DEEPSEEK_MODEL` | Official DeepSeek API |
+| `qwen` | Alibaba Cloud Model Studio / Qwen | `QWEN_API_KEY`, `QWEN_MODEL` | OpenAI-compatible Qwen endpoint |
+| `grok` | xAI Grok | `GROK_API_KEY`, `GROK_MODEL` | Official xAI API |
+| `glm` | Zhipu GLM | `GLM_API_KEY`, `GLM_MODEL` | Zhipu AI platform |
+| `doubao` | Volcengine Ark / Doubao | `DOUBAO_API_KEY`, `DOUBAO_MODEL` | Volcengine Ark API |
+
+Unconfigured optional providers are skipped safely.
+
+### Minimum Zeabur Config
+
+```env
+BOT_TOKEN=your_Telegram_BotFather_token
+ADMIN_USER_IDS=your_Telegram_numeric_user_id
+
+DEFAULT_AI_PROVIDER=gemini
+DEFAULT_AI_MODEL=copy_from_google_ai_studio
+GEMINI_API_KEY=your_Gemini_key
+GEMINI_MODEL=copy_from_google_ai_studio
+
+DATABASE_FILE=/data/bot-data.db
+DATA_FILE=/data/bot-data.json
+PORT=8080
+HEALTH_PORT=8080
+```
+
+Add Groq and OpenRouter as fallbacks:
+
+```env
+ENABLE_PROVIDER_FALLBACK=true
+AI_PROVIDER_FALLBACK_ORDER=gemini,groq,openrouter
+
+GROQ_API_KEY=your_Groq_key
+GROQ_MODEL=copy_from_Groq_console
+
+OPENROUTER_API_KEY=your_OpenRouter_key
+OPENROUTER_MODEL=copy_from_OpenRouter_models
+OPENROUTER_APP_TITLE=Telegram AI Bot Pro
+```
+
+### Where To Get Keys
+
+Use the official consoles:
+
+- Telegram: [BotFather](https://t.me/BotFather)
+- Gemini / Gemini Live: [Google AI Studio](https://aistudio.google.com/app/apikey)
+- Groq: [Groq Console](https://console.groq.com/keys)
+- OpenRouter: [OpenRouter Keys](https://openrouter.ai/settings/keys)
+- GitHub Models: [GitHub Models](https://github.com/marketplace/models)
+- Hugging Face: [HF Tokens](https://huggingface.co/settings/tokens)
+- Mistral: [Mistral Console](https://console.mistral.ai/api-keys/)
+- OpenAI: [OpenAI API Keys](https://platform.openai.com/api-keys)
+- Anthropic: [Claude Console](https://console.anthropic.com/settings/keys)
+- DeepSeek: [DeepSeek Platform](https://platform.deepseek.com/api_keys)
+- Qwen: [Alibaba Cloud Model Studio](https://bailian.console.aliyun.com/?apiKey=1)
+- Grok: [xAI Console](https://console.x.ai/)
+- GLM: [BigModel API Keys](https://open.bigmodel.cn/usercenter/apikeys)
+- Doubao: [Volcengine Ark](https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey)
+
+Copy current model IDs from each provider dashboard. Free tiers, model IDs, rate limits, and region availability may change.
+
+### User Flow
+
+Open the bot menu and choose `AI model`:
+
+- Pick a provider
+- Pick a model
+- Toggle automatic fallback
+- Test the current model
+- Admins can test all providers and view provider status
+
+Selections are stored in SQLite and survive restarts.
+
+### Fallback Behavior
+
+With `ENABLE_PROVIDER_FALLBACK=true`, the bot tries the configured provider order when the current provider is unavailable, rate limited, misconfigured, returns an empty result, or does not support the requested capability. API keys are masked and never sent to Telegram users.
+
+### Run Locally
 
 ```bash
-cp .env.example .env
-# 编辑 .env 填写 BOT_TOKEN / AI_PROVIDER / AI_MODEL / 密钥 / ADMIN_API_TOKEN
-mkdir -p data
-
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
-curl -fsS http://127.0.0.1:3000/
+npm install
+npm start
 ```
 
-## 升级、回滚、备份恢复
-
-### 升级
-
-1. 拉取新版本代码
-2. 执行发布候选集：`npm run test:release`
-3. 重建并滚动启动容器
-
-### 回滚
-
-1. 切回上一个稳定版本
-2. 使用相同 `.env` 与数据卷重启服务
-3. 验证健康检查与管理 API 可访问
-
-### 备份恢复（SQLite）
-
-- 备份：复制 `DATABASE_FILE` 指向的 db 文件（例如 `data/bot-data.db`）
-- 恢复：停服务后替换 db 文件并重启
-- 如保留旧 JSON，`DATA_FILE` 可作为历史导入来源
-
-## 常见故障排查
-
-- `401/UNAUTHORIZED`：检查 `ADMIN_API_TOKEN`，并确认鉴权请求头格式是否正确
-- `FORBIDDEN`：检查 `x-admin-user-id` 对应角色权限（RBAC）
-- `DATABASE is locked`：确认单实例写入策略与持久化卷权限
-- `invalid_api_key (401)`：检查 `AI_PROVIDER / AI_MODEL / API Key` 组合一致性
-- `Dockerfile is required for arbitrary Git sources`：平台需手动指定 Dockerfile 路径与上下文
-
-## 上线核对
-
-- 发布门禁：`docs/release/phase-g-go-no-go.md`
-- 全局复查：`docs/release/phase-g-refactor-review.md`
-- CI 分级执行：`.github/workflows/phase-g-validation.yml`
-
-## 测试
+Validation:
 
 ```bash
-npm test
+npm run doctor
+npm run verify
+npm run test:full
 ```
 
-Phase G 分层测试命令：
+### Safety
 
-- `npm run test:quick`：PR 快速集
-- `npm run test:smoke`：发布前 smoke
-- `npm run test:e2e`：端到端核心链路
-- `npm run test:regression`：关键能力回归
-- `npm run test:load`：负载基线
-- `npm run test:fault`：故障注入
-- `npm run test:full`：主干全量集
-- `npm run test:release`：发布候选集（全量 + 负载 + 故障）
-
-## Phase 1 架构变化
-
-- 持久化层已切换为 SQLite
-- `src/plugins/*-plugin.js` 会自动注册 `/web`、`/image`、`/tts` 等可扩展能力
-- 聊天回复支持 Telegram 端渐进式流式输出
-
-## 注意事项
-
-- 图片理解支持多平台；`/tts`、语音转文字、`/image` 当前仅在 `openai-compatible` 提供商可用。
-- URL 抓取和联网搜索依赖运行环境的外网访问能力。
-- 当前文件解析已内置 txt / md / json / csv / xml / pdf / docx / xlsx 路由，超限会自动拒绝并提示拆分。
+- Never commit `.env`
+- Never paste API keys into Telegram chats
+- Use `/whoami` to get your Telegram admin ID
+- Set `ADMIN_API_TOKEN` when `ADMIN_API_ENABLED=true`
+- Verify model IDs and free quotas in the provider dashboards before deployment
