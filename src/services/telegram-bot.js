@@ -221,6 +221,21 @@ function localText(locale = 'en', zh = '', en = '') {
   return isEnglishLocale(locale) ? en : zh;
 }
 
+function localStatus(status = '', locale = 'zh') {
+  const key = String(status || 'unknown').trim().toLowerCase();
+  const labels = {
+    auto: ['自动选择', 'auto'],
+    healthy: ['正常', 'healthy'],
+    degraded: ['降级', 'degraded'],
+    cooldown: ['冷却中', 'cooldown'],
+    unconfigured: ['未配置', 'unconfigured'],
+    disabled: ['已禁用', 'disabled'],
+    unknown: ['未知', 'unknown']
+  };
+  const [zh, en] = labels[key] || [key || '未知', key || 'unknown'];
+  return localText(locale, zh, en);
+}
+
 function labelLocale(locale = 'en') {
   return uiTextLocale(locale);
 }
@@ -1194,7 +1209,7 @@ export class TelegramAIBot {
         Markup.button.callback(labels.quickHelp, 'admin_pick:quick_help')
       ],
       [Markup.button.callback(labels.cancel, 'admin_pick:cancel')],
-      [Markup.button.callback(localText(locale, '⬅️ 返回主菜单', '⬅️ Main menu'), 'menu:back')]
+      ...this.createSettingsNavigationRows(locale)
     ]);
   }
 
@@ -1218,13 +1233,29 @@ export class TelegramAIBot {
     ]);
   }
 
+  createSettingsNavigationRows(locale = 'zh') {
+    return [
+      [Markup.button.callback(localText(locale, '返回设置', 'Settings'), 'settings_pick:overview')],
+      [Markup.button.callback(localText(locale, '返回主菜单', 'Main menu'), 'menu:back')]
+    ];
+  }
+
+  createWhoamiKeyboard(ctx, locale = 'zh') {
+    const rows = [];
+    if (this.isAdmin(ctx)) {
+      rows.push([Markup.button.callback(localText(locale, '返回管理', 'Admin panel'), 'admin_pick:back')]);
+    }
+    rows.push(...this.createSettingsNavigationRows(locale));
+    return Markup.inlineKeyboard(rows);
+  }
+
   createModelKeyboard(currentModel, locale = 'zh') {
     const buttons = this.config.availableModels.map((model) =>
       Markup.button.callback(model === currentModel ? `✅ ${model}` : model, `set_model:${model}`)
     );
     return Markup.inlineKeyboard([
       ...chunkItems(buttons, 2),
-      [Markup.button.callback(localText(locale, '返回主菜单', 'Main menu'), 'menu:back')]
+      ...this.createSettingsNavigationRows(locale)
     ]);
   }
 
@@ -1285,7 +1316,7 @@ export class TelegramAIBot {
         Markup.button.callback(fallbackLabel, `ai:fb:${fallbackTarget}`),
         Markup.button.callback(localText(locale, '平台状态', 'Provider status'), 'ai:status')
       ],
-      [Markup.button.callback(localText(locale, '返回主菜单', 'Main menu'), 'menu:back')]
+      ...this.createSettingsNavigationRows(locale)
     ]);
   }
 
@@ -1300,7 +1331,7 @@ export class TelegramAIBot {
     return Markup.inlineKeyboard([
       ...chunkItems(buttons, 1),
       [Markup.button.callback(localText(locale, '返回', 'Back'), 'ai:back')],
-      [Markup.button.callback(localText(locale, '返回主菜单', 'Main menu'), 'menu:back')]
+      ...this.createSettingsNavigationRows(locale)
     ]);
   }
 
@@ -1311,7 +1342,10 @@ export class TelegramAIBot {
     const fallback = settings.fallbackEnabled
       ? localText(locale, '已开启', 'on')
       : localText(locale, '已关闭', 'off');
-    const status = this.providerManager?.listProviders?.().find((item) => item.id === providerId)?.status || 'unknown';
+    const rawStatus = providerId === 'auto'
+      ? 'auto'
+      : this.providerManager?.listProviders?.().find((item) => item.id === providerId)?.status || 'unknown';
+    const status = localStatus(rawStatus, locale);
 
     if (isEnglishLocale(locale)) {
       return [
@@ -1347,7 +1381,7 @@ export class TelegramAIBot {
     );
     return Markup.inlineKeyboard([
       ...chunkItems(buttons, 2),
-      [Markup.button.callback(localText(locale, '返回主菜单', 'Main menu'), 'menu:back')]
+      ...this.createSettingsNavigationRows(locale)
     ]);
   }
 
@@ -1361,7 +1395,7 @@ export class TelegramAIBot {
     );
     return Markup.inlineKeyboard([
       ...chunkItems(buttons, 2),
-      [Markup.button.callback(localText(locale, '返回主菜单', 'Main menu'), 'menu:back')]
+      ...this.createSettingsNavigationRows(locale)
     ]);
   }
 
@@ -1372,7 +1406,7 @@ export class TelegramAIBot {
       [Markup.button.callback(this.t(locale, 'memoryViewTopics'), 'memory_pick:topics')],
       [Markup.button.callback(this.t(locale, 'memoryClearAction'), 'memory_pick:clear')],
       [Markup.button.callback(this.t(locale, 'memoryCancel'), 'memory_pick:cancel')],
-      [Markup.button.callback(localText(locale, '返回主菜单', 'Main menu'), 'menu:back')]
+      ...this.createSettingsNavigationRows(locale)
     ]);
   }
 
@@ -1382,7 +1416,7 @@ export class TelegramAIBot {
       [Markup.button.callback(this.t(locale, 'clearLongMemory'), 'clear_pick:long')],
       [Markup.button.callback(this.t(locale, 'clearAllMemory'), 'clear_pick:all')],
       [Markup.button.callback(this.t(locale, 'clearCancel'), 'clear_pick:cancel')],
-      [Markup.button.callback(localText(locale, '返回主菜单', 'Main menu'), 'menu:back')]
+      ...this.createSettingsNavigationRows(locale)
     ]);
   }
 
@@ -3037,7 +3071,7 @@ export class TelegramAIBot {
             userId
           ].join('\n');
 
-    await sendTextReply(ctx, text, this.config.maxOutputChars, this.createMenuKeyboard(locale));
+    await sendTextReply(ctx, text, this.config.maxOutputChars, this.createWhoamiKeyboard(ctx, locale));
   }
 
   async handleHelp(ctx) {
@@ -3056,7 +3090,7 @@ export class TelegramAIBot {
             '• Explain this error and suggest a fix',
             '',
             'Settings: switch model, persona, language, and memory.',
-            'Menu → Toolbox: search, translation, images, voice, and files.',
+            'Search, translation, images, voice, and files can be handled directly from your message.',
             'Persona changes apply from your next message.'
           ].join('\n')
         : [
@@ -3070,7 +3104,7 @@ export class TelegramAIBot {
             '• 分析这段报错并告诉我怎么修',
             '',
             '「设置」：切换模型、人格、语言和记忆。',
-            '「菜单 → 工具箱」：联网搜索、翻译、图片、语音和文件。',
+            '联网搜索、翻译、图片、语音和文件：直接发送内容即可，我会自动判断。',
             '切换人格后，会从你的下一条消息开始生效。'
           ].join('\n');
 
@@ -3090,7 +3124,7 @@ export class TelegramAIBot {
     await ctx.answerCbQuery();
 
     if (target === 'cancel') {
-      await ctx.reply(this.t(locale, 'clearCancelled'), this.createMenuKeyboard(locale));
+      await this.handleSettingsOverview(ctx);
       return;
     }
 
@@ -3133,7 +3167,7 @@ export class TelegramAIBot {
     await ctx.answerCbQuery();
 
     if (target === 'cancel') {
-      await ctx.reply(this.t(locale, 'clearCancelled'), this.createMenuKeyboard(locale));
+      await this.handleSettingsOverview(ctx);
       return;
     }
 
@@ -4258,7 +4292,7 @@ export class TelegramAIBot {
       '',
       ...providers.map((item) => {
         const model = item.models?.[0] || '-';
-        return `${item.name}: ${item.status} / ${model}`;
+        return `${item.name}: ${localStatus(item.status, locale)} / ${model}`;
       })
     ];
     await ctx.reply(lines.join('\n'), this.createAdminActionKeyboard(locale));
@@ -4353,12 +4387,12 @@ export class TelegramAIBot {
         : '- 无',
       '',
       '全局统计：',
-      `- messagesHandled：${stats.messagesHandled || 0}`,
-      `- aiCalls：${stats.aiCalls || 0}`,
-      `- toolCalls：${stats.toolCalls || 0}`,
-      `- voiceTranscriptions：${stats.voiceTranscriptions || 0}`,
-      `- imageGenerations：${stats.imageGenerations || 0}`,
-      `- ttsGenerations：${stats.ttsGenerations || 0}`
+      `- 已处理消息：${stats.messagesHandled || 0}`,
+      `- AI 调用次数：${stats.aiCalls || 0}`,
+      `- 工具调用次数：${stats.toolCalls || 0}`,
+      `- 语音转文字次数：${stats.voiceTranscriptions || 0}`,
+      `- 图片生成次数：${stats.imageGenerations || 0}`,
+      `- 文字转语音次数：${stats.ttsGenerations || 0}`
     ];
 
     await ctx.reply(lines.join('\n'), this.createAdminActionKeyboard(locale));
@@ -4661,7 +4695,7 @@ export class TelegramAIBot {
     await ctx.answerCbQuery();
 
     if (target === 'cancel') {
-      await this.handleMenu(ctx);
+      await this.handleSettingsOverview(ctx);
       return;
     }
 
@@ -5220,7 +5254,7 @@ export class TelegramAIBot {
       const lines = [
         localText(locale, '平台状态', 'Provider status'),
         '',
-        ...rows.map((item) => `${item.name}: ${item.status}${item.models?.[0] ? ` (${item.models[0]})` : ''}`)
+        ...rows.map((item) => `${item.name}: ${localStatus(item.status, locale)}${item.models?.[0] ? ` (${item.models[0]})` : ''}`)
       ];
       await this.editAssistantMessageText(ctx, lines.join('\n'), this.createAIProviderKeyboard(settings, locale));
       return;

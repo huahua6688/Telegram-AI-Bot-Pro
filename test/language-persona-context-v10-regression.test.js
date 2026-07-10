@@ -37,6 +37,15 @@ test("button replies avoid mixed-language labels", () => {
   assert.match(bot, /localText\(locale, '🧰 工具箱', '🧰 Toolbox'\)/);
 });
 
+test("settings submenus expose local back paths", () => {
+  assert.match(bot, /function localStatus/);
+  assert.match(bot, /createSettingsNavigationRows\(locale = 'zh'\)/);
+  assert.match(bot, /createWhoamiKeyboard\(ctx, locale = 'zh'\)/);
+  assert.match(bot, /localStatus\(item\.status, locale\)/);
+  assert.doesNotMatch(bot, /messagesHandled：/);
+  assert.match(bot, /已处理消息：/);
+});
+
 test("persona affects natural-agent answers and followups", () => {
   assert.ok(agent.includes("personaPresets"), "natural-agent should import personaPresets");
   assert.ok(agent.includes("getPersonaInstruction"), "natural-agent should read persona instruction");
