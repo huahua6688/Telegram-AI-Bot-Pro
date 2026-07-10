@@ -412,10 +412,16 @@ export class AIProviderManager {
       }
     }
 
+    const onlySetupProblems = attempted.length > 0 && attempted.every((item) =>
+      ['unconfigured', 'disabled', 'model_missing', 'cooldown'].includes(String(item.status || ''))
+    );
     const message = attempted.length
-      ? `All configured AI providers failed: ${attempted.map((item) => `${item.providerId}/${item.status}`).join(', ')}`
+      ? onlySetupProblems
+        ? `No usable AI provider is configured: ${attempted.map((item) => `${item.providerId}/${item.status}`).join(', ')}`
+        : `All configured AI providers failed: ${attempted.map((item) => `${item.providerId}/${item.status}`).join(', ')}`
       : 'No configured AI provider supports this request.';
     const wrapped = new Error(message);
+    wrapped.code = onlySetupProblems ? 'NO_USABLE_AI_PROVIDER' : 'AI_PROVIDERS_FAILED';
     wrapped.cause = lastError;
     wrapped.attemptedProviders = attempted;
     throw wrapped;

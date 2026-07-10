@@ -382,7 +382,7 @@ test('free web search fallback returns real HTML search results', async () => {
   }
 });
 
-test('localized slash commands cover language and search and refresh per chat', async () => {
+test('localized slash commands stay minimal and refresh per chat', async () => {
   const calls = [];
   const bot = Object.create(TelegramAIBot.prototype);
   bot.logger = logger();
@@ -399,11 +399,15 @@ test('localized slash commands cover language and search and refresh per chat', 
   const dutch = calls.find((item) => item.options.language_code === 'nl');
   assert.ok(indonesian);
   assert.ok(dutch);
-  assert.ok(indonesian.commands.some((item) => item.command === 'language'));
-  assert.ok(indonesian.commands.some((item) => item.command === 'web'));
+  assert.deepEqual(
+    indonesian.commands.map((item) => item.command),
+    ['start', 'menu', 'help', 'reset', 'whoami']
+  );
+  assert.ok(!indonesian.commands.some((item) => item.command === 'language'));
+  assert.ok(!indonesian.commands.some((item) => item.command === 'web'));
 
   await bot.setChatBotCommands({ chat: { id: 99 } }, 'zh-hant');
   const chatCall = calls.at(-1);
   assert.deepEqual(chatCall.options.scope, { type: 'chat', chat_id: 99 });
-  assert.equal(chatCall.commands.find((item) => item.command === 'language').description, '切換語言');
+  assert.equal(chatCall.commands.find((item) => item.command === 'reset').description, '清除目前對話');
 });

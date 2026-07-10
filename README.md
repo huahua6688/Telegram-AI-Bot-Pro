@@ -137,6 +137,15 @@ OPENROUTER_HTTP_REFERER=
 OPENROUTER_APP_TITLE=Telegram AI Bot Pro
 ```
 
+自动切换不是“凭空换模型”。它需要备用平台真的可用：
+
+- `ENABLE_PROVIDER_FALLBACK=true`
+- `AI_PROVIDER_FALLBACK_ORDER` 里写了备用顺序
+- 备用 Provider 已填写 API Key
+- 备用 Provider 已填写当前可用的模型 ID
+
+例如只填了 Gemini Key，没有填 Groq/OpenRouter Key，Gemini 额度用完时机器人只能提示你配置备用 Provider，不能自动切到一个没有 Key 的平台。
+
 ### 完整 Provider 环境变量模板
 
 只填你要启用的平台。没填的平台会自动跳过。
@@ -461,6 +470,8 @@ To switch provider or model, open `Settings -> Model`. Model buttons use short i
 ### Fallback Behavior
 
 With `ENABLE_PROVIDER_FALLBACK=true`, the bot tries the configured provider order when the current provider is unavailable, rate limited, misconfigured, returns an empty result, or does not support the requested capability. API keys are masked and never sent to Telegram users.
+
+Fallback cannot switch to providers that have no API key or model configured. For example, if only Gemini is configured and Gemini hits quota, the bot will ask you to configure a backup provider instead of pretending Groq or OpenRouter is usable.
 
 ### Run Locally
 

@@ -107,6 +107,34 @@ test('AIProviderManager does not cross providers when fallback is disabled', asy
   );
 });
 
+test('AIProviderManager reports setup problems separately from provider failures', async () => {
+  const manager = new AIProviderManager({
+    config: baseConfig({
+      geminiApiKey: '',
+      groqApiKey: '',
+      openrouterApiKey: '',
+      huggingfaceApiKey: ''
+    }),
+    logger,
+    clientFactory: fakeFactory({})
+  });
+
+  await assert.rejects(
+    () => manager.execute({
+      capability: 'chat',
+      preferredProvider: 'gemini',
+      preferredModel: 'gemini-model',
+      fallbackEnabled: true,
+      request: { messages: [{ role: 'user', content: 'hello' }], tools: [] }
+    }),
+    (error) => {
+      assert.equal(error.code, 'NO_USABLE_AI_PROVIDER');
+      assert.match(error.message, /No usable AI provider is configured/);
+      return true;
+    }
+  );
+});
+
 test('AIProviderManager skips unconfigured providers', async () => {
   const manager = new AIProviderManager({
     config: baseConfig({ geminiApiKey: '' }),

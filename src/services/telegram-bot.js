@@ -47,13 +47,8 @@ const BOT_COMMAND_NAMES = [
   'start',
   'menu',
   'help',
-  'web',
-  'models',
-  'persona',
-  'language',
   'reset',
-  'whoami',
-  'status'
+  'whoami'
 ];
 
 const AI_PROVIDER_MENU_ORDER = [
@@ -122,10 +117,15 @@ const BOT_COMMAND_DESCRIPTIONS = {
 
 function createLocalizedBotCommands(locale = 'en') {
   const normalized = normalizeLanguageCode(locale, 'en');
-  const descriptions = BOT_COMMAND_DESCRIPTIONS[normalized] || BOT_COMMAND_DESCRIPTIONS.en;
+  const minimalDescriptions = {
+    zh: ['打开助手', '打开简洁菜单', '查看帮助', '清空当前对话', '查看 Telegram ID'],
+    'zh-hant': ['開啟助手', '開啟簡潔選單', '查看說明', '清除目前對話', '查看 Telegram ID'],
+    en: ['Open assistant', 'Open simple menu', 'Show help', 'Clear current chat', 'Show Telegram ID']
+  };
+  const descriptions = minimalDescriptions[normalized] || minimalDescriptions.en;
   return BOT_COMMAND_NAMES.map((command, index) => ({
     command,
-    description: descriptions[index] || BOT_COMMAND_DESCRIPTIONS.en[index]
+    description: descriptions[index] || minimalDescriptions.en[index]
   }));
 }
 
@@ -1231,7 +1231,11 @@ export class TelegramAIBot {
         const configured = providerId === 'auto' || this.providerManager?.isConfigured?.(providerId);
         const enabled = providerId === 'auto' || this.providerManager?.isEnabled?.(providerId);
         const current = providerId === currentProvider;
-        const status = current ? '[x] ' : configured && enabled ? '' : '[ ] ';
+        const status = current
+          ? (locale === 'en' ? 'Current ' : '当前 ')
+          : configured && enabled
+            ? ''
+            : (locale === 'en' ? 'Setup ' : '未配置 ');
         return Markup.button.callback(
           `${status}${AI_PROVIDER_ICONS[providerId] || this.getAIProviderLabel(providerId)}`,
           providerId === 'auto' ? 'ai:auto' : `ai:p:${providerId}`
@@ -1262,7 +1266,7 @@ export class TelegramAIBot {
     const models = this.getProviderModelsForMenu(providerId);
     const buttons = models.map((model, index) =>
       Markup.button.callback(
-        `${model === currentModel ? '[x] ' : ''}${model}`,
+        `${model === currentModel ? (locale === 'en' ? 'Current ' : '当前 ') : ''}${model}`,
         `ai:m:${index}`
       )
     );
@@ -1289,7 +1293,9 @@ export class TelegramAIBot {
         `Current provider: ${provider}`,
         `Current model: ${modelId || '-'}`,
         `Fallback: ${fallback}`,
-        `Status: ${status}`
+        `Status: ${status}`,
+        '',
+        'Automatic fallback only works after at least one backup provider has both API key and model configured.'
       ].join('\n');
     }
 
@@ -1299,7 +1305,9 @@ export class TelegramAIBot {
       `当前 Provider：${provider}`,
       `当前模型：${modelId || '-'}`,
       `自动备用：${fallback}`,
-      `状态：${status}`
+      `状态：${status}`,
+      '',
+      '自动切换只有在备用 Provider 已填写 API Key 和模型后才会生效。未配置的平台会自动跳过。'
     ].join('\n');
   }
 
@@ -2426,7 +2434,16 @@ export class TelegramAIBot {
 
   formatUserFacingError(error, locale = 'zh') {
     const raw = String(error?.message || error || '').trim();
+    const causeRaw = String(error?.cause?.message || '').trim();
+    const attemptedProviders = Array.isArray(error?.attemptedProviders)
+      ? error.attemptedProviders
+      : Array.isArray(error?.cause?.attemptedProviders)
+        ? error.cause.attemptedProviders
+        : [];
+    const statusList = attemptedProviders.map((item) => String(item.status || '').toLowerCase()).filter(Boolean);
+    const combinedRaw = [raw, causeRaw, statusList.join(' ')].filter(Boolean).join(' ');
     const lower = raw.toLowerCase();
+    const combinedLower = combinedRaw.toLowerCase();
 
     const retryMatch = raw.match(/retry in\s+([\d.]+)s/i);
     const retrySeconds = retryMatch ? Math.ceil(Number(retryMatch[1])) : 0;
@@ -2435,6 +2452,8 @@ export class TelegramAIBot {
       zh: {
         retry: retrySeconds > 0 ? `请大约 ${retrySeconds} 秒后再试。` : '请稍后再试。',
         quota: '请求太频繁了，当前 AI 额度暂时用完。',
+        noProvider: '没有可用的 AI 服务。请先在 Zeabur 环境变量里至少配置一个 Provider 的 API Key 和模型。',
+        fallbackSetup: '如果想自动切换，还需要配置 Groq、OpenRouter 等备用 Provider，并保持 ENABLE_PROVIDER_FALLBACK=true。',
         auth: 'AI 服务认证失败。可能是 API Key 无效、额度权限不足，或环境变量配置错误。',
         timeout: 'AI 服务响应超时。可能是网络不稳定或模型响应太慢，请稍后再试。',
         model: '当前模型不可用。可能是模型名称写错、API Key 不支持这个模型，或模型已经下线。',
@@ -2445,6 +2464,8 @@ export class TelegramAIBot {
       en: {
         retry: retrySeconds > 0 ? `Please try again in about ${retrySeconds} seconds.` : 'Please try again later.',
         quota: 'Too many requests. The current AI quota is temporarily exhausted.',
+        noProvider: 'No AI provider is usable. Configure at least one provider API key and model in the environment variables.',
+        fallbackSetup: 'For automatic fallback, configure backup providers such as Groq or OpenRouter and keep ENABLE_PROVIDER_FALLBACK=true.',
         auth: 'AI service authentication failed. The API key may be invalid, unauthorized, or misconfigured.',
         timeout: 'The AI service timed out. The network may be unstable or the model may be responding too slowly.',
         model: 'The current model is unavailable. The model name may be wrong, unsupported, or deprecated.',
@@ -2456,70 +2477,88 @@ export class TelegramAIBot {
 
     const lang = messages[locale] ? locale : 'zh';
     const t = messages[lang];
+    const noUsableProvider =
+      combinedLower.includes('no configured ai provider') ||
+      combinedLower.includes('no usable ai provider') ||
+      combinedLower.includes('all configured ai providers failed') ||
+      (
+        attemptedProviders.length > 0 &&
+        statusList.every((status) => ['unconfigured', 'disabled', 'model_missing', 'cooldown'].includes(status))
+      );
 
-    if (
-      raw.includes('429') ||
-      raw.includes('RESOURCE_EXHAUSTED') ||
-      lower.includes('quota') ||
-      lower.includes('rate limit') ||
-      lower.includes('rate-limit') ||
-      lower.includes('generate_content_free_tier_requests')
-    ) {
-      return `${t.quota}\n${t.retry}`;
+    if (noUsableProvider) {
+      const hasQuota = statusList.includes('quota') || combinedLower.includes('quota') || combinedLower.includes('429');
+      if (hasQuota) return `${t.quota}\n${t.fallbackSetup}`;
+      return `${t.noProvider}\n${t.fallbackSetup}`;
     }
 
     if (
-      raw.includes('401') ||
-      raw.includes('403') ||
-      lower.includes('api key') ||
-      lower.includes('permission') ||
-      lower.includes('unauthorized') ||
-      lower.includes('forbidden')
+      combinedRaw.includes('429') ||
+      combinedRaw.includes('RESOURCE_EXHAUSTED') ||
+      combinedLower.includes('quota') ||
+      combinedLower.includes('rate limit') ||
+      combinedLower.includes('rate-limit') ||
+      combinedLower.includes('generate_content_free_tier_requests')
+    ) {
+      return attemptedProviders.length > 0
+        ? `${t.quota}\n${t.fallbackSetup}`
+        : `${t.quota}\n${t.retry}`;
+    }
+
+    if (
+      combinedRaw.includes('401') ||
+      combinedRaw.includes('403') ||
+      combinedLower.includes('api key') ||
+      combinedLower.includes('permission') ||
+      combinedLower.includes('unauthorized') ||
+      combinedLower.includes('forbidden') ||
+      combinedLower.includes('auth')
     ) {
       return t.auth;
     }
 
     if (
-      lower.includes('timeout') ||
-      lower.includes('timed out') ||
-      lower.includes('etimedout') ||
-      lower.includes('abort')
+      combinedLower.includes('timeout') ||
+      combinedLower.includes('timed out') ||
+      combinedLower.includes('etimedout') ||
+      combinedLower.includes('abort')
     ) {
       return t.timeout;
     }
 
     if (
-      /\b(500|502|503|504)\b/.test(raw) ||
-      lower.includes('temporarily unavailable') ||
-      lower.includes('service unavailable') ||
-      lower.includes('overloaded') ||
-      lower.includes('upstream')
+      /\b(500|502|503|504)\b/.test(combinedRaw) ||
+      combinedLower.includes('temporarily unavailable') ||
+      combinedLower.includes('service unavailable') ||
+      combinedLower.includes('overloaded') ||
+      combinedLower.includes('upstream')
     ) {
       return `${t.network}\n${t.retry}`;
     }
 
     if (
-      raw.includes('404') ||
-      lower.includes('model not found') ||
-      lower.includes('not found')
+      combinedRaw.includes('404') ||
+      combinedLower.includes('model not found') ||
+      combinedLower.includes('not found') ||
+      combinedLower.includes('model_missing')
     ) {
       return t.model;
     }
 
     if (
-      lower.includes('safety') ||
-      lower.includes('blocked') ||
-      lower.includes('prohibited')
+      combinedLower.includes('safety') ||
+      combinedLower.includes('blocked') ||
+      combinedLower.includes('prohibited')
     ) {
       return t.safety;
     }
 
     if (
-      lower.includes('network') ||
-      lower.includes('fetch failed') ||
-      lower.includes('econnreset') ||
-      lower.includes('enotfound') ||
-      lower.includes('eai_again')
+      combinedLower.includes('network') ||
+      combinedLower.includes('fetch failed') ||
+      combinedLower.includes('econnreset') ||
+      combinedLower.includes('enotfound') ||
+      combinedLower.includes('eai_again')
     ) {
       return t.network;
     }

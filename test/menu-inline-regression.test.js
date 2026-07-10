@@ -43,6 +43,8 @@ test("AI provider menu uses short callback data", () => {
   assert.match(menu, /`ai:p:\$\{providerId\}`/);
   assert.match(menu, /ai:auto/);
   assert.match(models, /ai:m:\$\{index\}/);
+  assert.doesNotMatch(menu, /\[x\]/);
+  assert.doesNotMatch(models, /\[x\]/);
 });
 
 test("visible settings menu has no toolbox entry", () => {
