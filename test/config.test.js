@@ -56,9 +56,23 @@ test('loadConfig resolves gemini-live aliases and keys', () => {
   resetEnv();
   process.env.AI_PROVIDER = 'google-live';
   process.env.GEMINI_API_KEY = 'gemini-shared-key';
+  process.env.GEMINI_LIVE_API_KEY = 'gemini-live-key';
   const config = loadConfig();
   assert.equal(config.aiProvider, 'gemini-live');
-  assert.equal(config.geminiLiveApiKey, 'gemini-shared-key');
+  assert.equal(config.geminiLiveApiKey, 'gemini-live-key');
+  assert.equal(config.geminiApiKey, 'gemini-shared-key');
+});
+
+test('loadConfig keeps Gemini Live separate from ordinary Gemini keys', () => {
+  resetEnv();
+  process.env.AI_PROVIDER = 'gemini-live';
+  process.env.GEMINI_API_KEY = 'gemini-key';
+  delete process.env.GEMINI_LIVE_API_KEY;
+
+  const config = loadConfig();
+  assert.equal(config.aiProvider, 'gemini-live');
+  assert.equal(config.geminiApiKey, 'gemini-key');
+  assert.equal(config.geminiLiveApiKey, '');
 });
 
 test('loadConfig resolves first-batch native provider aliases', () => {

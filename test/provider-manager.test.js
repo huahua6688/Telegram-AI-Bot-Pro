@@ -107,6 +107,43 @@ test('AIProviderManager does not cross providers when fallback is disabled', asy
   );
 });
 
+test('AIProviderManager still tries same-provider fallback models when cross-provider fallback is disabled', async () => {
+  const calls = [];
+  const manager = new AIProviderManager({
+    config: baseConfig({
+      providerModels: {
+        gemini: ['gemini-bad-model', 'gemini-good-model'],
+        groq: ['groq-model'],
+        openrouter: ['openrouter-model'],
+        huggingface: ['hf-model']
+      }
+    }),
+    logger,
+    clientFactory: fakeFactory({
+      gemini: [
+        new Error('AI request failed (404): model not found'),
+        { text: 'gemini ok', messages: [{ role: 'assistant', content: 'gemini ok' }] }
+      ],
+      groq: [{ text: 'should not run', messages: [] }]
+    }, calls)
+  });
+
+  const result = await manager.execute({
+    capability: 'chat',
+    preferredProvider: 'gemini',
+    preferredModel: 'gemini-bad-model',
+    fallbackEnabled: false,
+    request: { messages: [{ role: 'user', content: 'hello' }], tools: [] }
+  });
+
+  assert.equal(result.providerId, 'gemini');
+  assert.equal(result.model, 'gemini-good-model');
+  assert.deepEqual(calls.map((item) => `${item.providerId}/${item.model}`), [
+    'gemini/gemini-bad-model',
+    'gemini/gemini-good-model'
+  ]);
+});
+
 test('AIProviderManager reports setup problems separately from provider failures', async () => {
   const manager = new AIProviderManager({
     config: baseConfig({

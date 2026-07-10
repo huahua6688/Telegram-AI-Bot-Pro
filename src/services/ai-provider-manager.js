@@ -415,9 +415,6 @@ export class AIProviderManager {
           }
         }
 
-        if (!fallbackEnabled && normalizeProviderId(preferredProvider) !== 'auto') {
-          break;
-        }
       }
 
       if (!fallbackEnabled && normalizeProviderId(preferredProvider) !== 'auto') {

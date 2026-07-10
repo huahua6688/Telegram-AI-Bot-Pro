@@ -73,7 +73,7 @@ export function loadConfig() {
     'openai-compatible': 'gpt-4.1-mini',
     openai: 'gpt-4.1-mini',
     anthropic: 'claude-3-5-sonnet-latest',
-    gemini: 'gemini-3.5-flash',
+    gemini: 'gemini-2.5-flash',
     'gemini-live': 'gemini-2.5-flash-preview-native-audio-dialog',
     groq: '',
     openrouter: '',
@@ -87,7 +87,7 @@ export function loadConfig() {
     doubao: 'doubao-seed-1-6-250615'
   };
   const providerFallbackModels = {
-    gemini: ['gemini-2.5-flash', 'gemini-2.5-flash-lite']
+    gemini: ['gemini-2.5-flash-lite']
   };
   const legacyModelFor = (providerId) => (aiProvider === providerId ? process.env.AI_MODEL : '');
   const providerModels = {
@@ -154,7 +154,7 @@ export function loadConfig() {
     anthropicApiVersion: process.env.ANTHROPIC_API_VERSION || '2023-06-01',
     geminiApiKey: process.env.GEMINI_API_KEY || process.env.AI_API_KEY || '',
     geminiBaseUrl: (process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, ''),
-    geminiLiveApiKey: process.env.GEMINI_LIVE_API_KEY || process.env.GEMINI_API_KEY || process.env.AI_API_KEY || '',
+    geminiLiveApiKey: process.env.GEMINI_LIVE_API_KEY || '',
     geminiLiveBaseUrl: (process.env.GEMINI_LIVE_BASE_URL || process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, ''),
     groqApiKey: process.env.GROQ_API_KEY || '',
     groqBaseUrl: (process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1').replace(/\/$/, ''),

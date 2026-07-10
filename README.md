@@ -23,7 +23,7 @@ ADMIN_USER_IDS=
 
 # Default AI behavior
 DEFAULT_AI_PROVIDER=auto
-DEFAULT_AI_MODEL=gemini-3.5-flash
+DEFAULT_AI_MODEL=gemini-2.5-flash
 ENABLE_USER_PROVIDER_SELECTION=true
 ENABLE_USER_MODEL_SELECTION=true
 
@@ -38,8 +38,8 @@ MODEL_LIST_CACHE_TTL_MS=3600000
 # Google Gemini free-tier first
 GEMINI_API_KEY=
 GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
-GEMINI_MODEL=gemini-3.5-flash
-GEMINI_FALLBACK_MODELS=gemini-3.1-flash-lite,gemini-2.5-flash,gemini-2.5-flash-lite
+GEMINI_MODEL=gemini-2.5-flash
+GEMINI_FALLBACK_MODELS=gemini-2.5-flash-lite
 
 # OpenRouter free models
 OPENROUTER_API_KEY=
@@ -63,7 +63,7 @@ ROUTER_MODEL=gemini-3.1-flash-lite
 MEMORY_PROVIDER=gemini
 MEMORY_MODEL=gemini-3.1-flash-lite
 VISION_PROVIDER=gemini
-VISION_MODEL=gemini-3.5-flash
+VISION_MODEL=gemini-2.5-flash
 TRANSCRIPTION_PROVIDER=gemini-live
 TRANSCRIPTION_MODEL=
 TTS_PROVIDER=gemini-live
@@ -136,8 +136,8 @@ AI_FALLBACK_MODELS=
 
 | Provider | 推荐模型 ID | 说明 |
 | --- | --- | --- |
-| Gemini | `gemini-3.5-flash` | Google 官方价格页显示 Free Tier 输入和输出免费 |
-| Gemini 备用 | `gemini-3.1-flash-lite`, `gemini-2.5-flash`, `gemini-2.5-flash-lite` | 免费层、限流和地区可能变化 |
+| Gemini | `gemini-2.5-flash` | Google 官方价格页显示 Free Tier 输入和输出免费 |
+| Gemini 备用 | `gemini-2.5-flash-lite` | 免费层、限流和地区可能变化；如果控制台明确支持其他模型，再手动加入 |
 | OpenRouter | `tencent/hy3:free` | 当前 OpenRouter API 中显示为 `prompt=0`、`completion=0` 的免费模型 |
 | OpenRouter 备用 | `poolside/laguna-xs-2.1:free`, `cohere/north-mini-code:free` | 带 `:free` 的模型更适合做备用；免费模型可能会过期或下线 |
 | Groq | `llama-3.1-8b-instant` | 官方列为 Developer Plan 模型，有限额和价格，是否可用取决于账号 |
@@ -247,7 +247,7 @@ ADMIN_USER_IDS=
 
 # Default AI behavior
 DEFAULT_AI_PROVIDER=auto
-DEFAULT_AI_MODEL=gemini-3.5-flash
+DEFAULT_AI_MODEL=gemini-2.5-flash
 ENABLE_USER_PROVIDER_SELECTION=true
 ENABLE_USER_MODEL_SELECTION=true
 
@@ -262,8 +262,8 @@ MODEL_LIST_CACHE_TTL_MS=3600000
 # Google Gemini free-tier first
 GEMINI_API_KEY=
 GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
-GEMINI_MODEL=gemini-3.5-flash
-GEMINI_FALLBACK_MODELS=gemini-3.1-flash-lite,gemini-2.5-flash,gemini-2.5-flash-lite
+GEMINI_MODEL=gemini-2.5-flash
+GEMINI_FALLBACK_MODELS=gemini-2.5-flash-lite
 
 # OpenRouter free models
 OPENROUTER_API_KEY=
@@ -287,7 +287,7 @@ ROUTER_MODEL=gemini-3.1-flash-lite
 MEMORY_PROVIDER=gemini
 MEMORY_MODEL=gemini-3.1-flash-lite
 VISION_PROVIDER=gemini
-VISION_MODEL=gemini-3.5-flash
+VISION_MODEL=gemini-2.5-flash
 TRANSCRIPTION_PROVIDER=gemini-live
 TRANSCRIPTION_MODEL=
 TTS_PROVIDER=gemini-live
@@ -358,8 +358,8 @@ AI_FALLBACK_MODELS=
 
 | Provider | Recommended model ID | Notes |
 | --- | --- | --- |
-| Gemini | `gemini-3.5-flash` | Google pricing lists free input/output on the Free Tier |
-| Gemini fallback | `gemini-3.1-flash-lite`, `gemini-2.5-flash`, `gemini-2.5-flash-lite` | Free tiers and limits can change |
+| Gemini | `gemini-2.5-flash` | Google pricing lists free input/output on the Free Tier |
+| Gemini fallback | `gemini-2.5-flash-lite` | Free tiers and limits can change; add other models only after confirming access in the console |
 | OpenRouter | `tencent/hy3:free` | Currently listed by OpenRouter with `prompt=0` and `completion=0` |
 | OpenRouter fallback | `poolside/laguna-xs-2.1:free`, `cohere/north-mini-code:free` | Useful explicit free fallbacks; free models may expire or disappear |
 | Groq | `llama-3.1-8b-instant` | Developer Plan model; availability depends on your account |

@@ -97,7 +97,7 @@ function geminiLivePlugin() {
       liveAudio: true,
       nativeAudio: true
     },
-    validateConfig: (config) => requireConfigValue(config.geminiLiveApiKey, 'GEMINI_LIVE_API_KEY (or GEMINI_API_KEY / AI_API_KEY)', 'gemini-live'),
+    validateConfig: (config) => requireConfigValue(config.geminiLiveApiKey, 'GEMINI_LIVE_API_KEY', 'gemini-live'),
     createClient: (config, logger) => new GeminiLiveClient(config, logger)
   };
 }
