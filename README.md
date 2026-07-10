@@ -12,6 +12,10 @@
 
 `OPENROUTER_API_KEY` 推荐填写。OpenRouter 免费模型通常带 `:free` 后缀，当前可用模型会变化；下面模板先放当前模型 API 里能看到的免费模型。`GROQ_API_KEY` 可选；Groq 官方页面列的是 Developer Plan 限额和价格，不是 `:free` 模型名。没有额度的平台先留空，不要乱填 Key。
 
+常用入口：[BotFather](https://t.me/BotFather) / [Google AI Studio](https://aistudio.google.com/app/apikey) / [OpenRouter Keys](https://openrouter.ai/settings/keys) / [Groq Keys](https://console.groq.com/keys) / [OpenRouter Models](https://openrouter.ai/models) / [Groq Models](https://console.groq.com/docs/models)
+
+在 GitHub 仓库首页，下面这个代码块右上角会有 **Copy** 按钮；点一下就能复制整段。
+
 ```env
 # Required
 BOT_TOKEN=
@@ -111,6 +115,21 @@ AI_MODEL=
 AI_FALLBACK_MODELS=
 ```
 
+## 没填的写什么
+
+| 变量 | 要不要填 | 怎么填 |
+| --- | --- | --- |
+| `BOT_TOKEN` | 必填 | 填 BotFather 给你的 Telegram Bot Token |
+| `ADMIN_USER_IDS` | 建议填 | 给机器人发 `/whoami`，复制数字 ID；多个管理员用英文逗号分隔 |
+| `GEMINI_API_KEY` | 必填 | 填 Google AI Studio 的 API Key |
+| `OPENROUTER_API_KEY` | 强烈建议 | 填 OpenRouter Key，用来走 `:free` 免费备用模型 |
+| `GROQ_API_KEY` | 可选 | 有 Groq Key 就填，没有就留空 |
+| `GEMINI_LIVE_API_KEY` | 可选 | 暂时不用实时语音就留空 |
+| `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`, `AI_FALLBACK_MODELS` | 留空 | 这是旧配置兼容位，留空可以避免干扰 `DEFAULT_AI_PROVIDER=auto` |
+| `ADMIN_API_TOKEN` | 通常留空 | 只有 `ADMIN_API_ENABLED=true` 时才需要填 |
+| `IMAGE_MODEL` | 先留空 | 没有图片生成额度就不要填 |
+| Claude / OpenAI / DeepSeek / Qwen / Grok / GLM / Doubao 等 Key | 先不要填 | 没确认账号额度前都留空，否则后台测试会出现一堆失败 |
+
 ## 免费模型怎么填
 
 现在最省心的免费优先组合是：
@@ -135,19 +154,19 @@ Claude、OpenAI、DeepSeek、Qwen、Grok、GLM、Doubao、Mistral、Hugging Face
 
 | Provider ID | 平台 | Key 位置 | 模型名从哪里复制 |
 | --- | --- | --- | --- |
-| `gemini` | Google Gemini | [Google AI Studio](https://aistudio.google.com/app/apikey) | AI Studio / Gemini 文档 |
+| `gemini` | Google Gemini | [Google AI Studio](https://aistudio.google.com/app/apikey) | [Gemini 文档](https://ai.google.dev/gemini-api/docs/models) |
 | `openrouter` | OpenRouter | [OpenRouter Keys](https://openrouter.ai/settings/keys) | [OpenRouter Models](https://openrouter.ai/models) |
 | `groq` | Groq | [Groq Keys](https://console.groq.com/keys) | [Groq Models](https://console.groq.com/docs/models) |
-| `github-models` | GitHub Models | [GitHub Models](https://github.com/marketplace/models) | GitHub Models 页面 |
-| `huggingface` | Hugging Face | [HF Tokens](https://huggingface.co/settings/tokens) | Hugging Face 模型页 |
-| `mistral` | Mistral AI | [Mistral Console](https://console.mistral.ai/api-keys/) | Mistral 模型页 |
-| `openai` | OpenAI | [OpenAI API Keys](https://platform.openai.com/api-keys) | OpenAI Models 页面 |
-| `anthropic` | Claude | [Claude Console](https://console.anthropic.com/settings/keys) | Anthropic 模型文档 |
-| `deepseek` | DeepSeek | [DeepSeek Platform](https://platform.deepseek.com/api_keys) | DeepSeek 模型文档 |
+| `github-models` | GitHub Models | [GitHub Models](https://github.com/marketplace/models) | [GitHub Models 文档](https://docs.github.com/en/github-models) |
+| `huggingface` | Hugging Face | [HF Tokens](https://huggingface.co/settings/tokens) | [Hugging Face Models](https://huggingface.co/models) |
+| `mistral` | Mistral AI | [Mistral Console](https://console.mistral.ai/api-keys/) | [Mistral Models](https://docs.mistral.ai/getting-started/models/) |
+| `openai` | OpenAI | [OpenAI API Keys](https://platform.openai.com/api-keys) | [OpenAI Models](https://platform.openai.com/docs/models) |
+| `anthropic` | Claude | [Claude Console](https://console.anthropic.com/settings/keys) | [Anthropic Models](https://docs.anthropic.com/en/docs/about-claude/models) |
+| `deepseek` | DeepSeek | [DeepSeek Platform](https://platform.deepseek.com/api_keys) | [DeepSeek Models](https://api-docs.deepseek.com/quick_start/pricing) |
 | `qwen` | Qwen | [阿里云百炼](https://bailian.console.aliyun.com/?apiKey=1) | 百炼控制台 |
-| `grok` | xAI Grok | [xAI Console](https://console.x.ai/) | xAI 模型页 |
-| `glm` | 智谱 GLM | [BigModel API Keys](https://open.bigmodel.cn/usercenter/apikeys) | 智谱开放平台 |
-| `doubao` | 豆包 / 火山方舟 | [Volcengine Ark](https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey) | 火山方舟模型列表 |
+| `grok` | xAI Grok | [xAI Console](https://console.x.ai/) | [xAI Docs](https://docs.x.ai/docs/models) |
+| `glm` | 智谱 GLM | [BigModel API Keys](https://open.bigmodel.cn/usercenter/apikeys) | [智谱文档](https://docs.bigmodel.cn/cn/guide/models) |
+| `doubao` | 豆包 / 火山方舟 | [Volcengine Ark](https://console.volcengine.com/ark/region:ark+cn-beijing/apiKey) | [火山方舟模型列表](https://www.volcengine.com/docs/82379/1330310) |
 
 ## 机器人怎么用
 
@@ -217,6 +236,10 @@ Copy this whole block into Zeabur Environment Variables. At minimum, fill:
 
 `OPENROUTER_API_KEY` is recommended. OpenRouter free models usually have a `:free` suffix, and availability changes over time. The template below uses free model IDs currently visible in the OpenRouter models API. `GROQ_API_KEY` is optional. Leave other provider keys blank unless you know your account has quota.
 
+Quick links: [BotFather](https://t.me/BotFather) / [Google AI Studio](https://aistudio.google.com/app/apikey) / [OpenRouter Keys](https://openrouter.ai/settings/keys) / [Groq Keys](https://console.groq.com/keys) / [OpenRouter Models](https://openrouter.ai/models) / [Groq Models](https://console.groq.com/docs/models)
+
+On the GitHub repository homepage, the code block below has a built-in **Copy** button in the upper-right corner.
+
 ```env
 # Required
 BOT_TOKEN=
@@ -315,6 +338,21 @@ AI_BASE_URL=https://api.openai.com/v1
 AI_MODEL=
 AI_FALLBACK_MODELS=
 ```
+
+## What To Fill
+
+| Variable | Required? | Value |
+| --- | --- | --- |
+| `BOT_TOKEN` | Required | Your Telegram BotFather token |
+| `ADMIN_USER_IDS` | Recommended | Send `/whoami` to the bot and copy the numeric ID; separate multiple IDs with commas |
+| `GEMINI_API_KEY` | Required | Your Google AI Studio API key |
+| `OPENROUTER_API_KEY` | Strongly recommended | Your OpenRouter key for `:free` fallback models |
+| `GROQ_API_KEY` | Optional | Fill it only if you have a Groq key |
+| `GEMINI_LIVE_API_KEY` | Optional | Leave blank unless you use live audio |
+| `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`, `AI_FALLBACK_MODELS` | Leave blank | Legacy compatibility fields; blank avoids overriding `DEFAULT_AI_PROVIDER=auto` |
+| `ADMIN_API_TOKEN` | Usually blank | Required only when `ADMIN_API_ENABLED=true` |
+| `IMAGE_MODEL` | Leave blank first | Fill only when you have image generation quota |
+| Claude / OpenAI / DeepSeek / Qwen / Grok / GLM / Doubao keys | Leave blank first | Configure only after confirming account quota |
 
 ## Free Model Names
 
