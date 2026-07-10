@@ -13,7 +13,7 @@ import { DocumentParser } from './document-parser.js';
 import { MultimodalActionService } from './multimodal-action-service.js';
 import { AudioOrchestrator } from './audio-orchestrator.js';
 import { MemoryManager } from './memory-manager.js';
-import { tryHandleNaturalAgent } from './natural-agent.js';
+import { naturalAgentInternals, tryHandleNaturalAgent } from './natural-agent.js';
 import { PROVIDER_LABELS } from './ai-provider-manager.js';
 
 const LANGUAGE_NAMES = {
@@ -378,7 +378,7 @@ const UI_TEXT = {
     memoryCancel: '取消',
     streamingPlaceholder: '正在生成回复...',
     actionRegenerate: '🔄 重生成',
-    actionModel: '🧠 模型',
+    actionModel: '🤖 AI 模型',
     actionTranslate: '🌍 翻译',
     actionFavorite: '❤️ 收藏',
     actionClearContext: '🗑 上下文',
@@ -500,7 +500,7 @@ const UI_TEXT = {
     memoryCancel: 'Cancel',
     streamingPlaceholder: 'Composing reply...',
     actionRegenerate: '🔄 Regenerate',
-    actionModel: '🧠 Model',
+    actionModel: '🤖 AI model',
     actionTranslate: '🌍 Translate',
     actionFavorite: '❤️ Favorite',
     actionClearContext: '🗑 Context',
@@ -605,6 +605,18 @@ async function sendTextReply(ctx, text, maxLength, extra = {}) {
   for (const chunk of chunks) {
     await ctx.reply(chunk, {
       ...extra,
+      reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined
+    });
+  }
+}
+
+async function sendHtmlReply(ctx, text, maxLength, extra = {}) {
+  const chunks = splitMessage(String(text || '').trim(), maxLength);
+  for (const chunk of chunks) {
+    await ctx.reply(chunk, {
+      ...extra,
+      parse_mode: 'HTML',
+      link_preview_options: { is_disabled: true },
       reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined
     });
   }
@@ -3003,37 +3015,21 @@ export class TelegramAIBot {
     const locale = this.getLocale(ctx);
     const adminLine = this.isAdmin(ctx)
       ? isEnglishLocale(locale)
-        ? '\n\nAs an admin, use the 🛠 Admin button to open the admin panel.'
-        : '\n\n管理员可点底部「🛠 管理」进入管理面板。'
+        ? '\nAdmin: tap 🛠 Admin for management.'
+        : '\n管理员：点「🛠 管理」进入管理面板。'
       : '';
 
     const text =
       isEnglishLocale(locale)
         ? [
-            'Hi, I am your AI assistant.',
-            '',
-            'Tell me what you want to accomplish in natural language—no commands to memorize.',
-            '',
-            'Try asking me to:',
-            '• search today’s news or current information',
-            '• diagnose code, deployment, or error logs',
-            '• translate, rewrite, or summarize content',
-            '• read a web page, image, voice message, or file',
-            '',
-            'Use Settings to switch model, persona, or language. Send /menu to open every tool.',
+            'Hi, I am ready.',
+            'Send text, photos, voice, files, or links directly. I will decide how to handle them.',
+            'Use Settings to switch model, language, memory, or persona.',
           ].join('\n') + adminLine
         : [
-            '你好，我是你的 AI 助手。',
-            '',
-            '直接告诉我你想完成什么，不需要记任何指令。',
-            '',
-            '你可以让我：',
-            '• 搜索今天的新闻和实时资料',
-            '• 分析代码、部署问题和报错日志',
-            '• 翻译、改写、解释或总结内容',
-            '• 阅读网页、图片、语音和文件',
-            '',
-            '需要切换模型、人格或语言，请点「设置」；发送 /menu 可打开全部工具。' + adminLine
+            '你好，我已经准备好了。',
+            '直接发文字、图片、语音、文件或链接，我会自动判断怎么处理。',
+            '要换模型、语言、记忆或人格，点「设置」。' + adminLine
           ].join('\n');
 
     await ctx.reply(text, this.createBottomKeyboard(locale));
@@ -3080,32 +3076,16 @@ export class TelegramAIBot {
     const helpText =
       isEnglishLocale(locale)
         ? [
-            'How to use this assistant',
+            'Help',
             '',
-            'Just describe the result you want. For example:',
-            '• Search for important Malaysia news today',
-            '• Will it rain in Kuala Lumpur tomorrow?',
-            '• Summarize this page: https://example.com',
-            '• Translate “I miss you” to Khmer',
-            '• Explain this error and suggest a fix',
-            '',
-            'Settings: switch model, persona, language, and memory.',
-            'Search, translation, images, voice, and files can be handled directly from your message.',
-            'Persona changes apply from your next message.'
+            'Send what you want directly. I can chat, search, translate, summarize pages/files, understand photos or voice, and help with errors.',
+            'Use Settings to change model, language, memory, or persona.'
           ].join('\n')
         : [
             '使用帮助',
             '',
-            '直接描述你想要的结果。例如：',
-            '• 搜索今天马来西亚的重要新闻',
-            '• 明天吉隆坡会不会下雨',
-            '• 总结这个网页：https://example.com',
-            '• 把“我很担心你”翻成高棉语',
-            '• 分析这段报错并告诉我怎么修',
-            '',
-            '「设置」：切换模型、人格、语言和记忆。',
-            '联网搜索、翻译、图片、语音和文件：直接发送内容即可，我会自动判断。',
-            '切换人格后，会从你的下一条消息开始生效。'
+            '直接发你要做的事。我可以聊天、搜索、翻译、总结网页/文件、识别图片/语音、分析报错。',
+            '需要更换模型、语言、记忆或人格，点「设置」。'
           ].join('\n');
 
     await sendTextReply(ctx, helpText, this.config.maxOutputChars, this.createMenuKeyboard(locale));
@@ -3335,26 +3315,31 @@ export class TelegramAIBot {
     const arg = extractCommandArgs(ctx.message.text || '');
     const user = this.db.findUser(ctx.from.id);
     const locale = this.getLocale(ctx, user);
+    const settings = this.getEffectiveAISettings(ctx.from.id);
+    const models = this.getProviderModelsForMenu(settings.providerId);
 
     if (!arg) {
       await ctx.reply(
-        this.t(locale, 'currentModel', { model: user?.preferredModel || this.config.defaultModel }),
-        this.createModelKeyboard(user?.preferredModel || this.config.defaultModel, locale)
+        this.formatAISettingsPanel(settings, locale),
+        this.createAIProviderKeyboard(settings, locale)
       );
       return;
     }
 
-    if (!this.config.availableModels.includes(arg)) {
+    if (!models.includes(arg)) {
       await ctx.reply(
-        this.t(locale, 'modelUnavailable', { models: this.config.availableModels.join(', ') }),
-        this.createModelKeyboard(user?.preferredModel || this.config.defaultModel, locale)
+        this.t(locale, 'modelUnavailable', { models: models.join(', ') }),
+        this.createAIModelKeyboard(settings.providerId, settings.modelId, locale)
       );
       return;
     }
 
     await this.db.setUserSettings(ctx.from.id, { preferredModel: arg });
     this.db.setUserModel?.(ctx.from.id, arg);
-    await ctx.reply(this.t(locale, 'modelSwitched', { model: arg }), this.createModelKeyboard(arg, locale));
+    await ctx.reply(
+      this.t(locale, 'modelSwitched', { model: arg }),
+      this.createAIProviderKeyboard(this.getEffectiveAISettings(ctx.from.id), locale)
+    );
   }
 
 
@@ -3523,15 +3508,16 @@ export class TelegramAIBot {
             : '请把这个文件内容翻译成简体中文。如果原文已经是中文，请翻译成自然英文。除非必要，不要额外解释。'
       };
 
+      const aiSettings = this.getEffectiveAISettings(ctx.from?.id);
       const completion = await this.completeWithAiFallback({
         scope: mode === 'translate' ? 'translation' : 'chat',
         capability: mode === 'translate' ? 'translation' : 'chat',
         userId: ctx.from?.id,
-        preferredProvider: mode === 'translate' ? this.config.translationProvider : this.getEffectiveAISettings(ctx.from?.id).providerId,
-        fallbackEnabled: true,
+        preferredProvider: mode === 'translate' ? this.config.translationProvider : aiSettings.providerId,
+        fallbackEnabled: mode === 'translate' ? true : aiSettings.fallbackEnabled,
         model: mode === 'translate'
           ? this.config.translationModel || this.config.defaultModel
-          : this.config.defaultModel,
+          : aiSettings.modelId || this.config.defaultModel,
         locale,
         request: {
           messages: [
@@ -3633,6 +3619,29 @@ export class TelegramAIBot {
     return title + '\n\n' + text;
   }
 
+  async composeToolReply(ctx, { userText = '', toolName = '', raw = '', title = '结果' } = {}) {
+    try {
+      const answer = await naturalAgentInternals.composeHumanAnswer(this, ctx, {
+        userText,
+        toolName,
+        raw,
+        title
+      });
+
+      if (toolName === 'web_search' || toolName === 'fetch_url') {
+        return {
+          text: naturalAgentInternals.appendClickableReferences(answer, raw),
+          html: true
+        };
+      }
+
+      return { text: answer, html: false };
+    } catch (error) {
+      this.logger.warn('Tool answer composition failed', { error: this.formatLogError(error) });
+      return { text: this.formatToolResult(raw, title), html: false };
+    }
+  }
+
   async runUrlFetch(ctx, url = '') {
     const locale = this.getLocale(ctx);
     const targetUrl = String(url || '').trim();
@@ -3669,7 +3678,17 @@ export class TelegramAIBot {
       }
 
       await this.db.incrementStats('toolCalls');
-      await sendTextReply(ctx, this.formatToolResult(raw, localText(locale, '网页摘要', 'URL summary')), this.config.maxOutputChars);
+      const composed = await this.composeToolReply(ctx, {
+        userText: targetUrl,
+        toolName: 'fetch_url',
+        raw,
+        title: localText(locale, '网页摘要', 'URL summary')
+      });
+      if (composed.html) {
+        await sendHtmlReply(ctx, composed.text, this.config.maxOutputChars);
+      } else {
+        await sendTextReply(ctx, composed.text, this.config.maxOutputChars);
+      }
     } catch {
       await ctx.reply(localText(locale, '这个网页暂时抓不到，可能是网站禁止机器人访问。', 'This page cannot be fetched right now.'));
     }
@@ -3684,34 +3703,51 @@ export class TelegramAIBot {
 
     try {
       await ctx.sendChatAction('typing');
-      const preferredModel =
-        this.db.findUser(ctx.from?.id)?.preferredModel || this.config.defaultModel;
+      const settings = this.getEffectiveAISettings(ctx.from?.id);
+      const preferredModel = settings.modelId || this.db.findUser(ctx.from?.id)?.preferredModel || this.config.defaultModel;
+      const selectedProvider = String(settings.providerId || this.config.aiProvider || '').toLowerCase();
 
       if (
         this.config.enableWebSearch &&
         this.config.enableGeminiGoogleSearch &&
-        typeof this.aiClient.searchWeb === 'function'
+        (selectedProvider === 'gemini' || selectedProvider === 'auto' || this.config.aiProvider === 'gemini')
       ) {
+        let searchClient = typeof this.aiClient.searchWeb === 'function' ? this.aiClient : null;
+        const geminiModels = this.providerManager?.getProviderModels?.('gemini') || [];
         const searchModels = Array.from(new Set([
-          preferredModel,
+          selectedProvider === 'gemini' ? preferredModel : '',
+          this.config.visionModel,
           this.config.defaultModel,
+          ...geminiModels,
           ...(this.config.availableModels || [])
         ].filter(Boolean)));
 
-        for (const model of searchModels) {
+        if (!searchClient && this.providerManager?.isConfigured?.('gemini')) {
           try {
-            const grounded = await this.aiClient.searchWeb({ model, query });
-            if (grounded?.text) {
-              await this.db.incrementStats('toolCalls');
-              await this.db.incrementStats('aiCalls');
-              await sendTextReply(ctx, grounded.text, this.config.maxOutputChars);
-              return;
-            }
+            searchClient = this.providerManager.getClientForProvider('gemini', searchModels[0] || this.config.defaultModel);
           } catch (error) {
-            this.logger.warn('Gemini grounded search unavailable; trying another search path', {
-              model,
+            this.logger.warn('Gemini grounded search client unavailable; trying normal web search', {
               error: this.formatLogError(error)
             });
+          }
+        }
+
+        if (searchClient?.searchWeb) {
+          for (const model of searchModels) {
+            try {
+              const grounded = await searchClient.searchWeb({ model, query });
+              if (grounded?.text) {
+                await this.db.incrementStats('toolCalls');
+                await this.db.incrementStats('aiCalls');
+                await sendTextReply(ctx, grounded.text, this.config.maxOutputChars);
+                return;
+              }
+            } catch (error) {
+              this.logger.warn('Gemini grounded search unavailable; trying another search path', {
+                model,
+                error: this.formatLogError(error)
+              });
+            }
           }
         }
       }
@@ -3738,9 +3774,35 @@ export class TelegramAIBot {
         // No-op, keep raw text path.
       }
       await this.db.incrementStats('toolCalls');
-      await sendTextReply(ctx, this.formatToolResult(raw, localText(locale, '联网搜索结果', 'Web search results')), this.config.maxOutputChars);
+      if (!naturalAgentInternals.hasUsefulToolResult(raw)) {
+        await ctx.reply(
+          localText(
+            locale,
+            '没有搜到有效结果。如果需要更稳定的实时搜索，请配置 Gemini 搜索可用模型，或给项目接入稳定搜索 API。',
+            'No useful search results were returned. For more stable live search, configure a Gemini search-capable model or connect a stable search API.'
+          )
+        );
+        return;
+      }
+
+      const composed = await this.composeToolReply(ctx, {
+        userText: query,
+        toolName: 'web_search',
+        raw,
+        title: localText(locale, '联网搜索结果', 'Web search results')
+      });
+      if (composed.html) {
+        await sendHtmlReply(ctx, composed.text, this.config.maxOutputChars);
+      } else {
+        await sendTextReply(ctx, composed.text, this.config.maxOutputChars);
+      }
     } catch (error) {
-      await ctx.reply(this.formatUserFacingError(error, locale));
+      const hint = localText(
+        locale,
+        '实时搜索需要 ENABLE_WEB_SEARCH=true、ENABLE_TOOL_CALLS=true，并且 Zeabur 能访问外网；Gemini 原生搜索还需要可用的 Gemini Key 和支持搜索的模型。',
+        'Live search needs ENABLE_WEB_SEARCH=true, ENABLE_TOOL_CALLS=true, and outbound network access on Zeabur; Gemini grounded search also needs a valid Gemini key and search-capable model.'
+      );
+      await ctx.reply(`${this.formatUserFacingError(error, locale)}\n\n${hint}`);
     }
   }
 
@@ -4528,7 +4590,9 @@ export class TelegramAIBot {
     const languageName = preferredLanguage === 'auto'
       ? `${this.ui(locale, 'languageAuto')} → ${getLanguageDisplayName(detectedLanguage)}`
       : getLanguageDisplayName(preferredLanguage);
-    const currentModel = user?.preferredModel || this.config.defaultModel || '-';
+    const aiSettings = this.getEffectiveAISettings(ctx.from?.id);
+    const currentModel = aiSettings.modelId || user?.preferredModel || this.config.defaultModel || '-';
+    const currentProvider = this.getAIProviderLabel(aiSettings.providerId || this.config.aiProvider);
     const persona = user?.persona || 'default';
     const dailyUsed = user?.dailyUsageCount || 0;
     const totalMessages = user?.totalMessages || 0;
@@ -4539,6 +4603,7 @@ export class TelegramAIBot {
         ? [
             '⚙️ Settings center',
             '',
+            `AI provider: ${currentProvider}`,
             `Model: ${currentModel}`,
             `Persona: ${persona}`,
             `Language: ${languageName}`,
@@ -4551,6 +4616,7 @@ export class TelegramAIBot {
         : [
             '⚙️ 设置中心',
             '',
+            `AI 平台：${currentProvider}`,
             `模型：${currentModel}`,
             `人格：${persona}`,
             `语言：${languageName}`,
@@ -4924,19 +4990,22 @@ export class TelegramAIBot {
         return;
       }
       if (action === 'model') {
-        const user = this.db.findUser(state.userId);
+        const settings = this.getEffectiveAISettings(state.userId);
         await ctx.answerCbQuery();
-        await this.applyAssistantActionKeyboard(
-          ctx,
-          this.createAssistantModelKeyboard(state.locale, token, user?.preferredModel || state.model || this.config.defaultModel)
+        await ctx.reply(
+          this.formatAISettingsPanel(settings, state.locale),
+          this.createAIProviderKeyboard(settings, state.locale)
         );
         return;
       }
       if (action === 'model_pick') {
         const index = Number(parts[3]);
-        const model = this.config.availableModels[index];
+        const settings = this.getEffectiveAISettings(state.userId);
+        const models = this.getProviderModelsForMenu(settings.providerId);
+        const model = models[index] || this.config.availableModels[index];
         await ctx.answerCbQuery();
         if (!model) return;
+        this.db.setUserModel?.(state.userId, model);
         await this.db.setUserSettings(state.userId, { preferredModel: model });
         state.model = model;
         await this.applyAssistantActionKeyboard(ctx, this.createAssistantActionKeyboard(state.locale, token));
@@ -5309,14 +5378,20 @@ export class TelegramAIBot {
   async handleModelCallback(ctx) {
     const model = ctx.match[1];
     const locale = this.getLocale(ctx);
+    const settings = this.getEffectiveAISettings(ctx.from.id);
+    const models = this.getProviderModelsForMenu(settings.providerId);
     await ctx.answerCbQuery();
-    if (!this.config.availableModels.includes(model)) {
-      await ctx.reply(this.t(locale, 'modelUnavailable', { models: this.config.availableModels.join(', ') }));
+    if (!models.includes(model)) {
+      await ctx.reply(this.t(locale, 'modelUnavailable', { models: models.join(', ') }));
       return;
     }
     await this.db.setUserSettings(ctx.from.id, { preferredModel: model });
     this.db.setUserModel?.(ctx.from.id, model);
-    await this.editAssistantMessageText(ctx, this.t(locale, 'modelSwitched', { model }), this.createModelKeyboard(model, locale));
+    await this.editAssistantMessageText(
+      ctx,
+      this.t(locale, 'modelSwitched', { model }),
+      this.createAIProviderKeyboard(this.getEffectiveAISettings(ctx.from.id), locale)
+    );
   }
 
   async handlePersonaCallback(ctx) {

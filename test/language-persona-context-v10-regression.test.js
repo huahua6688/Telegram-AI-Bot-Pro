@@ -46,6 +46,13 @@ test("settings submenus expose local back paths", () => {
   assert.match(bot, /已处理消息：/);
 });
 
+test("start and help copy stay compact", () => {
+  assert.doesNotMatch(bot, /Try asking me to:/);
+  assert.doesNotMatch(bot, /直接描述你想要的结果。例如：/);
+  assert.match(bot, /直接发文字、图片、语音、文件或链接/);
+  assert.match(bot, /需要更换模型、语言、记忆或人格/);
+});
+
 test("persona affects natural-agent answers and followups", () => {
   assert.ok(agent.includes("personaPresets"), "natural-agent should import personaPresets");
   assert.ok(agent.includes("getPersonaInstruction"), "natural-agent should read persona instruction");

@@ -415,14 +415,35 @@ function getPersonaInstruction(bot, ctx) {
   }
 }
 
-function modelName(bot) {
-  return bot.config?.routerModel || bot.config?.translationModel || bot.config?.defaultModel || '';
+function getEffectiveAISettings(bot, ctx) {
+  try {
+    return bot.getEffectiveAISettings?.(ctx.from?.id) || {};
+  } catch {
+    return {};
+  }
+}
+
+function modelName(bot, ctx) {
+  const settings = getEffectiveAISettings(bot, ctx);
+  return settings.modelId || bot.config?.routerModel || bot.config?.translationModel || bot.config?.defaultModel || '';
+}
+
+function providerId(bot, ctx) {
+  const settings = getEffectiveAISettings(bot, ctx);
+  return settings.providerId || bot.config?.aiProvider || '';
+}
+
+function fallbackEnabled(bot, ctx) {
+  const settings = getEffectiveAISettings(bot, ctx);
+  return Object.hasOwn(settings, 'fallbackEnabled')
+    ? Boolean(settings.fallbackEnabled)
+    : Boolean(bot.config?.enableProviderFallback);
 }
 
 
 async function composeHumanAnswer(bot, ctx, { userText, toolName, raw, title }) {
   const locale = bot.getLocale(ctx);
-  const model = bot.config.routerModel || bot.config.translationModel || bot.config.defaultModel;
+  const model = modelName(bot, ctx);
   const payload = compactToolPayload(raw);
   const recentContext = getRecentContext(bot, ctx);
   const personaInstruction = getPersonaInstruction(bot, ctx);
@@ -434,6 +455,9 @@ async function composeHumanAnswer(bot, ctx, { userText, toolName, raw, title }) 
   try {
     const completion = await bot.completeWithAiFallback({
       scope: 'answer_composer',
+      userId: ctx.from?.id,
+      preferredProvider: providerId(bot, ctx),
+      fallbackEnabled: fallbackEnabled(bot, ctx),
       model,
       locale,
       request: {
@@ -532,7 +556,7 @@ async function runSearch(bot, ctx, query, originalText = query) {
 
     const finalText = appendClickableReferences(answer, raw);
     await replyHtml(ctx, finalText, bot.config.maxOutputChars);
-    await rememberHandledInteraction(bot, ctx, originalText, answer, modelName(bot));
+    await rememberHandledInteraction(bot, ctx, originalText, answer, modelName(bot, ctx));
     return true;
   } catch (error) {
     await ctx.reply(bot.formatUserFacingError(error, locale));
@@ -570,7 +594,7 @@ async function runUrl(bot, ctx, url, originalText = url) {
 
     const finalText = appendClickableReferences(answer, raw || JSON.stringify({ results: [{ title: '打开网页', url: targetUrl }] }));
     await replyHtml(ctx, finalText, bot.config.maxOutputChars);
-    await rememberHandledInteraction(bot, ctx, originalText, answer, modelName(bot));
+    await rememberHandledInteraction(bot, ctx, originalText, answer, modelName(bot, ctx));
     return true;
   } catch {
     await ctx.reply(locale === 'en' ? 'This page cannot be fetched right now.' : '这个网页暂时抓不到，可能是网站禁止机器人访问。');
@@ -597,7 +621,7 @@ async function runWeather(bot, ctx, location, originalText = location) {
 
     const finalText = appendClickableReferences(answer, raw);
     await replyHtml(ctx, finalText, bot.config.maxOutputChars);
-    await rememberHandledInteraction(bot, ctx, originalText, answer, modelName(bot));
+    await rememberHandledInteraction(bot, ctx, originalText, answer, modelName(bot, ctx));
     return true;
   } catch {
     if (typeof bot.runWeather === 'function') {
@@ -615,6 +639,49 @@ function isFollowUpOnly(text = '') {
   return /^(还有吗|还有么|还有没有|继续|接着说|然后呢|那呢|这个呢|它呢|再说点|more|continue)$/i.test(String(text || '').trim());
 }
 
+function cleanWeatherLocation(value = '') {
+  return String(value || '')
+    .replace(/^(今天|明天|后天|今晚|现在|現在|today|tomorrow|tonight|currently)\s*/i, '')
+    .replace(/(今天|明天|后天|今晚|现在|現在|today|tomorrow|tonight)$/i, '')
+    .replace(/^(in|at|for|the|a|an)\s+/i, '')
+    .replace(/(会不会|會不會|是否|有没有|有沒有|会|會|will|is|it|going|to|rain|raining|下雨|有雨|天气|天氣|weather|forecast|气温|氣溫|温度|溫度)/gi, '')
+    .replace(/[，。？！?,.!]/g, '')
+    .trim();
+}
+
+function extractWeatherLocation(text = '') {
+  const content = String(text || '').trim();
+  if (!/(天气|天氣|下雨|有雨|降雨|气温|氣溫|温度|溫度|weather|forecast|rain|temperature)/i.test(content)) {
+    return '';
+  }
+
+  const chineseBefore = content.match(/^(?:今天|明天|后天|今晚|现在|現在)?\s*([^，。？！?,.!]{2,40}?)(?:的)?(?:天气|天氣|气温|氣溫|温度|溫度|会不会下雨|會不會下雨|有没有雨|有沒有雨|下雨|有雨)/i);
+  const chineseAfter = content.match(/(?:天气|天氣|气温|氣溫|温度|溫度)\s*(?:在|查|查询|查詢|看看)?\s*([^，。？！?,.!]{2,40})/i);
+  const englishAfter = content.match(/(?:weather|forecast|rain|temperature)[^a-z0-9]+(?:in|at|for)\s+([a-z0-9\s,.'-]{2,60})/i);
+  const englishRain = content.match(/(?:will it rain|is it going to rain)\s+(?:in|at|for)\s+([a-z0-9\s,.'-]{2,60})/i);
+
+  const location = cleanWeatherLocation(
+    englishRain?.[1] || englishAfter?.[1] || chineseAfter?.[1] || chineseBefore?.[1] || ''
+  );
+
+  if (!location || /^(今天|明天|后天|今晚|现在|現在|weather|rain)$/i.test(location)) return '';
+  return location;
+}
+
+function looksLikeCurrentSearch(text = '') {
+  const content = String(text || '').trim();
+  if (!content) return false;
+
+  return /(?:最新|实时|即時|现在的|現在的|今天.*(?:新闻|新聞|消息|热点|熱點|发生|發生)|新闻|新聞|热搜|熱搜|汇率|匯率|股价|股價|价格|價格|金价|金價|油价|油價|current|latest|today.*(?:news|events)|breaking news|exchange rate|stock price|price today)/i.test(content);
+}
+
+function normalizeSearchQuery(text = '') {
+  return String(text || '')
+    .replace(/^(?:帮我|幫我|请|請|麻烦|麻煩|please)\s*/i, '')
+    .replace(/^(?:查一下|搜一下|搜索|联网搜索|上网搜|查找|看看|look up|search for|search)\s*/i, '')
+    .trim();
+}
+
 
 
 async function continueFromContext(bot, ctx, text = '') {
@@ -623,7 +690,7 @@ async function continueFromContext(bot, ctx, text = '') {
 
   if (!recentContext) return false;
 
-  const model = modelName(bot);
+  const model = modelName(bot, ctx);
   const followupPersonaInstruction = getPersonaInstruction(bot, ctx);
 
   try {
@@ -631,6 +698,9 @@ async function continueFromContext(bot, ctx, text = '') {
 
     const completion = await bot.completeWithAiFallback({
       scope: 'follow_up',
+      userId: ctx.from?.id,
+      preferredProvider: providerId(bot, ctx),
+      fallbackEnabled: fallbackEnabled(bot, ctx),
       model,
       locale,
       request: {
@@ -794,6 +864,13 @@ export async function tryHandleNaturalAgent(bot, ctx) {
   const explicitSearch = text.match(/^(?:搜索|搜一下|联网搜索|上网搜|查一下|web|search)\s+(.+)$/i);
   if (explicitSearch) return runSearch(bot, ctx, explicitSearch[1].trim(), text);
 
+  const weatherLocation = extractWeatherLocation(text);
+  if (weatherLocation) return runWeather(bot, ctx, weatherLocation, text);
+
+  if (looksLikeCurrentSearch(text)) {
+    return runSearch(bot, ctx, normalizeSearchQuery(text) || text, text);
+  }
+
   if (/^(你能做什么|你会什么|有什么功能|怎么用|帮助|help|what can you do)$/i.test(text)) {
     await bot.handleHelp(ctx);
     return true;
@@ -811,6 +888,9 @@ export const naturalAgentInternals = {
   stripGeneratedReferences,
   rememberHandledInteraction,
   isFollowUpOnly,
+  extractWeatherLocation,
+  looksLikeCurrentSearch,
+  normalizeSearchQuery,
   cleanPlainText,
   getRecentContext,
   hasUsefulToolResult,
