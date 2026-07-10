@@ -10,25 +10,30 @@ function mask(value = '') {
 }
 
 function ok(message) {
-  console.log(`✅ ${message}`);
+  console.log(`OK  ${message}`);
 }
 
 function warn(message) {
-  console.log(`⚠️  ${message}`);
+  console.log(`WARN ${message}`);
 }
 
 function fail(message) {
-  console.log(`❌ ${message}`);
+  console.log(`FAIL ${message}`);
 }
 
 function hasEnv(...names) {
   return names.some((name) => Boolean(String(process.env[name] || '').trim()));
 }
 
+function firstEnv(...names) {
+  const name = names.find((item) => Boolean(String(process.env[item] || '').trim()));
+  return name ? process.env[name] : '';
+}
+
 function checkWritableFileDirectory(filePath = '', label = 'FILE', warnings = [], errors = []) {
   const raw = String(filePath || '').trim();
   if (!raw) {
-    errors.push(`${label} 未配置。`);
+    errors.push(`${label} is not configured.`);
     return;
   }
 
@@ -38,7 +43,7 @@ function checkWritableFileDirectory(filePath = '', label = 'FILE', warnings = []
   if (!dir || dir === '.') return;
 
   if (!fs.existsSync(dir)) {
-    warnings.push(`${label} 目录不存在：${dir}。应用启动时会尝试自动创建；如果在 Zeabur 上使用挂载盘，请确认已挂载到这个目录。`);
+    warnings.push(`${label} directory does not exist yet: ${dir}. The app will try to create it on startup.`);
     return;
   }
 
@@ -49,7 +54,7 @@ function checkWritableFileDirectory(filePath = '', label = 'FILE', warnings = []
     fs.unlinkSync(testFile);
     ok(`${label} directory writable: ${dir}`);
   } catch (error) {
-    errors.push(`${label} 目录不可写：${dir}。错误：${error.message}`);
+    errors.push(`${label} directory is not writable: ${dir}. Error: ${error.message}`);
   }
 }
 
@@ -57,67 +62,56 @@ const config = loadConfig();
 const errors = [];
 const warnings = [];
 
-console.log('🤖 Telegram AI Bot deployment doctor');
+console.log('Telegram AI Bot deployment doctor');
 console.log('');
 
 if (!config.botToken || config.botToken === 'your_telegram_bot_token') {
-  errors.push('BOT_TOKEN 未配置。');
+  errors.push('BOT_TOKEN is missing or still uses the placeholder value.');
 } else {
   ok(`BOT_TOKEN: ${mask(config.botToken)}`);
 }
 
-ok(`AI_PROVIDER: ${config.aiProvider}`);
-ok(`AI_MODEL: ${config.defaultModel || 'missing'}`);
-ok(`AI_FALLBACK_MODELS: ${(config.availableModels || []).join(', ') || 'none'}`);
-ok(`TRANSLATION_MODEL: ${config.translationModel || config.defaultModel || 'missing'}`);
-ok(`ROUTER_MODEL: ${config.routerModel || config.defaultModel || 'missing'}`);
+ok(`DEFAULT_AI_PROVIDER: ${config.aiProvider}`);
+ok(`DEFAULT_AI_MODEL: ${config.defaultModel || 'missing'}`);
+ok(`AI_PROVIDER_FALLBACK_ORDER: ${(config.aiProviderFallbackOrder || []).join(' -> ') || 'none'}`);
+ok(`TRANSLATION_PROVIDER: ${config.translationProvider || '-'}`);
+ok(`ROUTER_PROVIDER: ${config.routerProvider || '-'}`);
 
-const provider = String(config.aiProvider || '').toLowerCase();
+const providerChecks = [
+  ['Gemini', 'gemini', ['GEMINI_API_KEY', 'AI_API_KEY']],
+  ['Gemini Live', 'gemini-live', ['GEMINI_LIVE_API_KEY', 'GEMINI_API_KEY', 'AI_API_KEY']],
+  ['Groq', 'groq', ['GROQ_API_KEY']],
+  ['OpenRouter', 'openrouter', ['OPENROUTER_API_KEY']],
+  ['GitHub Models', 'github-models', ['GITHUB_MODELS_API_KEY', 'GITHUB_TOKEN']],
+  ['Hugging Face', 'huggingface', ['HUGGINGFACE_API_KEY', 'HF_TOKEN']],
+  ['Mistral', 'mistral', ['MISTRAL_API_KEY']],
+  ['OpenAI', 'openai', ['OPENAI_API_KEY', 'AI_API_KEY']],
+  ['OpenAI Compatible', 'openai-compatible', ['AI_API_KEY']],
+  ['Anthropic', 'anthropic', ['ANTHROPIC_API_KEY', 'AI_API_KEY']],
+  ['DeepSeek', 'deepseek', ['DEEPSEEK_API_KEY', 'AI_API_KEY']],
+  ['Qwen', 'qwen', ['QWEN_API_KEY', 'AI_API_KEY']],
+  ['Grok', 'grok', ['GROK_API_KEY', 'AI_API_KEY']],
+  ['GLM', 'glm', ['GLM_API_KEY', 'AI_API_KEY']],
+  ['Doubao', 'doubao', ['DOUBAO_API_KEY', 'AI_API_KEY']]
+];
 
-if (provider === 'gemini' || provider === 'gemini-live') {
-  if (!hasEnv('GEMINI_API_KEY', 'AI_API_KEY')) {
-    errors.push('Gemini 模式需要 GEMINI_API_KEY，或用 AI_API_KEY 复用。');
+console.log('');
+console.log('AI Providers:');
+let configuredProviderCount = 0;
+for (const [label, providerId, envNames] of providerChecks) {
+  const configured = hasEnv(...envNames);
+  const models = config.providerModels?.[providerId]?.join(', ') || '';
+  if (configured) configuredProviderCount += 1;
+  const summary = `${label}: ${configured ? 'configured' : 'not configured'}${models ? ` / ${models}` : ''}`;
+  if (configured) {
+    ok(`${summary} / key ${mask(firstEnv(...envNames))}`);
   } else {
-    ok(`GEMINI_API_KEY / AI_API_KEY: ${mask(process.env.GEMINI_API_KEY || process.env.AI_API_KEY)}`);
+    warn(summary);
   }
 }
 
-if (provider === 'openai-compatible') {
-  if (!hasEnv('AI_API_KEY')) {
-    errors.push('openai-compatible 模式需要 AI_API_KEY。');
-  } else {
-    ok(`AI_API_KEY: ${mask(process.env.AI_API_KEY)}`);
-  }
-
-  if (!config.aiBaseUrl) {
-    errors.push('openai-compatible 模式需要 AI_BASE_URL。');
-  } else {
-    ok(`AI_BASE_URL: ${config.aiBaseUrl}`);
-  }
-}
-
-if (provider === 'anthropic' && !hasEnv('ANTHROPIC_API_KEY', 'AI_API_KEY')) {
-  errors.push('Anthropic 模式需要 ANTHROPIC_API_KEY，或用 AI_API_KEY 复用。');
-}
-
-if (provider === 'qwen' && !hasEnv('QWEN_API_KEY', 'AI_API_KEY')) {
-  errors.push('Qwen 模式需要 QWEN_API_KEY，或用 AI_API_KEY 复用。');
-}
-
-if (provider === 'grok' && !hasEnv('GROK_API_KEY', 'AI_API_KEY')) {
-  errors.push('Grok 模式需要 GROK_API_KEY，或用 AI_API_KEY 复用。');
-}
-
-if (provider === 'deepseek' && !hasEnv('DEEPSEEK_API_KEY', 'AI_API_KEY')) {
-  errors.push('DeepSeek 模式需要 DEEPSEEK_API_KEY，或用 AI_API_KEY 复用。');
-}
-
-if (provider === 'glm' && !hasEnv('GLM_API_KEY', 'AI_API_KEY')) {
-  errors.push('GLM 模式需要 GLM_API_KEY，或用 AI_API_KEY 复用。');
-}
-
-if (provider === 'doubao' && !hasEnv('DOUBAO_API_KEY', 'AI_API_KEY')) {
-  errors.push('Doubao 模式需要 DOUBAO_API_KEY，或用 AI_API_KEY 复用。');
+if (configuredProviderCount === 0) {
+  warnings.push('No AI provider API key is configured. The bot can start, but AI replies will fail until at least one provider key and model are set.');
 }
 
 checkWritableFileDirectory(config.databaseFile, 'DATABASE_FILE', warnings, errors);
@@ -126,26 +120,25 @@ checkWritableFileDirectory(config.legacyDataFile, 'DATA_FILE', warnings, errors)
 ok(`HEALTH_PORT: ${config.healthPort}`);
 
 if (!process.env.HEALTH_PORT && !process.env.PORT) {
-  warnings.push('没有设置 HEALTH_PORT 或 PORT。Zeabur 建议设置 PORT=8080 或 HEALTH_PORT=8080。');
+  warnings.push('HEALTH_PORT or PORT is not set. Zeabur usually expects PORT=8080 or HEALTH_PORT=8080.');
 }
 
 if (!hasEnv('ADMIN_USER_IDS')) {
-  warnings.push('ADMIN_USER_IDS 未配置。/status 是管理员专用命令，请先给 Bot 发送 /whoami，再把用户 ID 填到 Zeabur 的 ADMIN_USER_IDS。');
+  warnings.push('ADMIN_USER_IDS is not configured. Send /whoami to the bot, then add your Telegram user ID.');
 } else {
   ok(`ADMIN_USER_IDS: ${mask(process.env.ADMIN_USER_IDS)}`);
 }
 
-const adminApiEnabled = String(process.env.ADMIN_API_ENABLED || '').trim().toLowerCase();
-if (adminApiEnabled === 'true' && !hasEnv('ADMIN_API_TOKEN')) {
-  warnings.push('ADMIN_API_ENABLED=true 但 ADMIN_API_TOKEN 未配置。建议设置强随机 token，或关闭 ADMIN_API_ENABLED。');
+if (String(process.env.ADMIN_API_ENABLED || '').trim().toLowerCase() === 'true' && !hasEnv('ADMIN_API_TOKEN')) {
+  warnings.push('ADMIN_API_ENABLED=true but ADMIN_API_TOKEN is missing.');
 }
 
 if (config.aiProvider === 'gemini' && String(config.defaultModel || '').includes('live')) {
-  warnings.push('AI_PROVIDER=gemini 但 AI_MODEL 看起来是 Live 模型。Live 模型建议后续单独用 gemini-live 能力接入。');
+  warnings.push('DEFAULT_AI_PROVIDER=gemini uses a Live-looking model. Use gemini-live for Live audio models.');
 }
 
 if (String(config.translationModel || '').includes('native-audio') || String(config.routerModel || '').includes('native-audio')) {
-  warnings.push('TRANSLATION_MODEL / ROUTER_MODEL 不建议使用 native-audio Live 模型，容易浪费额度或不兼容。');
+  warnings.push('TRANSLATION_MODEL / ROUTER_MODEL should not use native-audio Live models.');
 }
 
 console.log('');
@@ -163,4 +156,4 @@ if (errors.length) {
   process.exit(1);
 }
 
-console.log('✅ Doctor passed. 配置看起来可以启动。');
+console.log('Doctor passed.');

@@ -9,7 +9,8 @@ import { normalizeLanguageCode } from './utils/telegram.js';
 // v2: Structured session/message/prompt history and favorites target migration
 // v3: RBAC, feature flags, policy rules, provider/model configs, admin audit logs
 // v4: Long-term memory, topic states, active context
-const CURRENT_SCHEMA_VERSION = 4;
+// v5: Per-user AI provider/model settings and provider fallback preference
+const CURRENT_SCHEMA_VERSION = 5;
 
 const defaultData = {
   meta: {
@@ -245,6 +246,9 @@ export class BotDatabase {
       }
       if (version === 4) {
         this.applySchemaV4();
+      }
+      if (version === 5) {
+        this.applySchemaV5();
       }
       this.setMeta('schemaVersion', String(version));
     }
@@ -530,6 +534,20 @@ export class BotDatabase {
       CREATE INDEX IF NOT EXISTS idx_topic_states_lookup ON topic_states(user_id, chat_id, topic_id, updated_at DESC);
       CREATE INDEX IF NOT EXISTS idx_topic_states_accessed ON topic_states(user_id, chat_id, last_accessed_at DESC);
       CREATE INDEX IF NOT EXISTS idx_active_contexts_lookup ON active_contexts(user_id, chat_id);
+    `);
+  }
+
+  applySchemaV5() {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS user_ai_settings (
+        user_id TEXT PRIMARY KEY,
+        provider_id TEXT NOT NULL DEFAULT '',
+        model_id TEXT NOT NULL DEFAULT '',
+        fallback_enabled INTEGER NOT NULL DEFAULT 1,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_user_ai_settings_provider ON user_ai_settings(provider_id, updated_at DESC);
     `);
   }
 
@@ -843,6 +861,72 @@ export class BotDatabase {
       .run(...values, now(), String(userId));
     await this.write();
     return this.findUser(userId);
+  }
+
+  getUserAISettings(userId) {
+    const row = this.db
+      .prepare('SELECT user_id, provider_id, model_id, fallback_enabled, updated_at FROM user_ai_settings WHERE user_id = ?')
+      .get(String(userId));
+    if (!row) {
+      return {
+        userId: String(userId),
+        providerId: '',
+        modelId: '',
+        fallbackEnabled: true,
+        updatedAt: ''
+      };
+    }
+    return {
+      userId: row.user_id,
+      providerId: row.provider_id || '',
+      modelId: row.model_id || '',
+      fallbackEnabled: toBoolean(row.fallback_enabled),
+      updatedAt: row.updated_at || ''
+    };
+  }
+
+  setUserAISettings(userId, patch = {}) {
+    const existing = this.getUserAISettings(userId);
+    const next = {
+      providerId: Object.hasOwn(patch, 'providerId') ? String(patch.providerId || '') : existing.providerId,
+      modelId: Object.hasOwn(patch, 'modelId') ? String(patch.modelId || '') : existing.modelId,
+      fallbackEnabled: Object.hasOwn(patch, 'fallbackEnabled')
+        ? Boolean(patch.fallbackEnabled)
+        : existing.fallbackEnabled
+    };
+    const timestamp = now();
+    this.db
+      .prepare(
+        `INSERT INTO user_ai_settings(user_id, provider_id, model_id, fallback_enabled, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET
+           provider_id = excluded.provider_id,
+           model_id = excluded.model_id,
+           fallback_enabled = excluded.fallback_enabled,
+           updated_at = excluded.updated_at`
+      )
+      .run(String(userId), next.providerId, next.modelId, next.fallbackEnabled ? 1 : 0, timestamp);
+    this.setMeta('updatedAt', timestamp);
+    return this.getUserAISettings(userId);
+  }
+
+  setUserProvider(userId, providerId) {
+    return this.setUserAISettings(userId, { providerId, modelId: '' });
+  }
+
+  setUserModel(userId, modelId) {
+    return this.setUserAISettings(userId, { modelId });
+  }
+
+  setUserFallbackEnabled(userId, enabled) {
+    return this.setUserAISettings(userId, { fallbackEnabled: Boolean(enabled) });
+  }
+
+  resetUserAISettings(userId) {
+    const timestamp = now();
+    this.db.prepare('DELETE FROM user_ai_settings WHERE user_id = ?').run(String(userId));
+    this.setMeta('updatedAt', timestamp);
+    return this.getUserAISettings(userId);
   }
 
   ensureSessionFromId(sessionId, createdAt = now(), updatedAt = now()) {
