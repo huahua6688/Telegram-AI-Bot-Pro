@@ -463,6 +463,112 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       margin-top: 11px;
     }
 
+    .history-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin: 12px 0;
+    }
+
+    .session-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .session-item {
+      padding: 13px;
+      border-radius: 14px;
+      background: var(--tg-theme-bg-color, #f9fafb);
+    }
+
+    .session-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .session-title {
+      font-weight: 800;
+      word-break: break-word;
+    }
+
+    .session-meta {
+      margin-top: 4px;
+      color: var(--tg-theme-hint-color, #6b7280);
+      font-size: 12px;
+      line-height: 1.45;
+      word-break: break-word;
+    }
+
+    .session-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 11px;
+    }
+
+    .conversation-viewer {
+      margin-top: 14px;
+      padding: 14px;
+      border-radius: 14px;
+      background: var(--tg-theme-bg-color, #f9fafb);
+    }
+
+    .conversation-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .conversation-messages {
+      display: grid;
+      gap: 10px;
+      max-height: 520px;
+      overflow-y: auto;
+      padding-right: 2px;
+    }
+
+    .message-item {
+      padding: 11px 12px;
+      border-radius: 13px;
+      background: var(--tg-theme-secondary-bg-color, #ffffff);
+      border: 1px solid rgba(127, 127, 127, .15);
+    }
+
+    .message-item.assistant {
+      border-left: 3px solid var(--tg-theme-button-color, #2481cc);
+    }
+
+    .message-item.user {
+      border-left: 3px solid #16a34a;
+    }
+
+    .message-role {
+      color: var(--tg-theme-hint-color, #6b7280);
+      font-size: 11px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .message-content {
+      margin-top: 6px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      font-size: 14px;
+      line-height: 1.55;
+    }
+
+    .message-meta {
+      margin-top: 7px;
+      color: var(--tg-theme-hint-color, #6b7280);
+      font-size: 11px;
+      word-break: break-word;
+    }
+
     .hidden { display: none; }
 
     .small {
@@ -562,6 +668,30 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       </form>
     </section>
 
+    <section class="card" id="historyPanel">
+      <div class="section-head">
+        <h2>聊天记录</h2>
+        <span class="badge" id="historyCount">—</span>
+      </div>
+
+      <div id="historyNotice" class="notice hidden"></div>
+
+      <div class="history-toolbar">
+        <button class="secondary compact-button" id="historyRefreshButton" type="button">刷新记录</button>
+        <button class="danger-button compact-button" id="historyClearAllButton" type="button" disabled>清空全部</button>
+      </div>
+
+      <div class="session-list" id="historySessionList"></div>
+
+      <div class="conversation-viewer hidden" id="historyViewer">
+        <div class="conversation-head">
+          <strong id="historyViewerTitle">会话内容</strong>
+          <button class="secondary compact-button" id="historyViewerClose" type="button">关闭</button>
+        </div>
+        <div class="conversation-messages" id="historyMessages"></div>
+      </div>
+    </section>
+
     <section class="card hidden" id="adminPanel">
       <div class="section-head">
         <h2>管理员面板</h2>
@@ -602,6 +732,22 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         </div>
         <div class="user-list" id="adminUserList"></div>
       </div>
+
+      <div class="subsection">
+        <h3 class="subsection-title">会话概况</h3>
+        <div class="admin-toolbar">
+          <input id="adminSessionUserSearch" type="search" placeholder="按 Telegram 用户 ID 筛选" />
+          <button class="secondary compact-button" id="adminSessionSearchButton" type="button">筛选</button>
+        </div>
+        <div class="session-list" id="adminSessionList"></div>
+        <div class="conversation-viewer hidden" id="adminSessionViewer">
+          <div class="conversation-head">
+            <strong id="adminSessionViewerTitle">会话摘要</strong>
+            <button class="secondary compact-button" id="adminSessionViewerClose" type="button">关闭</button>
+          </div>
+          <div class="conversation-messages" id="adminSessionMessages"></div>
+        </div>
+      </div>
     </section>
 
     <button class="secondary" id="closeButton" type="button" style="margin-top:14px">关闭控制台</button>
@@ -620,8 +766,11 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       catalog: [],
       settings: null,
       profile: null,
+      historyLoaded: false,
+      sessions: [],
       adminLoaded: false,
-      adminUsers: []
+      adminUsers: [],
+      adminSessions: []
     };
 
     const elements = {
@@ -643,6 +792,16 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       settingsNotice: document.getElementById('settingsNotice'),
       saveButton: document.getElementById('saveButton'),
       refreshButton: document.getElementById('refreshButton'),
+      historyPanel: document.getElementById('historyPanel'),
+      historyCount: document.getElementById('historyCount'),
+      historyNotice: document.getElementById('historyNotice'),
+      historyRefreshButton: document.getElementById('historyRefreshButton'),
+      historyClearAllButton: document.getElementById('historyClearAllButton'),
+      historySessionList: document.getElementById('historySessionList'),
+      historyViewer: document.getElementById('historyViewer'),
+      historyViewerTitle: document.getElementById('historyViewerTitle'),
+      historyViewerClose: document.getElementById('historyViewerClose'),
+      historyMessages: document.getElementById('historyMessages'),
       adminPanel: document.getElementById('adminPanel'),
       adminNotice: document.getElementById('adminNotice'),
       adminTotalUsers: document.getElementById('adminTotalUsers'),
@@ -653,6 +812,13 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       adminUserSearch: document.getElementById('adminUserSearch'),
       adminSearchButton: document.getElementById('adminSearchButton'),
       adminUserList: document.getElementById('adminUserList'),
+      adminSessionUserSearch: document.getElementById('adminSessionUserSearch'),
+      adminSessionSearchButton: document.getElementById('adminSessionSearchButton'),
+      adminSessionList: document.getElementById('adminSessionList'),
+      adminSessionViewer: document.getElementById('adminSessionViewer'),
+      adminSessionViewerTitle: document.getElementById('adminSessionViewerTitle'),
+      adminSessionViewerClose: document.getElementById('adminSessionViewerClose'),
+      adminSessionMessages: document.getElementById('adminSessionMessages'),
       closeButton: document.getElementById('closeButton')
     };
 
@@ -742,6 +908,10 @@ const MINI_APP_HTML = String.raw`<!doctype html>
 
       if (elements.providerSelect.value === 'auto') {
         elements.modelSelect.disabled = true;
+      }
+
+      if (!state.historyLoaded) {
+        loadMySessions();
       }
 
       if (state.profile.isAdmin) {
@@ -862,6 +1032,225 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       } finally {
         elements.saveButton.disabled = false;
         elements.saveButton.textContent = '保存设置';
+      }
+    }
+
+    function showHistoryNotice(message, type) {
+      elements.historyNotice.textContent = message;
+      elements.historyNotice.className = 'notice ' + (type || '');
+    }
+
+    function hideHistoryNotice() {
+      elements.historyNotice.className = 'notice hidden';
+      elements.historyNotice.textContent = '';
+    }
+
+    function formatDateTime(value) {
+      if (!value) return '未知时间';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return String(value);
+      return date.toLocaleString();
+    }
+
+    function sessionDisplayName(session) {
+      if (session.name && session.name !== 'main') return session.name;
+      if (session.isDefault) return '默认会话';
+      return '会话 ' + String(session.id || '').slice(-8);
+    }
+
+    function renderConversationMessages(container, messages) {
+      container.innerHTML = '';
+
+      (messages || []).forEach(function (message) {
+        const item = document.createElement('div');
+        const role = String(message.role || 'message').toLowerCase();
+        item.className = 'message-item ' + (role === 'assistant' ? 'assistant' : role === 'user' ? 'user' : '');
+
+        const roleLabel = document.createElement('div');
+        const content = document.createElement('div');
+        const meta = document.createElement('div');
+
+        roleLabel.className = 'message-role';
+        roleLabel.textContent = role === 'assistant' ? 'AI 助手' : role === 'user' ? '用户' : role;
+
+        content.className = 'message-content';
+        content.textContent = String(message.content || '');
+
+        meta.className = 'message-meta';
+        meta.textContent = [message.model || '', formatDateTime(message.createdAt)].filter(Boolean).join(' · ');
+
+        item.appendChild(roleLabel);
+        item.appendChild(content);
+        item.appendChild(meta);
+        container.appendChild(item);
+      });
+
+      if (!container.children.length) {
+        const empty = document.createElement('div');
+        empty.className = 'notice';
+        empty.textContent = '这个会话还没有可显示的消息。';
+        container.appendChild(empty);
+      }
+    }
+
+    function renderMySessions(sessions) {
+      state.sessions = sessions || [];
+      elements.historySessionList.innerHTML = '';
+      elements.historyCount.textContent = String(state.sessions.length);
+      elements.historyClearAllButton.disabled = state.sessions.length === 0;
+
+      state.sessions.forEach(function (session) {
+        const item = document.createElement('div');
+        item.className = 'session-item';
+
+        const head = document.createElement('div');
+        head.className = 'session-head';
+
+        const copy = document.createElement('div');
+        const title = document.createElement('div');
+        const meta = document.createElement('div');
+        const pill = document.createElement('span');
+
+        title.className = 'session-title';
+        title.textContent = sessionDisplayName(session);
+
+        meta.className = 'session-meta';
+        meta.textContent = [
+          '聊天 ' + session.chatId,
+          session.threadId && session.threadId !== 'main' ? '话题 ' + session.threadId : '',
+          '最近 ' + formatDateTime(session.lastAccessedAt)
+        ].filter(Boolean).join(' · ');
+
+        pill.className = session.status === 'active' ? 'status-pill' : 'status-pill muted';
+        pill.textContent = session.status === 'active' ? '活跃' : session.status;
+
+        copy.appendChild(title);
+        copy.appendChild(meta);
+        head.appendChild(copy);
+        head.appendChild(pill);
+        item.appendChild(head);
+
+        const actions = document.createElement('div');
+        actions.className = 'session-actions';
+
+        const viewButton = document.createElement('button');
+        viewButton.type = 'button';
+        viewButton.className = 'secondary compact-button';
+        viewButton.textContent = '查看记录';
+        viewButton.dataset.sessionAction = 'view';
+        viewButton.dataset.sessionId = session.id;
+
+        const deleteButton = document.createElement('button');
+        deleteButton.type = 'button';
+        deleteButton.className = 'danger-button compact-button';
+        deleteButton.textContent = '清空会话';
+        deleteButton.dataset.sessionAction = 'delete';
+        deleteButton.dataset.sessionId = session.id;
+
+        actions.appendChild(viewButton);
+        actions.appendChild(deleteButton);
+        item.appendChild(actions);
+        elements.historySessionList.appendChild(item);
+      });
+
+      if (!elements.historySessionList.children.length) {
+        const empty = document.createElement('div');
+        empty.className = 'notice';
+        empty.textContent = '暂时没有聊天记录。给机器人发送消息后会在这里出现。';
+        elements.historySessionList.appendChild(empty);
+      }
+    }
+
+    async function loadMySessions() {
+      if (!tg || !tg.initData) {
+        renderMySessions([]);
+        showHistoryNotice('请通过 Telegram 机器人里的“控制台”按钮打开，才能查看聊天记录。', '');
+        return;
+      }
+      showHistoryNotice('正在读取聊天记录…', '');
+
+      try {
+        const response = await fetch('/api/miniapp/sessions?limit=50', {
+          method: 'GET',
+          cache: 'no-store',
+          headers: authHeaders()
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || data.error || '读取聊天记录失败');
+
+        renderMySessions(data.items || []);
+        state.historyLoaded = true;
+        hideHistoryNotice();
+      } catch (error) {
+        showHistoryNotice(error.message || '读取聊天记录失败。', 'failure');
+      }
+    }
+
+    async function viewMySession(sessionId) {
+      showHistoryNotice('正在读取会话内容…', '');
+
+      try {
+        const response = await fetch('/api/miniapp/sessions/' + encodeURIComponent(sessionId) + '?limit=100', {
+          method: 'GET',
+          cache: 'no-store',
+          headers: authHeaders()
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || data.error || '读取会话失败');
+
+        elements.historyViewerTitle.textContent = sessionDisplayName(data.session || {});
+        renderConversationMessages(elements.historyMessages, data.messages || []);
+        elements.historyViewer.classList.remove('hidden');
+        hideHistoryNotice();
+        elements.historyViewer.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } catch (error) {
+        showHistoryNotice(error.message || '读取会话失败。', 'failure');
+      }
+    }
+
+    async function deleteMySession(sessionId) {
+      const accepted = await askConfirmation('确定清空这个会话吗？清空后无法恢复。');
+      if (!accepted) return;
+
+      showHistoryNotice('正在清空会话…', '');
+
+      try {
+        const response = await fetch('/api/miniapp/sessions/' + encodeURIComponent(sessionId), {
+          method: 'DELETE',
+          headers: authHeaders()
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || data.error || '清空失败');
+
+        elements.historyViewer.classList.add('hidden');
+        await loadMySessions();
+        showHistoryNotice('会话已清空。下一条消息会自动创建新会话。', 'success');
+      } catch (error) {
+        showHistoryNotice(error.message || '清空会话失败。', 'failure');
+      }
+    }
+
+    async function clearAllMySessions() {
+      const accepted = await askConfirmation('确定清空全部聊天记录吗？此操作无法恢复。');
+      if (!accepted) return;
+
+      elements.historyClearAllButton.disabled = true;
+      showHistoryNotice('正在清空全部聊天记录…', '');
+
+      try {
+        const response = await fetch('/api/miniapp/sessions', {
+          method: 'DELETE',
+          headers: authHeaders()
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || data.error || '清空失败');
+
+        elements.historyViewer.classList.add('hidden');
+        renderMySessions([]);
+        showHistoryNotice('已清空 ' + Number(data.deleted || 0) + ' 个会话。', 'success');
+      } catch (error) {
+        showHistoryNotice(error.message || '清空全部聊天记录失败。', 'failure');
+        elements.historyClearAllButton.disabled = state.sessions.length === 0;
       }
     }
 
@@ -1035,6 +1424,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         elements.adminAiCalls.textContent = String(stats.aiCalls ?? 0);
         renderProviderStatus(data.providers || []);
         await fetchAdminUsers(elements.adminUserSearch.value.trim());
+        await fetchAdminSessions(elements.adminSessionUserSearch.value.trim());
 
         state.adminLoaded = true;
         hideAdminNotice();
@@ -1093,6 +1483,95 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       }
     }
 
+    function adminSessionUserLabel(session) {
+      const user = session.user || {};
+      const name = [user.firstName, user.lastName].filter(Boolean).join(' ');
+      if (name) return name + ' · ID ' + session.userId;
+      if (user.username) return '@' + user.username + ' · ID ' + session.userId;
+      return '用户 ID ' + session.userId;
+    }
+
+    function renderAdminSessions(sessions) {
+      state.adminSessions = sessions || [];
+      elements.adminSessionList.innerHTML = '';
+
+      state.adminSessions.forEach(function (session) {
+        const item = document.createElement('div');
+        item.className = 'session-item';
+
+        const title = document.createElement('div');
+        const meta = document.createElement('div');
+        const actions = document.createElement('div');
+        const button = document.createElement('button');
+
+        title.className = 'session-title';
+        title.textContent = sessionDisplayName(session) + ' · ' + adminSessionUserLabel(session);
+
+        meta.className = 'session-meta';
+        meta.textContent = [
+          '聊天 ' + session.chatId,
+          '状态 ' + session.status,
+          '最近 ' + formatDateTime(session.lastAccessedAt)
+        ].join(' · ');
+
+        actions.className = 'session-actions';
+        button.type = 'button';
+        button.className = 'secondary compact-button';
+        button.textContent = '查看摘要';
+        button.dataset.adminSessionId = session.id;
+
+        actions.appendChild(button);
+        item.appendChild(title);
+        item.appendChild(meta);
+        item.appendChild(actions);
+        elements.adminSessionList.appendChild(item);
+      });
+
+      if (!elements.adminSessionList.children.length) {
+        const empty = document.createElement('div');
+        empty.className = 'notice';
+        empty.textContent = '没有找到会话。';
+        elements.adminSessionList.appendChild(empty);
+      }
+    }
+
+    async function fetchAdminSessions(userId) {
+      const params = new URLSearchParams();
+      params.set('limit', '50');
+      if (userId) params.set('userId', userId);
+
+      const response = await fetch('/api/miniapp/admin/sessions?' + params.toString(), {
+        method: 'GET',
+        cache: 'no-store',
+        headers: authHeaders()
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || data.error || '读取会话概况失败');
+      renderAdminSessions(data.items || []);
+    }
+
+    async function viewAdminSession(sessionId) {
+      showAdminNotice('正在读取会话摘要…', '');
+
+      try {
+        const response = await fetch('/api/miniapp/admin/sessions/' + encodeURIComponent(sessionId) + '?limit=50', {
+          method: 'GET',
+          cache: 'no-store',
+          headers: authHeaders()
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || data.error || '读取会话摘要失败');
+
+        elements.adminSessionViewerTitle.textContent = sessionDisplayName(data.session || {}) + ' · 用户 ' + data.session.userId;
+        renderConversationMessages(elements.adminSessionMessages, data.messages || []);
+        elements.adminSessionViewer.classList.remove('hidden');
+        hideAdminNotice();
+        elements.adminSessionViewer.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      } catch (error) {
+        showAdminNotice(error.message || '读取会话摘要失败。', 'failure');
+      }
+    }
+
     function setupTelegram() {
       if (!tg) {
         elements.welcome.textContent = '当前在普通浏览器中打开，可查看状态；个人设置需要从 Telegram 打开。';
@@ -1124,9 +1603,26 @@ const MINI_APP_HTML = String.raw`<!doctype html>
     elements.refreshButton.addEventListener('click', function () {
       loadStatus();
       loadSettings();
+      loadMySessions();
       if (state.profile && state.profile.isAdmin) {
         loadAdmin();
       }
+    });
+
+    elements.historyRefreshButton.addEventListener('click', loadMySessions);
+
+    elements.historyClearAllButton.addEventListener('click', clearAllMySessions);
+
+    elements.historySessionList.addEventListener('click', function (event) {
+      const button = event.target.closest('button[data-session-action]');
+      if (!button) return;
+      const sessionId = button.dataset.sessionId;
+      if (button.dataset.sessionAction === 'view') viewMySession(sessionId);
+      if (button.dataset.sessionAction === 'delete') deleteMySession(sessionId);
+    });
+
+    elements.historyViewerClose.addEventListener('click', function () {
+      elements.historyViewer.classList.add('hidden');
     });
 
     elements.adminSearchButton.addEventListener('click', function () {
@@ -1146,6 +1642,29 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       const button = event.target.closest('button[data-user-id]');
       if (!button || button.disabled) return;
       updateUserBlock(button.dataset.userId, button.dataset.blocked === 'true');
+    });
+
+    elements.adminSessionSearchButton.addEventListener('click', function () {
+      fetchAdminSessions(elements.adminSessionUserSearch.value.trim()).catch(function (error) {
+        showAdminNotice(error.message || '筛选会话失败。', 'failure');
+      });
+    });
+
+    elements.adminSessionUserSearch.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        elements.adminSessionSearchButton.click();
+      }
+    });
+
+    elements.adminSessionList.addEventListener('click', function (event) {
+      const button = event.target.closest('button[data-admin-session-id]');
+      if (!button) return;
+      viewAdminSession(button.dataset.adminSessionId);
+    });
+
+    elements.adminSessionViewerClose.addEventListener('click', function () {
+      elements.adminSessionViewer.classList.add('hidden');
     });
 
     elements.closeButton.addEventListener('click', function () {
@@ -1530,6 +2049,183 @@ function serializeAdminUser(db, user) {
   };
 }
 
+function serializeSession(session, user = null) {
+  return {
+    id: String(session.id),
+    chatId: String(session.chatId || ''),
+    userId: String(session.userId || ''),
+    threadId: String(session.threadId || 'main'),
+    name: String(session.name || 'main'),
+    status: String(session.status || 'active'),
+    isDefault: Boolean(session.isDefault),
+    lastAccessedAt: session.lastAccessedAt || '',
+    createdAt: session.createdAt || '',
+    updatedAt: session.updatedAt || '',
+    user: user
+      ? {
+          id: String(user.id),
+          username: user.username || '',
+          firstName: user.firstName || '',
+          lastName: user.lastName || ''
+        }
+      : undefined
+  };
+}
+
+function serializeSessionMessages(db, sessionId, limit = 100, maxContentChars = 8000) {
+  const safeLimit = Math.max(1, Math.min(200, Number(limit) || 100));
+  const entries = db.getConversationEntries(sessionId, {
+    limit: safeLimit,
+    order: 'desc'
+  });
+
+  return entries.reverse().map((entry) => {
+    let content;
+    if (typeof entry.content === 'string') {
+      content = entry.content;
+    } else {
+      try {
+        content = JSON.stringify(entry.content, null, 2);
+      } catch {
+        content = String(entry.content || '');
+      }
+    }
+
+    return {
+      role: String(entry.role || ''),
+      content: content.slice(0, Math.max(100, Number(maxContentChars) || 8000)),
+      model: String(entry.model || ''),
+      createdAt: entry.createdAt || ''
+    };
+  });
+}
+
+function logMiniAppSessionAction(context, { actorId, action, targetId = '', details = {}, req }) {
+  if (typeof context.db.logAudit !== 'function') return;
+
+  context.db.logAudit({
+    actorId: String(actorId),
+    actorType: 'telegram_miniapp',
+    action,
+    targetType: 'session',
+    targetId: String(targetId || ''),
+    result: 'allow',
+    requestId: String(req.headers['x-request-id'] || ''),
+    ip: req.socket.remoteAddress || '',
+    userAgent: req.headers['user-agent'] || '',
+    details
+  });
+}
+
+async function handleMiniAppSessionsApi(req, res, context, url) {
+  let auth;
+
+  try {
+    auth = await getAuthenticatedUser(req, context);
+  } catch (error) {
+    const response = authErrorResponse(error);
+    sendJson(res, response.statusCode, response.payload);
+    return;
+  }
+
+  const currentUserId = String(auth.telegramUser.id);
+  const pathname = url.pathname;
+
+  if (pathname === '/api/miniapp/sessions' && req.method === 'GET') {
+    const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit')) || 50));
+    const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
+    const sessions = context.db.listSessions({
+      userId: currentUserId,
+      status: '',
+      limit,
+      offset
+    });
+
+    sendJson(res, 200, {
+      ok: true,
+      items: sessions.map((session) => serializeSession(session)),
+      limit,
+      offset
+    });
+    return;
+  }
+
+  if (pathname === '/api/miniapp/sessions' && req.method === 'DELETE') {
+    let deleted = 0;
+
+    while (deleted < 1000) {
+      const batch = context.db.listSessions({
+        userId: currentUserId,
+        status: '',
+        limit: 100,
+        offset: 0
+      });
+      if (!batch.length) break;
+
+      for (const session of batch) {
+        await context.db.deleteSession(session.id);
+        deleted += 1;
+      }
+    }
+
+    logMiniAppSessionAction(context, {
+      actorId: currentUserId,
+      action: 'sessions.clear_all',
+      details: { deleted },
+      req
+    });
+
+    sendJson(res, 200, { ok: true, deleted });
+    return;
+  }
+
+  const match = pathname.match(/^\/api\/miniapp\/sessions\/([^/]+)$/);
+  if (match) {
+    const sessionId = decodeURIComponent(match[1]);
+    const session = context.db.findSession(sessionId);
+
+    if (!session || String(session.userId) !== currentUserId) {
+      sendJson(res, 404, {
+        ok: false,
+        error: 'SESSION_NOT_FOUND',
+        message: '没有找到这个会话。'
+      });
+      return;
+    }
+
+    if (req.method === 'GET') {
+      sendJson(res, 200, {
+        ok: true,
+        session: serializeSession(session),
+        messages: serializeSessionMessages(
+          context.db,
+          sessionId,
+          url.searchParams.get('limit') || 100
+        )
+      });
+      return;
+    }
+
+    if (req.method === 'DELETE') {
+      await context.db.deleteSession(sessionId);
+      logMiniAppSessionAction(context, {
+        actorId: currentUserId,
+        action: 'sessions.delete',
+        targetId: sessionId,
+        req
+      });
+      sendJson(res, 200, { ok: true, deleted: 1 });
+      return;
+    }
+  }
+
+  res.setHeader('Allow', 'GET, DELETE');
+  sendJson(res, 404, {
+    ok: false,
+    error: 'SESSION_ROUTE_NOT_FOUND'
+  });
+}
+
 async function getAuthenticatedAdmin(req, context) {
   const auth = await getAuthenticatedUser(req, context);
   const configuredAdmin = isAdminUser(context.config, auth.telegramUser.id);
@@ -1614,6 +2310,57 @@ async function handleMiniAppAdminApi(req, res, context, url) {
       total: context.db.countUsers({ q }),
       limit,
       offset
+    });
+    return;
+  }
+
+  if (pathname === '/api/miniapp/admin/sessions' && req.method === 'GET') {
+    const userId = String(url.searchParams.get('userId') || '').trim();
+    const chatId = String(url.searchParams.get('chatId') || '').trim();
+    const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit')) || 50));
+    const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
+    const sessions = context.db.listAdminSessions({
+      userId,
+      chatId,
+      status: '',
+      limit,
+      offset
+    });
+
+    sendJson(res, 200, {
+      ok: true,
+      items: sessions.map((session) =>
+        serializeSession(session, context.db.findUser(session.userId) || null)
+      ),
+      limit,
+      offset
+    });
+    return;
+  }
+
+  const adminSessionMatch = pathname.match(/^\/api\/miniapp\/admin\/sessions\/([^/]+)$/);
+  if (adminSessionMatch && req.method === 'GET') {
+    const sessionId = decodeURIComponent(adminSessionMatch[1]);
+    const session = context.db.findSession(sessionId);
+
+    if (!session) {
+      sendJson(res, 404, {
+        ok: false,
+        error: 'SESSION_NOT_FOUND',
+        message: '没有找到这个会话。'
+      });
+      return;
+    }
+
+    sendJson(res, 200, {
+      ok: true,
+      session: serializeSession(session, context.db.findUser(session.userId) || null),
+      messages: serializeSessionMessages(
+        context.db,
+        sessionId,
+        url.searchParams.get('limit') || 50,
+        800
+      )
     });
     return;
   }
@@ -1780,6 +2527,11 @@ export function startHealthServer({ port, db, config, logger }) {
         return;
       }
 
+      if (pathname === '/api/miniapp/sessions' || pathname.startsWith('/api/miniapp/sessions/')) {
+        await handleMiniAppSessionsApi(req, res, context, url);
+        return;
+      }
+
       if (pathname.startsWith('/api/miniapp/admin/')) {
         await handleMiniAppAdminApi(req, res, context, url);
         return;
@@ -1824,8 +2576,11 @@ export function startHealthServer({ port, db, config, logger }) {
           '/',
           '/app',
           '/api/miniapp/settings',
+          '/api/miniapp/sessions',
+          '/api/miniapp/sessions/:id',
           '/api/miniapp/admin/overview',
           '/api/miniapp/admin/users',
+          '/api/miniapp/admin/sessions',
           '/health',
           '/ready'
         ]
@@ -1854,8 +2609,11 @@ export function startHealthServer({ port, db, config, logger }) {
         '/',
         '/app',
         '/api/miniapp/settings',
+        '/api/miniapp/sessions',
+        '/api/miniapp/sessions/:id',
         '/api/miniapp/admin/overview',
         '/api/miniapp/admin/users',
+        '/api/miniapp/admin/sessions',
         '/health',
         '/ready'
       ]
