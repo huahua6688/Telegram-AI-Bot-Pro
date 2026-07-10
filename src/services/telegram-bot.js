@@ -2477,13 +2477,14 @@ export class TelegramAIBot {
 
     const lang = messages[locale] ? locale : 'zh';
     const t = messages[lang];
+    const setupOnlyStatuses = ['unconfigured', 'disabled', 'model_missing', 'cooldown'];
     const noUsableProvider =
+      error?.code === 'NO_USABLE_AI_PROVIDER' ||
       combinedLower.includes('no configured ai provider') ||
       combinedLower.includes('no usable ai provider') ||
-      combinedLower.includes('all configured ai providers failed') ||
       (
         attemptedProviders.length > 0 &&
-        statusList.every((status) => ['unconfigured', 'disabled', 'model_missing', 'cooldown'].includes(status))
+        statusList.every((status) => setupOnlyStatuses.includes(status))
       );
 
     if (noUsableProvider) {
@@ -4241,7 +4242,7 @@ export class TelegramAIBot {
         });
         lines.push(`${provider.name}: OK (${completion.model || provider.models[0]})`);
       } catch (error) {
-        lines.push(`${provider.name}: FAIL (${this.formatUserFacingError(error, 'en').split('\n')[0]})`);
+        lines.push(`${provider.name}: FAIL (${this.formatUserFacingError(error, locale).split('\n')[0]})`);
       }
     }
 
