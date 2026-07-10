@@ -10,7 +10,7 @@
 - `ADMIN_USER_IDS`: 给机器人发送 `/whoami` 后复制你的数字 ID
 - `GEMINI_API_KEY`: 从 [Google AI Studio](https://aistudio.google.com/app/apikey) 获取
 
-`OPENROUTER_API_KEY` 推荐填写，因为 `openrouter/free` 会自动选择 OpenRouter 当前可用的免费模型。`GROQ_API_KEY` 可选；Groq 官方页面列的是 Developer Plan 限额和价格，不是 `:free` 模型名。没有额度的平台先留空，不要乱填 Key。
+`OPENROUTER_API_KEY` 推荐填写。OpenRouter 免费模型通常带 `:free` 后缀，当前可用模型会变化；下面模板先放当前模型 API 里能看到的免费模型。`GROQ_API_KEY` 可选；Groq 官方页面列的是 Developer Plan 限额和价格，不是 `:free` 模型名。没有额度的平台先留空，不要乱填 Key。
 
 ```env
 # Required
@@ -37,11 +37,11 @@ GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
 GEMINI_MODEL=gemini-3.5-flash
 GEMINI_FALLBACK_MODELS=gemini-3.1-flash-lite,gemini-2.5-flash,gemini-2.5-flash-lite
 
-# OpenRouter free router
+# OpenRouter free models
 OPENROUTER_API_KEY=
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-OPENROUTER_MODEL=openrouter/free
-OPENROUTER_FALLBACK_MODELS=meta-llama/llama-3.3-70b-instruct:free,meta-llama/llama-3.2-3b-instruct:free
+OPENROUTER_MODEL=tencent/hy3:free
+OPENROUTER_FALLBACK_MODELS=poolside/laguna-xs-2.1:free,cohere/north-mini-code:free
 OPENROUTER_HTTP_REFERER=
 OPENROUTER_APP_TITLE=Telegram AI Bot Pro
 
@@ -119,8 +119,8 @@ AI_FALLBACK_MODELS=
 | --- | --- | --- |
 | Gemini | `gemini-3.5-flash` | Google 官方价格页显示 Free Tier 输入和输出免费 |
 | Gemini 备用 | `gemini-3.1-flash-lite`, `gemini-2.5-flash`, `gemini-2.5-flash-lite` | 免费层、限流和地区可能变化 |
-| OpenRouter | `openrouter/free` | OpenRouter 免费模型路由器，价格字段为 `0` |
-| OpenRouter 备用 | `meta-llama/llama-3.3-70b-instruct:free`, `meta-llama/llama-3.2-3b-instruct:free` | 带 `:free` 的模型更适合做备用 |
+| OpenRouter | `tencent/hy3:free` | 当前 OpenRouter API 中显示为 `prompt=0`、`completion=0` 的免费模型 |
+| OpenRouter 备用 | `poolside/laguna-xs-2.1:free`, `cohere/north-mini-code:free` | 带 `:free` 的模型更适合做备用；免费模型可能会过期或下线 |
 | Groq | `llama-3.1-8b-instant` | 官方列为 Developer Plan 模型，有限额和价格，是否可用取决于账号 |
 
 官方页面：
@@ -215,7 +215,7 @@ Copy this whole block into Zeabur Environment Variables. At minimum, fill:
 - `ADMIN_USER_IDS`: send `/whoami` to the bot and copy your numeric ID
 - `GEMINI_API_KEY`: from [Google AI Studio](https://aistudio.google.com/app/apikey)
 
-`OPENROUTER_API_KEY` is recommended because `openrouter/free` routes to currently available free OpenRouter models. `GROQ_API_KEY` is optional. Leave other provider keys blank unless you know your account has quota.
+`OPENROUTER_API_KEY` is recommended. OpenRouter free models usually have a `:free` suffix, and availability changes over time. The template below uses free model IDs currently visible in the OpenRouter models API. `GROQ_API_KEY` is optional. Leave other provider keys blank unless you know your account has quota.
 
 ```env
 # Required
@@ -242,11 +242,11 @@ GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta
 GEMINI_MODEL=gemini-3.5-flash
 GEMINI_FALLBACK_MODELS=gemini-3.1-flash-lite,gemini-2.5-flash,gemini-2.5-flash-lite
 
-# OpenRouter free router
+# OpenRouter free models
 OPENROUTER_API_KEY=
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-OPENROUTER_MODEL=openrouter/free
-OPENROUTER_FALLBACK_MODELS=meta-llama/llama-3.3-70b-instruct:free,meta-llama/llama-3.2-3b-instruct:free
+OPENROUTER_MODEL=tencent/hy3:free
+OPENROUTER_FALLBACK_MODELS=poolside/laguna-xs-2.1:free,cohere/north-mini-code:free
 OPENROUTER_HTTP_REFERER=
 OPENROUTER_APP_TITLE=Telegram AI Bot Pro
 
@@ -322,8 +322,8 @@ AI_FALLBACK_MODELS=
 | --- | --- | --- |
 | Gemini | `gemini-3.5-flash` | Google pricing lists free input/output on the Free Tier |
 | Gemini fallback | `gemini-3.1-flash-lite`, `gemini-2.5-flash`, `gemini-2.5-flash-lite` | Free tiers and limits can change |
-| OpenRouter | `openrouter/free` | Free router with `prompt` and `completion` pricing set to `0` |
-| OpenRouter fallback | `meta-llama/llama-3.3-70b-instruct:free`, `meta-llama/llama-3.2-3b-instruct:free` | Useful explicit free fallbacks |
+| OpenRouter | `tencent/hy3:free` | Currently listed by OpenRouter with `prompt=0` and `completion=0` |
+| OpenRouter fallback | `poolside/laguna-xs-2.1:free`, `cohere/north-mini-code:free` | Useful explicit free fallbacks; free models may expire or disappear |
 | Groq | `llama-3.1-8b-instant` | Developer Plan model; availability depends on your account |
 
 Official references:
