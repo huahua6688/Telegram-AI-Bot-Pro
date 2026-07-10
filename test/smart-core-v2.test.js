@@ -211,6 +211,68 @@ test('AI fallback retries another model for transient provider failures', async 
   assert.equal(completion.result.text, 'backup ok');
 });
 
+test('AI fallback skips unavailable models such as 404 responses', async () => {
+  const bot = Object.create(TelegramAIBot.prototype);
+  const attempts = [];
+  bot.config = {
+    defaultModel: 'retired-model',
+    translationModel: '',
+    routerModel: '',
+    availableModels: ['retired-model', 'working-model']
+  };
+  bot.aiCooldowns = new Map();
+  bot.logger = logger();
+  bot.aiClient = {
+    async completeWithTools({ model }) {
+      attempts.push(model);
+      if (model === 'retired-model') {
+        throw new Error('AI request failed (404): model not found');
+      }
+      return { text: 'fallback ok', messages: [] };
+    }
+  };
+
+  const completion = await bot.completeWithAiFallback({
+    scope: 'chat',
+    model: 'retired-model',
+    request: { messages: [{ role: 'user', content: 'hello' }] }
+  });
+
+  assert.deepEqual(attempts, ['retired-model', 'working-model']);
+  assert.equal(completion.model, 'working-model');
+  assert.equal(completion.result.text, 'fallback ok');
+});
+
+test('AI fallback retries when a provider returns an empty result', async () => {
+  const bot = Object.create(TelegramAIBot.prototype);
+  const attempts = [];
+  bot.config = {
+    defaultModel: 'empty-model',
+    translationModel: '',
+    routerModel: '',
+    availableModels: ['empty-model', 'working-model']
+  };
+  bot.aiCooldowns = new Map();
+  bot.logger = logger();
+  bot.aiClient = {
+    async completeWithTools({ model }) {
+      attempts.push(model);
+      return model === 'empty-model'
+        ? { text: '', messages: [] }
+        : { text: 'non-empty fallback', messages: [] };
+    }
+  };
+
+  const completion = await bot.completeWithAiFallback({
+    scope: 'chat',
+    model: 'empty-model',
+    request: { messages: [{ role: 'user', content: 'hello' }] }
+  });
+
+  assert.deepEqual(attempts, ['empty-model', 'working-model']);
+  assert.equal(completion.model, 'working-model');
+});
+
 test('empty AI results normalize instead of crashing text/message consumers', () => {
   const bot = Object.create(TelegramAIBot.prototype);
   const fallbackMessages = [{ role: 'user', content: 'hello' }];
@@ -278,4 +340,70 @@ test('opening the main menu does not send a shortcut status message', async () =
 
   assert.deepEqual(replies.map((item) => item.message), ['请选择功能：']);
   assert.doesNotMatch(replies[0].message, /快捷键已开启/);
+});
+
+test('free web search fallback returns real HTML search results', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    assert.match(String(url), /html\.duckduckgo\.com\/html/);
+    return {
+      ok: true,
+      status: 200,
+      async text() {
+        return `
+          <a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fnews">Current news result</a>
+          <a class="result__snippet">A current news summary with useful details.</a>
+        `;
+      }
+    };
+  };
+
+  try {
+    const registry = new ToolRegistry({
+      ...toolConfig(),
+      enableWebSearch: true,
+      toolAllowedNames: new Set(['web_search'])
+    }, logger());
+    const raw = await registry.execute({
+      function: { name: 'web_search', arguments: JSON.stringify({ query: 'current news' }) }
+    }, {
+      userId: '1',
+      chatId: '2',
+      toolUsage: { count: 0 }
+    });
+    const result = JSON.parse(raw);
+
+    assert.equal(result.provider, 'duckduckgo');
+    assert.equal(result.results[0].title, 'Current news result');
+    assert.equal(result.results[0].url, 'https://example.com/news');
+    assert.match(result.results[0].snippet, /useful details/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('localized slash commands cover language and search and refresh per chat', async () => {
+  const calls = [];
+  const bot = Object.create(TelegramAIBot.prototype);
+  bot.logger = logger();
+  bot.bot = {
+    telegram: {
+      async setMyCommands(commands, options = {}) {
+        calls.push({ commands, options });
+      }
+    }
+  };
+
+  await bot.setLocalizedBotCommands();
+  const indonesian = calls.find((item) => item.options.language_code === 'id');
+  const dutch = calls.find((item) => item.options.language_code === 'nl');
+  assert.ok(indonesian);
+  assert.ok(dutch);
+  assert.ok(indonesian.commands.some((item) => item.command === 'language'));
+  assert.ok(indonesian.commands.some((item) => item.command === 'web'));
+
+  await bot.setChatBotCommands({ chat: { id: 99 } }, 'zh-hant');
+  const chatCall = calls.at(-1);
+  assert.deepEqual(chatCall.options.scope, { type: 'chat', chat_id: 99 });
+  assert.equal(chatCall.commands.find((item) => item.command === 'language').description, '切換語言');
 });

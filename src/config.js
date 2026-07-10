@@ -42,7 +42,7 @@ function parseList(value) {
 
 export function loadConfig() {
   const aiProvider = normalizeProvider(process.env.AI_PROVIDER || 'openai-compatible');
-  const fallbackModels = parseList(process.env.AI_FALLBACK_MODELS);
+  const configuredFallbackModels = parseList(process.env.AI_FALLBACK_MODELS);
   const providerDefaultModels = {
     'openai-compatible': 'gpt-4.1-mini',
     anthropic: 'claude-3-5-sonnet-latest',
@@ -54,7 +54,13 @@ export function loadConfig() {
     glm: 'glm-4-flash',
     doubao: 'doubao-seed-1-6-250615'
   };
-  const defaultModel = process.env.AI_MODEL || fallbackModels[0] || providerDefaultModels[aiProvider];
+  const providerFallbackModels = {
+    gemini: ['gemini-2.5-flash', 'gemini-2.5-flash-lite']
+  };
+  const defaultModel = process.env.AI_MODEL || providerDefaultModels[aiProvider];
+  const fallbackModels = configuredFallbackModels.length > 0
+    ? configuredFallbackModels
+    : providerFallbackModels[aiProvider] || [];
   const databaseFile = path.resolve(process.cwd(), process.env.DATABASE_FILE || './data/bot-data.db');
   const legacyDataFile = path.resolve(process.cwd(), process.env.DATA_FILE || './data/bot-data.json');
 

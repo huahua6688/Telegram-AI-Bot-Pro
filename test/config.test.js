@@ -40,6 +40,18 @@ test('loadConfig resolves gemini provider aliases and keys', () => {
   assert.equal(config.geminiApiKey, 'gemini-key');
 });
 
+test('Gemini has working fallback models even when env does not configure them', () => {
+  resetEnv();
+  process.env.AI_PROVIDER = 'gemini';
+  process.env.AI_MODEL = 'gemini-2.5-flash';
+  delete process.env.AI_FALLBACK_MODELS;
+
+  const config = loadConfig();
+  assert.equal(config.defaultModel, 'gemini-2.5-flash');
+  assert.ok(config.availableModels.includes('gemini-2.5-flash-lite'));
+  assert.ok(config.availableModels.length >= 2);
+});
+
 test('loadConfig resolves gemini-live aliases and keys', () => {
   resetEnv();
   process.env.AI_PROVIDER = 'google-live';
