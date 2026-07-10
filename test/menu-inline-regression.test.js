@@ -22,10 +22,10 @@ test("normal messages use the main single-pass agent", () => {
 
 test("visible main menu is minimal", () => {
   const menu = methodSlice(bot, "createMenuKeyboard", "createSettingsKeyboard");
-  assert.match(menu, /menu:models/);
-  assert.match(menu, /menu:image/);
-  assert.match(menu, /menu:file/);
-  assert.match(menu, /menu:tts/);
+  assert.doesNotMatch(menu, /menu:models/);
+  assert.doesNotMatch(menu, /menu:image/);
+  assert.doesNotMatch(menu, /menu:file/);
+  assert.doesNotMatch(menu, /menu:tts/);
   assert.match(menu, /menu:help/);
   assert.match(menu, /menu:settings/);
   assert.match(menu, /menu:admin/);
@@ -34,7 +34,7 @@ test("visible main menu is minimal", () => {
   assert.doesNotMatch(menu, /menu:chat/);
   assert.doesNotMatch(menu, /menu:translate/);
   assert.doesNotMatch(menu, /menu:web/);
-  assert.match(menu, /menu:toolbox/);
+  assert.doesNotMatch(menu, /menu:toolbox/);
 });
 
 test("AI provider menu uses short callback data", () => {

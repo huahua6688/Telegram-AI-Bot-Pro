@@ -252,7 +252,7 @@ const UI_TEXT = {
     featureModel: '- 切换模型：在回复操作条点“🧠 模型”',
     featurePersona: '- 人格切换：在“⋯ 更多”中切换',
     featureLanguage: '- 语言切换：在“⋯ 更多”中切换',
-    featureButtons: '- 可直接点击下方按钮，也支持自然语言如“搜索 xxx”“生成图片 xxx”',
+    featureButtons: '- 不需要找功能按钮：直接发问题、图片、语音、文件或链接，我会自动判断怎么处理',
     featureWeb: '- 联网搜索：发送“搜索 xxx”',
     featureImage: '- 图片能力：发送“生成图片 xxx”或“图片编辑 xxx”（需附图）',
     featureTts: '- 语音朗读：发送“朗读 xxx”',
@@ -263,7 +263,7 @@ const UI_TEXT = {
     featureKeyword: '- /keyword [text]：设置群聊关键词',
     featureStats: '- /stats：查看统计信息',
     featureAdmin: '- 管理员：/block /unblock /allow /disallow [userId]',
-    start: '你好，我已经准备好了。你可以直接发消息，也可以点按钮使用常用功能。',
+    start: '你好，我已经准备好了。直接发文字、图片、语音、文件或链接就行，我会自动判断怎么处理。',
     memoryCleared: '当前会话记忆已清空。',
     currentModel: '当前模型：{model}',
     availableModels: '可用模型：{models}',
@@ -312,7 +312,7 @@ const UI_TEXT = {
     documentTooLarge: '文件 {filename} 过大，当前超出可处理上限，请拆分后重试。',
     documentParseFailed: '文件 {filename} 解析失败：{error}',
     continuePrompt: '请继续。',
-    menu: '想使用哪项功能？也可以直接发送问题。',
+    menu: '直接发任何内容就行：问题、图片、语音、文件、链接都可以。我会自动判断怎么处理。',
     currentLanguage: '当前语言：{language}',
     languageUsage: '用法：/language zh 或 /language en',
     languageUnsupported: '暂不支持该语言。可选：zh, en',
@@ -375,7 +375,7 @@ const UI_TEXT = {
     featureModel: '- Switch model: tap "🧠 Model" on the reply action bar',
     featurePersona: '- Persona switch: open from "⋯ More"',
     featureLanguage: '- Language switch: open from "⋯ More"',
-    featureButtons: '- You can tap the buttons below, or use natural requests like "search ..." or "generate an image ..."',
+    featureButtons: '- You do not need feature buttons: send text, photos, voice, files, or links and I will route them automatically',
     featureWeb: '- Web search: send "search ..."',
     featureImage: '- Image actions: send "generate image ..." or "edit image ..." with a photo',
     featureTts: '- Text to speech: send "read aloud ..."',
@@ -386,7 +386,7 @@ const UI_TEXT = {
     featureKeyword: '- /keyword [text]: set group trigger keyword',
     featureStats: '- /stats: view usage stats',
     featureAdmin: '- Admin: /block /unblock /allow /disallow [userId]',
-    start: 'Hi, I am ready. You can chat directly or tap the buttons for common actions.',
+    start: 'Hi, I am ready. Send text, photos, voice, files, or links directly and I will decide how to handle them.',
     memoryCleared: 'The current conversation memory has been cleared.',
     currentModel: 'Current model: {model}',
     availableModels: 'Available models: {models}',
@@ -435,7 +435,7 @@ const UI_TEXT = {
     documentTooLarge: 'The file {filename} is too large to parse directly. Ask the user to split it.',
     documentParseFailed: 'Failed to parse file {filename}: {error}',
     continuePrompt: 'Please continue.',
-    menu: 'Choose a feature, or just send me a question.',
+    menu: 'Send me anything directly: questions, photos, voice, files, or links. I will decide how to handle it.',
     currentLanguage: 'Current language: {language}',
     languageUsage: 'Usage: /language zh or /language en',
     languageUnsupported: 'Unsupported language. Options: zh, en',
@@ -1017,22 +1017,11 @@ export class TelegramAIBot {
   createMenuKeyboard(locale) {
     return Markup.inlineKeyboard([
       [
-        Markup.button.callback(locale === 'en' ? 'AI model' : 'AI 模型', 'menu:models'),
-        Markup.button.callback(locale === 'en' ? 'Live voice' : '实时语音', 'menu:tts')
-      ],
-      [
-        Markup.button.callback(locale === 'en' ? 'Image' : '图片功能', 'menu:image'),
-        Markup.button.callback(locale === 'en' ? 'File' : '文件分析', 'menu:file')
-      ],
-      [
         Markup.button.callback(this.ui(locale, 'help'), 'menu:help'),
         Markup.button.callback(this.ui(locale, 'settings'), 'menu:settings')
       ],
       [
-        Markup.button.callback(this.t(locale, 'buttonToolbox'), 'menu:toolbox'),
-        Markup.button.callback(this.ui(locale, 'admin'), 'menu:admin')
-      ],
-      [
+        Markup.button.callback(this.ui(locale, 'admin'), 'menu:admin'),
         Markup.button.callback(this.ui(locale, 'close'), 'menu:close')
       ]
     ]);

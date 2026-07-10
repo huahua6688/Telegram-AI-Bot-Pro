@@ -260,17 +260,24 @@ IMAGE_SIZE=1024x1024
 TTS_VOICE=alloy
 ```
 
-### Telegram 按钮怎么用
+### Telegram 怎么用
 
-打开机器人主菜单，点击 `AI 模型 / AI model`：
+默认主菜单只保留少量入口：
 
-- 选择 Provider：Gemini、Groq、OpenRouter、Claude、DeepSeek、Qwen 等
-- 选择模型：机器人用短索引 callback，不会超过 Telegram 64 字节限制
-- 打开或关闭自动备用
-- 测试当前模型
-- 管理员可测试全部 Provider、查看 Provider 状态
+- 帮助
+- 设置
+- 管理
+- 关闭
 
-用户选择会保存到 SQLite，重启后仍然有效。
+普通用户不需要找功能按钮。直接发送内容即可：
+
+- 发文字：普通聊天、翻译、搜索、写作、问答会自动判断
+- 发图片：自动识别图片内容；如果文字里说明“生成图片/改图”，会走图片能力
+- 发语音：自动转写并继续对话
+- 发文件：自动读取并总结支持的文件
+- 发链接：自动抓取网页并总结
+
+如果要切换 Provider 或模型，进入 `设置 -> 模型`。模型按钮使用短索引 callback，不会超过 Telegram 64 字节限制。用户选择会保存到 SQLite，重启后仍然有效。
 
 ### 自动故障转移
 
@@ -434,15 +441,22 @@ Copy current model IDs from each provider dashboard. Free tiers, model IDs, rate
 
 ### User Flow
 
-Open the bot menu and choose `AI model`:
+The default menu stays small:
 
-- Pick a provider
-- Pick a model
-- Toggle automatic fallback
-- Test the current model
-- Admins can test all providers and view provider status
+- Help
+- Settings
+- Admin
+- Close
 
-Selections are stored in SQLite and survive restarts.
+Users do not need feature buttons. They can send anything directly:
+
+- Text: chat, translation, search, writing, and Q&A are routed automatically
+- Photos: image understanding runs automatically; image generation/editing can be inferred from the text
+- Voice: transcription runs automatically and continues the chat
+- Files: supported files are parsed and summarized automatically
+- Links: webpages are fetched and summarized automatically
+
+To switch provider or model, open `Settings -> Model`. Model buttons use short indexed callback data so Telegram's 64-byte callback limit is not exceeded. Selections are stored in SQLite and survive restarts.
 
 ### Fallback Behavior
 
