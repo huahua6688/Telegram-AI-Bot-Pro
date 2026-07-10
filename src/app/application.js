@@ -6,6 +6,7 @@ import { ErrorCodes } from '../core/errors/error-codes.js';
 import { loadEnvConfig } from '../adapters/config/env-config-adapter.js';
 import { createDatabase } from '../adapters/persistence/database-adapter.js';
 import { createAIProviderClient } from '../adapters/ai/ai-client-adapter.js';
+import { createAIProviderManager } from '../services/ai-provider-manager.js';
 import { createToolRegistry } from '../adapters/tools/tool-registry-adapter.js';
 import { createPluginManager } from '../adapters/plugins/plugin-manager-adapter.js';
 import { createTelegramBot } from '../adapters/telegram/telegram-bot-adapter.js';
@@ -42,6 +43,7 @@ export async function createApplication() {
     const db = await createDatabase(runtimeConfig);
     const accessControl = new AccessControlService({ config: runtimeConfig, db, logger });
     const aiClient = createAIProviderClient(runtimeConfig, logger);
+    const providerManager = createAIProviderManager(runtimeConfig, logger, db);
     const toolRegistry = createToolRegistry(runtimeConfig, logger, accessControl);
     const pluginManager = await createPluginManager(runtimeConfig, logger);
 
@@ -49,6 +51,7 @@ export async function createApplication() {
       config: runtimeConfig,
       db,
       aiClient,
+      providerManager,
       toolRegistry,
       pluginManager,
       logger,
@@ -63,6 +66,7 @@ export async function createApplication() {
       translationModel: runtimeConfig.translationModel,
       routerModel: runtimeConfig.routerModel,
       availableModels: runtimeConfig.availableModels,
+      providerFallbackOrder: runtimeConfig.aiProviderFallbackOrder,
       healthPort: runtimeConfig.healthPort,
       databaseFile: runtimeConfig.databaseFile,
       aiRouterMode: runtimeConfig.enableAiRouter ? runtimeConfig.aiRouterMode : 'off',

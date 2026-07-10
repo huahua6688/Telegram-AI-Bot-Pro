@@ -7,13 +7,14 @@ import {
   normalizeLanguageCode,
   shouldRespondToMessage
 } from '../utils/telegram.js';
-import { extractUrls, splitMessage, truncateText } from '../utils/text.js';
+import { extractUrls, splitMessage, toDataUri, truncateText } from '../utils/text.js';
 import { personaPresets } from '../config.js';
 import { DocumentParser } from './document-parser.js';
 import { MultimodalActionService } from './multimodal-action-service.js';
 import { AudioOrchestrator } from './audio-orchestrator.js';
 import { MemoryManager } from './memory-manager.js';
 import { tryHandleNaturalAgent } from './natural-agent.js';
+import { PROVIDER_LABELS } from './ai-provider-manager.js';
 
 const LANGUAGE_NAMES = {
   auto: 'Auto / Telegram',
@@ -54,6 +55,44 @@ const BOT_COMMAND_NAMES = [
   'whoami',
   'status'
 ];
+
+const AI_PROVIDER_MENU_ORDER = [
+  'auto',
+  'gemini',
+  'gemini-live',
+  'groq',
+  'openrouter',
+  'github-models',
+  'huggingface',
+  'mistral',
+  'openai',
+  'openai-compatible',
+  'anthropic',
+  'deepseek',
+  'qwen',
+  'grok',
+  'glm',
+  'doubao'
+];
+
+const AI_PROVIDER_ICONS = {
+  auto: 'Auto',
+  gemini: 'Gemini',
+  'gemini-live': 'Live',
+  groq: 'Groq',
+  openrouter: 'OpenRouter',
+  'github-models': 'GitHub',
+  huggingface: 'HF',
+  mistral: 'Mistral',
+  openai: 'OpenAI',
+  'openai-compatible': 'Custom',
+  anthropic: 'Claude',
+  deepseek: 'DeepSeek',
+  qwen: 'Qwen',
+  grok: 'Grok',
+  glm: 'GLM',
+  doubao: 'Doubao'
+};
 
 const BOT_COMMAND_DESCRIPTIONS = {
   zh: ['打开助手', '打开功能菜单', '查看使用帮助', '联网搜索', '切换 AI 模型', '切换人格', '切换语言', '清空当前对话', '查看 Telegram ID', '管理员状态'],
@@ -603,10 +642,11 @@ function createStreamingFrames(text, minLength) {
 }
 
 export class TelegramAIBot {
-  constructor({ config, db, aiClient, toolRegistry, pluginManager, logger, accessControl = null }) {
+  constructor({ config, db, aiClient, providerManager = null, toolRegistry, pluginManager, logger, accessControl = null }) {
     this.config = config;
     this.db = db;
     this.aiClient = aiClient;
+    this.providerManager = providerManager;
     this.toolRegistry = toolRegistry;
     this.pluginManager = pluginManager;
     this.logger = logger;
@@ -617,6 +657,7 @@ export class TelegramAIBot {
     this.pendingMenuActions = new Map();
     this.aiCooldowns = new Map();
     this.activeModes = new Map();
+    this.activeServiceProvider = null;
     this.bot = new Telegraf(config.botToken);
     this.botUsername = '';
     this.bot.action(/^memory_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleMemoryTargetCallback(ctx)));
@@ -625,6 +666,7 @@ export class TelegramAIBot {
     this.bot.action(/^file_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleFileActionCallback(ctx)));
     this.bot.action(/^voice_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleVoiceActionCallback(ctx)));
     this.bot.action(/^image_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleImageActionCallback(ctx)));
+    this.bot.action(/^ai:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleAISettingsCallback(ctx)));
     this.documentParser = new DocumentParser(config, logger);
     this.multimodalActions = new MultimodalActionService({
       aiClient,
@@ -975,6 +1017,14 @@ export class TelegramAIBot {
   createMenuKeyboard(locale) {
     return Markup.inlineKeyboard([
       [
+        Markup.button.callback(locale === 'en' ? 'AI model' : 'AI 模型', 'menu:models'),
+        Markup.button.callback(locale === 'en' ? 'Live voice' : '实时语音', 'menu:tts')
+      ],
+      [
+        Markup.button.callback(locale === 'en' ? 'Image' : '图片功能', 'menu:image'),
+        Markup.button.callback(locale === 'en' ? 'File' : '文件分析', 'menu:file')
+      ],
+      [
         Markup.button.callback(this.ui(locale, 'help'), 'menu:help'),
         Markup.button.callback(this.ui(locale, 'settings'), 'menu:settings')
       ],
@@ -1117,6 +1167,10 @@ export class TelegramAIBot {
         Markup.button.callback(labels.configCheck, 'admin_pick:config_check')
       ],
       [
+        Markup.button.callback(locale === 'en' ? 'AI providers' : 'AI Provider', 'admin_pick:ai_providers'),
+        Markup.button.callback(locale === 'en' ? 'Test all' : '测试全部', 'admin_pick:ai_test_all')
+      ],
+      [
         Markup.button.callback(labels.version, 'admin_pick:version'),
         Markup.button.callback(labels.docs, 'admin_pick:docs')
       ],
@@ -1156,6 +1210,108 @@ export class TelegramAIBot {
       ...chunkItems(buttons, 2),
       [Markup.button.callback('返回主菜单 / Main menu', 'menu:back')]
     ]);
+  }
+
+  getAIProviderLabel(providerId = '') {
+    return this.providerManager?.getProviderLabel?.(providerId) || PROVIDER_LABELS[providerId] || providerId || 'unknown';
+  }
+
+  getEffectiveAISettings(userId) {
+    const stored = this.db.getUserAISettings?.(userId) || {};
+    const providerId = stored.providerId || this.config.defaultAIProvider || this.config.aiProvider;
+    const models = this.providerManager?.getProviderModels?.(providerId) || this.config.availableModels || [];
+    return {
+      userId: String(userId || ''),
+      providerId,
+      modelId: stored.modelId || models[0] || this.config.defaultModel,
+      fallbackEnabled: Object.hasOwn(stored, 'fallbackEnabled')
+        ? Boolean(stored.fallbackEnabled)
+        : Boolean(this.config.enableProviderFallback)
+    };
+  }
+
+  getProviderModelsForMenu(providerId = '') {
+    const models = this.providerManager?.getProviderModels?.(providerId) || [];
+    return models.length > 0 ? models : this.config.availableModels || [];
+  }
+
+  createAIProviderKeyboard(settings = {}, locale = 'zh') {
+    const currentProvider = settings.providerId || this.config.aiProvider;
+    const providerRows = chunkItems(
+      AI_PROVIDER_MENU_ORDER.map((providerId) => {
+        const configured = providerId === 'auto' || this.providerManager?.isConfigured?.(providerId);
+        const enabled = providerId === 'auto' || this.providerManager?.isEnabled?.(providerId);
+        const current = providerId === currentProvider;
+        const status = current ? '[x] ' : configured && enabled ? '' : '[ ] ';
+        return Markup.button.callback(
+          `${status}${AI_PROVIDER_ICONS[providerId] || this.getAIProviderLabel(providerId)}`,
+          providerId === 'auto' ? 'ai:auto' : `ai:p:${providerId}`
+        );
+      }),
+      2
+    );
+    const fallbackTarget = settings.fallbackEnabled ? 'off' : 'on';
+    const fallbackLabel = settings.fallbackEnabled
+      ? (locale === 'en' ? 'Fallback: on' : '自动备用：开')
+      : (locale === 'en' ? 'Fallback: off' : '自动备用：关');
+
+    return Markup.inlineKeyboard([
+      ...providerRows,
+      [
+        Markup.button.callback(locale === 'en' ? 'Choose model' : '选择模型', 'ai:models'),
+        Markup.button.callback(locale === 'en' ? 'Test current' : '测试当前模型', 'ai:test')
+      ],
+      [
+        Markup.button.callback(fallbackLabel, `ai:fb:${fallbackTarget}`),
+        Markup.button.callback(locale === 'en' ? 'Provider status' : 'Provider 状态', 'ai:status')
+      ],
+      [Markup.button.callback(locale === 'en' ? 'Main menu' : '返回主菜单', 'menu:back')]
+    ]);
+  }
+
+  createAIModelKeyboard(providerId = '', currentModel = '', locale = 'zh') {
+    const models = this.getProviderModelsForMenu(providerId);
+    const buttons = models.map((model, index) =>
+      Markup.button.callback(
+        `${model === currentModel ? '[x] ' : ''}${model}`,
+        `ai:m:${index}`
+      )
+    );
+    return Markup.inlineKeyboard([
+      ...chunkItems(buttons, 1),
+      [Markup.button.callback(locale === 'en' ? 'Back' : '返回', 'ai:back')],
+      [Markup.button.callback(locale === 'en' ? 'Main menu' : '返回主菜单', 'menu:back')]
+    ]);
+  }
+
+  formatAISettingsPanel(settings = {}, locale = 'zh') {
+    const providerId = settings.providerId || this.config.aiProvider;
+    const modelId = settings.modelId || this.config.defaultModel;
+    const provider = this.getAIProviderLabel(providerId);
+    const fallback = settings.fallbackEnabled
+      ? (locale === 'en' ? 'on' : '已开启')
+      : (locale === 'en' ? 'off' : '已关闭');
+    const status = this.providerManager?.listProviders?.().find((item) => item.id === providerId)?.status || 'unknown';
+
+    if (locale === 'en') {
+      return [
+        'AI model',
+        '',
+        `Current provider: ${provider}`,
+        `Current model: ${modelId || '-'}`,
+        `Fallback: ${fallback}`,
+        `Status: ${status}`
+      ].join('\n');
+    }
+
+    return [
+      'AI 模型',
+      '',
+      `当前 Provider：${provider}`,
+      `当前模型：${modelId || '-'}`,
+      `自动备用：${fallback}`,
+      `状态：${status}`
+    ].join('\n');
   }
 
   createPersonaKeyboard(currentPersona) {
@@ -1696,6 +1852,10 @@ export class TelegramAIBot {
 
       const completion = await this.completeWithAiFallback({
         scope: 'translation',
+        capability: 'translation',
+        userId: ctx.from?.id,
+        preferredProvider: this.config.translationProvider,
+        fallbackEnabled: true,
         model,
         locale: this.getLocale(ctx),
         request: {
@@ -1776,6 +1936,9 @@ export class TelegramAIBot {
   }
 
   getProviderCapabilities() {
+    if (this.activeServiceProvider && this.providerManager) {
+      return this.providerManager.getProviderCapabilities(this.activeServiceProvider);
+    }
     return (
       this.aiClient.getCapabilities?.() || {
         chat: true,
@@ -1789,6 +1952,42 @@ export class TelegramAIBot {
         liveTranslate: false
       }
     );
+  }
+
+  async withProviderForCapability(capability, preferredProvider, callback) {
+    if (!this.providerManager) {
+      return callback();
+    }
+
+    const selected = this.providerManager.selectProvider({
+      capability,
+      preferredProvider,
+      fallbackEnabled: true
+    });
+    if (!selected?.client) {
+      return callback(null);
+    }
+
+    const previous = {
+      activeServiceProvider: this.activeServiceProvider,
+      aiClient: this.aiClient,
+      multimodalClient: this.multimodalActions.aiClient,
+      audioClient: this.audioOrchestrator.aiClient
+    };
+
+    this.activeServiceProvider = selected.providerId;
+    this.aiClient = selected.client;
+    this.multimodalActions.aiClient = selected.client;
+    this.audioOrchestrator.aiClient = selected.client;
+
+    try {
+      return await callback(selected);
+    } finally {
+      this.activeServiceProvider = previous.activeServiceProvider;
+      this.aiClient = previous.aiClient;
+      this.multimodalActions.aiClient = previous.multimodalClient;
+      this.audioOrchestrator.aiClient = previous.audioClient;
+    }
   }
 
   extractJsonObject(text = '') {
@@ -1836,6 +2035,10 @@ export class TelegramAIBot {
     try {
       const completion = await this.completeWithAiFallback({
         scope: 'router',
+        capability: 'router',
+        userId: ctx.from?.id,
+        preferredProvider: this.config.routerProvider,
+        fallbackEnabled: true,
         model,
         locale: this.getLocale(ctx),
         request: {
@@ -2117,7 +2320,37 @@ export class TelegramAIBot {
     );
   }
 
-  async completeWithAiFallback({ scope = 'chat', model = '', request = {}, locale = 'zh' } = {}) {
+  async completeWithAiFallback({
+    scope = 'chat',
+    capability = 'chat',
+    model = '',
+    request = {},
+    locale = 'zh',
+    userId = '',
+    preferredProvider = '',
+    fallbackEnabled = this.config.enableProviderFallback
+  } = {}) {
+    if (this.providerManager) {
+      const managed = await this.providerManager.execute({
+        userId,
+        capability,
+        preferredProvider: preferredProvider || this.config.aiProvider,
+        preferredModel: model,
+        fallbackEnabled,
+        request,
+        scope
+      });
+      const normalizedResult = this.normalizeAiResult(managed.result, request.messages || []);
+      return {
+        result: normalizedResult,
+        model: managed.model,
+        providerId: managed.providerId,
+        providerName: managed.providerName,
+        switched: managed.switched,
+        attempted: managed.attempted
+      };
+    }
+
     const candidates = this.buildAiModelCandidates(model);
     const skippedCooldowns = [];
     let lastQuotaError = null;
@@ -2329,6 +2562,9 @@ export class TelegramAIBot {
   }
 
   getProviderName() {
+    if (this.activeServiceProvider) {
+      return this.getAIProviderLabel(this.activeServiceProvider);
+    }
     return this.aiClient.getProviderName?.() || this.config.aiProvider || 'unknown';
   }
 
@@ -2974,12 +3210,10 @@ export class TelegramAIBot {
   async handleModels(ctx) {
     const user = this.db.findUser(ctx.from.id);
     const locale = this.getLocale(ctx, user);
-
-    const current = user?.preferredModel || this.config.defaultModel;
-    const models = this.config.availableModels.length > 0 ? this.config.availableModels.join(', ') : this.config.defaultModel;
+    const settings = this.getEffectiveAISettings(ctx.from.id);
     await ctx.reply(
-      `${this.t(locale, 'currentModel', { model: current })}\n${this.t(locale, 'availableModels', { models })}`,
-      this.createModelKeyboard(current)
+      this.formatAISettingsPanel(settings, locale),
+      this.createAIProviderKeyboard(settings, locale)
     );
   }
 
@@ -3005,6 +3239,7 @@ export class TelegramAIBot {
     }
 
     await this.db.setUserSettings(ctx.from.id, { preferredModel: arg });
+    this.db.setUserModel?.(ctx.from.id, arg);
     await ctx.reply(this.t(locale, 'modelSwitched', { model: arg }), this.createModelKeyboard(arg));
   }
 
@@ -3173,6 +3408,10 @@ export class TelegramAIBot {
 
       const completion = await this.completeWithAiFallback({
         scope: mode === 'translate' ? 'translation' : 'chat',
+        capability: mode === 'translate' ? 'translation' : 'chat',
+        userId: ctx.from?.id,
+        preferredProvider: mode === 'translate' ? this.config.translationProvider : this.getEffectiveAISettings(ctx.from?.id).providerId,
+        fallbackEnabled: true,
         model: mode === 'translate'
           ? this.config.translationModel || this.config.defaultModel
           : this.config.defaultModel,
@@ -3397,10 +3636,14 @@ export class TelegramAIBot {
 
     try {
       await ctx.sendChatAction('upload_photo');
-      const result = await this.multimodalActions.runImageAction({
-        mode,
-        prompt
-      });
+      const result = await this.withProviderForCapability(
+        mode === 'edit' ? 'imageEditing' : 'imageGeneration',
+        this.config.imageProvider,
+        () => this.multimodalActions.runImageAction({
+          mode,
+          prompt
+        })
+      );
       if (!result.ok) {
         const textKey = mode === 'edit' ? 'imageEditUnsupported' : 'imageUnsupported';
         await ctx.reply(this.t(locale, textKey, { provider: this.getProviderName() }));
@@ -3432,12 +3675,16 @@ export class TelegramAIBot {
     const file = await readTelegramFile(ctx, photo.file_id, 'image.jpg', 'image/jpeg');
     try {
       await ctx.sendChatAction('upload_photo');
-      const result = await this.multimodalActions.runImageAction({
-        mode: 'edit',
-        prompt,
-        imageBuffer: file.buffer,
-        mimeType: file.mimeType
-      });
+      const result = await this.withProviderForCapability(
+        'imageEditing',
+        this.config.imageProvider,
+        () => this.multimodalActions.runImageAction({
+          mode: 'edit',
+          prompt,
+          imageBuffer: file.buffer,
+          mimeType: file.mimeType
+        })
+      );
       if (!result.ok) {
         await ctx.reply(this.t(locale, 'imageEditUnsupported', { provider: this.getProviderName() }));
         return;
@@ -3477,12 +3724,16 @@ export class TelegramAIBot {
         voice.mime_type || 'audio/ogg'
       );
 
-      const result = await this.audioOrchestrator.transcribeIncomingAudio({
-        file,
-        locale,
-        userText: '',
-        prompt: 'Transcribe the user audio accurately. Output only the transcription text.'
-      });
+      const result = await this.withProviderForCapability(
+        'speechTranscription',
+        this.config.transcriptionProvider,
+        () => this.audioOrchestrator.transcribeIncomingAudio({
+          file,
+          locale,
+          userText: '',
+          prompt: 'Transcribe the user audio accurately. Output only the transcription text.'
+        })
+      );
 
       if (!result.ok) {
         await ctx.reply(this.formatUserFacingError(result.error || 'voice transcription failed', locale));
@@ -3509,15 +3760,21 @@ export class TelegramAIBot {
       return;
     }
 
-    const capabilities = this.getProviderCapabilities();
-    if (!capabilities.speechSynthesis) {
+    const supportsSpeech = this.providerManager
+      ? this.providerManager.hasAvailableProvider('speechSynthesis', this.config.ttsProvider)
+      : this.getProviderCapabilities().speechSynthesis;
+    if (!supportsSpeech) {
       await ctx.reply(this.t(locale, 'ttsUnsupported', { provider: this.getProviderName() }));
       return;
     }
 
     try {
       await ctx.sendChatAction('record_voice');
-      const result = await this.audioOrchestrator.textToSpeech({ input: text });
+      const result = await this.withProviderForCapability(
+        'speechSynthesis',
+        this.config.ttsProvider,
+        () => this.audioOrchestrator.textToSpeech({ input: text })
+      );
       if (!result.ok) {
         await ctx.reply(this.formatUserFacingError(result.error || 'unknown error', locale));
         return;
@@ -3900,6 +4157,67 @@ export class TelegramAIBot {
 
       await ctx.reply(lines.join("\n"), this.createAdminActionKeyboard(locale));
     }
+  }
+
+  async handleAdminProviderStatus(ctx) {
+    const locale = this.getLocale(ctx);
+    if (!this.isAdmin(ctx)) {
+      await ctx.reply(this.t(locale, 'adminOnly'));
+      return;
+    }
+
+    const providers = this.providerManager?.listProviders?.() || [];
+    const lines = [
+      locale === 'en' ? 'AI providers' : 'AI Provider 状态',
+      '',
+      ...providers.map((item) => {
+        const model = item.models?.[0] || '-';
+        return `${item.name}: ${item.status} / ${model}`;
+      })
+    ];
+    await ctx.reply(lines.join('\n'), this.createAdminActionKeyboard(locale));
+  }
+
+  async handleAdminProviderTestAll(ctx) {
+    const locale = this.getLocale(ctx);
+    if (!this.isAdmin(ctx)) {
+      await ctx.reply(this.t(locale, 'adminOnly'));
+      return;
+    }
+
+    const providers = (this.providerManager?.listProviders?.() || [])
+      .filter((item) => item.configured && item.enabled && item.models?.[0]);
+    if (providers.length === 0) {
+      await ctx.reply(locale === 'en' ? 'No configured providers to test.' : '没有可测试的已配置 Provider。', this.createAdminActionKeyboard(locale));
+      return;
+    }
+
+    const lines = [locale === 'en' ? 'AI provider tests' : 'AI Provider 测试', ''];
+    for (const provider of providers) {
+      try {
+        const completion = await this.completeWithAiFallback({
+          scope: 'admin_test',
+          capability: 'chat',
+          preferredProvider: provider.id,
+          fallbackEnabled: false,
+          model: provider.models[0],
+          locale,
+          request: {
+            messages: [
+              { role: 'system', content: 'Reply with a very short OK message.' },
+              { role: 'user', content: 'Reply exactly: AI_OK' }
+            ],
+            tools: [],
+            temperature: 0
+          }
+        });
+        lines.push(`${provider.name}: OK (${completion.model || provider.models[0]})`);
+      } catch (error) {
+        lines.push(`${provider.name}: FAIL (${this.formatUserFacingError(error, 'en').split('\n')[0]})`);
+      }
+    }
+
+    await ctx.reply(lines.join('\n'), this.createAdminActionKeyboard(locale));
   }
 
   async handleAdminQuota(ctx) {
@@ -4289,6 +4607,16 @@ export class TelegramAIBot {
       return;
     }
 
+    if (target === 'ai_providers') {
+      await this.handleAdminProviderStatus(ctx);
+      return;
+    }
+
+    if (target === 'ai_test_all') {
+      await this.handleAdminProviderTestAll(ctx);
+      return;
+    }
+
     if (target === 'back') {
       await ctx.reply('🛠 管理员面板', this.createAdminActionKeyboard(locale));
       return;
@@ -4616,6 +4944,10 @@ export class TelegramAIBot {
 
     const completion = await this.completeWithAiFallback({
       scope: 'translation',
+      capability: 'translation',
+      userId: state.userId,
+      preferredProvider: this.config.translationProvider,
+      fallbackEnabled: true,
       model: this.config.translationModel || state.model || this.config.defaultModel,
       locale: state.locale || 'zh',
       request: {
@@ -4641,15 +4973,20 @@ export class TelegramAIBot {
       return null;
     }
     const user = this.db.findUser(state.userId);
-    const model = user?.preferredModel || state.model || this.config.defaultModel;
+    const settings = this.getEffectiveAISettings(state.userId);
+    const model = settings.modelId || user?.preferredModel || state.model || this.config.defaultModel;
     const completion = await this.completeWithAiFallback({
       scope: 'chat',
+      capability: Array.isArray(state.preparedMessage?.content) ? 'vision' : 'chat',
+      userId: state.userId,
+      preferredProvider: settings.providerId,
+      fallbackEnabled: settings.fallbackEnabled,
       model,
       locale: state.locale || 'zh',
       request: {
         messages: [state.systemMessage, ...(state.historyBefore || []), state.preparedMessage],
         tools:
-        this.config.enableToolCalls && this.getProviderCapabilities().toolCalls
+        this.config.enableToolCalls
           ? this.toolRegistry.getDefinitions()
           : [],
         toolRunner: async (toolCall) => {
@@ -4681,6 +5018,159 @@ export class TelegramAIBot {
     };
   }
 
+  async handleAISettingsCallback(ctx) {
+    const action = String(ctx.match?.[1] || '');
+    const locale = this.getLocale(ctx);
+    const userId = ctx.from?.id;
+    await ctx.answerCbQuery();
+
+    if (!userId) return;
+
+    const [kind, value] = action.split(':');
+    let settings = this.getEffectiveAISettings(userId);
+
+    if (action === 'back') {
+      await this.editAssistantMessageText(
+        ctx,
+        this.formatAISettingsPanel(settings, locale),
+        this.createAIProviderKeyboard(settings, locale)
+      );
+      return;
+    }
+
+    if (action === 'auto') {
+      settings = this.db.setUserAISettings?.(userId, {
+        providerId: 'auto',
+        modelId: '',
+        fallbackEnabled: true
+      }) || settings;
+      settings = this.getEffectiveAISettings(userId);
+      await this.editAssistantMessageText(
+        ctx,
+        this.formatAISettingsPanel(settings, locale),
+        this.createAIProviderKeyboard(settings, locale)
+      );
+      return;
+    }
+
+    if (kind === 'p') {
+      const providerId = value;
+      if (!AI_PROVIDER_MENU_ORDER.includes(providerId) || providerId === 'auto') {
+        await ctx.reply(locale === 'en' ? 'Unsupported provider.' : '不支持这个 Provider。');
+        return;
+      }
+      const defaultModel = this.providerManager?.getProviderModels?.(providerId)?.[0] || '';
+      settings = this.db.setUserAISettings?.(userId, {
+        providerId,
+        modelId: defaultModel,
+        fallbackEnabled: settings.fallbackEnabled
+      }) || settings;
+      settings = this.getEffectiveAISettings(userId);
+      await this.editAssistantMessageText(
+        ctx,
+        this.formatAISettingsPanel(settings, locale),
+        this.createAIProviderKeyboard(settings, locale)
+      );
+      return;
+    }
+
+    if (kind === 'm') {
+      const index = Number.parseInt(value || '', 10);
+      const models = this.getProviderModelsForMenu(settings.providerId);
+      const model = Number.isInteger(index) ? models[index] : '';
+      if (!model) {
+        await ctx.reply(locale === 'en' ? 'Model is not available.' : '这个模型不可用。');
+        return;
+      }
+      this.db.setUserModel?.(userId, model);
+      await this.db.setUserSettings?.(userId, { preferredModel: model });
+      settings = this.getEffectiveAISettings(userId);
+      await this.editAssistantMessageText(
+        ctx,
+        this.formatAISettingsPanel(settings, locale),
+        this.createAIProviderKeyboard(settings, locale)
+      );
+      return;
+    }
+
+    if (action === 'models') {
+      await this.editAssistantMessageText(
+        ctx,
+        locale === 'en' ? 'Choose a model:' : '请选择模型：',
+        this.createAIModelKeyboard(settings.providerId, settings.modelId, locale)
+      );
+      return;
+    }
+
+    if (kind === 'fb') {
+      const enabled = value === 'on';
+      this.db.setUserFallbackEnabled?.(userId, enabled);
+      settings = this.getEffectiveAISettings(userId);
+      await this.editAssistantMessageText(
+        ctx,
+        this.formatAISettingsPanel(settings, locale),
+        this.createAIProviderKeyboard(settings, locale)
+      );
+      return;
+    }
+
+    if (action === 'status') {
+      const rows = this.providerManager?.listProviders?.() || [];
+      const lines = [
+        locale === 'en' ? 'Provider status' : 'Provider 状态',
+        '',
+        ...rows.map((item) => `${item.name}: ${item.status}${item.models?.[0] ? ` (${item.models[0]})` : ''}`)
+      ];
+      await this.editAssistantMessageText(ctx, lines.join('\n'), this.createAIProviderKeyboard(settings, locale));
+      return;
+    }
+
+    if (action === 'test') {
+      try {
+        await ctx.sendChatAction?.('typing');
+        const completion = await this.completeWithAiFallback({
+          scope: 'chat',
+          capability: 'chat',
+          userId,
+          preferredProvider: settings.providerId,
+          fallbackEnabled: settings.fallbackEnabled,
+          model: settings.modelId,
+          locale,
+          request: {
+            messages: [
+              { role: 'system', content: 'Reply with a very short OK message.' },
+              { role: 'user', content: 'Reply exactly: AI_OK' }
+            ],
+            tools: [],
+            temperature: 0
+          }
+        });
+        const lines = [
+          locale === 'en' ? 'AI test passed' : 'AI 测试通过',
+          '',
+          `Provider: ${this.getAIProviderLabel(completion.providerId || settings.providerId)}`,
+          `Model: ${completion.model || settings.modelId}`,
+          `Reply: ${completion.result?.text || ''}`
+        ];
+        await this.editAssistantMessageText(ctx, lines.join('\n'), this.createAIProviderKeyboard(settings, locale));
+      } catch (error) {
+        const lines = [
+          locale === 'en' ? 'AI test failed' : 'AI 测试失败',
+          '',
+          this.formatUserFacingError(error, locale)
+        ];
+        await this.editAssistantMessageText(ctx, lines.join('\n'), this.createAIProviderKeyboard(settings, locale));
+      }
+      return;
+    }
+
+    await this.editAssistantMessageText(
+      ctx,
+      this.formatAISettingsPanel(settings, locale),
+      this.createAIProviderKeyboard(settings, locale)
+    );
+  }
+
   async handleModelCallback(ctx) {
     const model = ctx.match[1];
     const locale = this.getLocale(ctx);
@@ -4690,6 +5180,7 @@ export class TelegramAIBot {
       return;
     }
     await this.db.setUserSettings(ctx.from.id, { preferredModel: model });
+    this.db.setUserModel?.(ctx.from.id, model);
     await this.editAssistantMessageText(ctx, this.t(locale, 'modelSwitched', { model }), this.createModelKeyboard(model));
   }
 
@@ -5018,7 +5509,8 @@ export class TelegramAIBot {
     // intent-classification request.
     const routedIntent = null;
 
-    let activeAiModel = user?.preferredModel || chat?.defaultModel || this.config.defaultModel;
+    const aiSettings = this.getEffectiveAISettings(ctx.from.id);
+    let activeAiModel = aiSettings.modelId || user?.preferredModel || chat?.defaultModel || this.config.defaultModel;
 
     try {
       const model = activeAiModel;
@@ -5030,6 +5522,7 @@ export class TelegramAIBot {
 
       await ctx.sendChatAction('typing');
       const prepared = await this.prepareUserMessage(ctx);
+      const requestCapability = ctx.message?.photo?.length ? 'vision' : 'chat';
       const sessionId = createSessionId(ctx);
       const storedContext = this.db.getConversationForContext(sessionId, {
         maxMessages: this.config.maxHistoryMessages,
@@ -5050,12 +5543,16 @@ export class TelegramAIBot {
       const toolUsage = { count: 0 };
       const completion = await this.completeWithAiFallback({
         scope: 'chat',
+        capability: requestCapability,
+        userId: ctx.from.id,
+        preferredProvider: aiSettings.providerId,
+        fallbackEnabled: aiSettings.fallbackEnabled,
         model,
         locale,
         request: {
           messages,
           tools:
-          this.config.enableToolCalls && this.getProviderCapabilities().toolCalls
+          this.config.enableToolCalls
             ? this.toolRegistry.getDefinitions()
             : [],
           toolRunner: async (toolCall) => {
@@ -5088,6 +5585,15 @@ export class TelegramAIBot {
       const assistantRef = this.db.getLatestAssistantMessageReference(sessionId);
 
       const assistantText = result.text || this.t(locale, 'noReply');
+      const visibleAssistantText = completion.switched
+        ? [
+            locale === 'en'
+              ? `Current model was busy, switched to ${this.getAIProviderLabel(completion.providerId)}.`
+              : `当前模型暂时繁忙，已自动切换到 ${this.getAIProviderLabel(completion.providerId)}。`,
+            '',
+            assistantText
+          ].join('\n')
+        : assistantText;
 
       try {
         await this.memoryManager.updateAfterAssistantReply({
@@ -5095,13 +5601,13 @@ export class TelegramAIBot {
           chatId: ctx.chat.id,
           memoryContext,
           userText: text || caption,
-          assistantText
+          assistantText: visibleAssistantText
         });
       } catch (error) {
         this.logger.warn('Failed to update memory after reply', { error: this.formatLogError(error) });
       }
 
-      const reply = await this.sendAssistantReply(ctx, assistantText);
+      const reply = await this.sendAssistantReply(ctx, visibleAssistantText);
       if (reply?.lastMessageId) {
         const state = this.createAssistantActionState({
           chatId: ctx.chat.id,
@@ -5116,7 +5622,7 @@ export class TelegramAIBot {
           memoryContext,
           routedIntent,
           sourceText: typeof prepared.message?.content === 'string' ? prepared.message.content : text || caption || '',
-          replyText: assistantText,
+          replyText: visibleAssistantText,
           assistantMessageId: assistantRef?.messageId || '',
           assistantMessageVersionId: assistantRef?.messageVersionId || ''
         });
@@ -5149,12 +5655,10 @@ export class TelegramAIBot {
     if (ctx.message.photo?.length) {
       const photo = ctx.message.photo[ctx.message.photo.length - 1];
       const file = await readTelegramFile(ctx, photo.file_id, 'image.jpg', 'image/jpeg');
-      const prepared = this.multimodalActions.createImageUnderstandingMessage({
-        locale,
-        text: decoratedText,
-        file
-      });
-      if (!prepared.ok) {
+      const supportsVision = this.providerManager
+        ? this.providerManager.hasAvailableProvider('vision', this.config.visionProvider)
+        : this.getProviderCapabilities().vision;
+      if (!supportsVision) {
         return {
           message: {
             role: 'user',
@@ -5168,7 +5672,13 @@ export class TelegramAIBot {
         };
       }
       return {
-        message: prepared.message
+        message: {
+          role: 'user',
+          content: [
+            { type: 'text', text: this.multimodalActions.buildVisionPrompt(locale, decoratedText) },
+            { type: 'image_url', image_url: { url: toDataUri(file.buffer, file.mimeType) } }
+          ]
+        }
       };
     }
 
@@ -5180,11 +5690,13 @@ export class TelegramAIBot {
         voice.file_name || 'audio.ogg',
         voice.mime_type || 'audio/ogg'
       );
-      const audioResult = await this.audioOrchestrator.transcribeIncomingAudio({
-        file,
-        locale,
-        userText: decoratedText,
-        prompt: 'Transcribe the user audio accurately.'
+      const audioResult = await this.withProviderForCapability('speechTranscription', this.config.transcriptionProvider, () => {
+        return this.audioOrchestrator.transcribeIncomingAudio({
+          file,
+          locale,
+          userText: decoratedText,
+          prompt: 'Transcribe the user audio accurately.'
+        });
       });
       if (!audioResult.ok) {
         return {

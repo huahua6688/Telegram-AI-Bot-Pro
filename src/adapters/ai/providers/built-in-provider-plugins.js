@@ -1,7 +1,13 @@
 import { OpenAICompatibleClient } from '../../../services/openai-compatible-client.js';
+import { OpenAIClient } from '../../../services/openai-client.js';
 import { AnthropicClient } from '../../../services/anthropic-client.js';
 import { GeminiClient } from '../../../services/gemini-client.js';
 import { GeminiLiveClient } from '../../../services/gemini-live-client.js';
+import { GroqClient } from '../../../services/groq-client.js';
+import { OpenRouterClient } from '../../../services/openrouter-client.js';
+import { GitHubModelsClient } from '../../../services/github-models-client.js';
+import { HuggingFaceClient } from '../../../services/huggingface-client.js';
+import { MistralClient } from '../../../services/mistral-client.js';
 import { QwenClient } from '../../../services/qwen-client.js';
 import { GrokClient } from '../../../services/grok-client.js';
 import { DeepSeekClient } from '../../../services/deepseek-client.js';
@@ -34,6 +40,23 @@ function openAICompatiblePlugin() {
       }
     },
     createClient: (config, logger) => new OpenAICompatibleClient(config, logger)
+  };
+}
+
+function openAIPlugin() {
+  return {
+    id: 'openai',
+    capabilities: {
+      chat: true,
+      toolCalls: true,
+      vision: true,
+      imageGeneration: true,
+      imageEditing: true,
+      speechSynthesis: true,
+      speechTranscription: true
+    },
+    validateConfig: (config) => requireConfigValue(config.openaiApiKey, 'OPENAI_API_KEY (or AI_API_KEY)', 'openai'),
+    createClient: (config, logger) => new OpenAIClient(config, logger)
   };
 }
 
@@ -76,6 +99,67 @@ function geminiLivePlugin() {
     },
     validateConfig: (config) => requireConfigValue(config.geminiLiveApiKey, 'GEMINI_LIVE_API_KEY (or GEMINI_API_KEY / AI_API_KEY)', 'gemini-live'),
     createClient: (config, logger) => new GeminiLiveClient(config, logger)
+  };
+}
+
+function groqPlugin() {
+  return {
+    id: 'groq',
+    capabilities: {
+      chat: true,
+      toolCalls: true
+    },
+    validateConfig: (config) => requireConfigValue(config.groqApiKey, 'GROQ_API_KEY', 'groq'),
+    createClient: (config, logger) => new GroqClient(config, logger)
+  };
+}
+
+function openRouterPlugin() {
+  return {
+    id: 'openrouter',
+    capabilities: {
+      chat: true,
+      toolCalls: true,
+      vision: true
+    },
+    validateConfig: (config) => requireConfigValue(config.openrouterApiKey, 'OPENROUTER_API_KEY', 'openrouter'),
+    createClient: (config, logger) => new OpenRouterClient(config, logger)
+  };
+}
+
+function githubModelsPlugin() {
+  return {
+    id: 'github-models',
+    capabilities: {
+      chat: true,
+      toolCalls: true,
+      vision: true
+    },
+    validateConfig: (config) => requireConfigValue(config.githubModelsApiKey, 'GITHUB_MODELS_API_KEY (or GITHUB_TOKEN)', 'github-models'),
+    createClient: (config, logger) => new GitHubModelsClient(config, logger)
+  };
+}
+
+function huggingFacePlugin() {
+  return {
+    id: 'huggingface',
+    capabilities: {
+      chat: true
+    },
+    validateConfig: (config) => requireConfigValue(config.huggingfaceApiKey, 'HUGGINGFACE_API_KEY (or HF_TOKEN)', 'huggingface'),
+    createClient: (config, logger) => new HuggingFaceClient(config, logger)
+  };
+}
+
+function mistralPlugin() {
+  return {
+    id: 'mistral',
+    capabilities: {
+      chat: true,
+      toolCalls: true
+    },
+    validateConfig: (config) => requireConfigValue(config.mistralApiKey, 'MISTRAL_API_KEY', 'mistral'),
+    createClient: (config, logger) => new MistralClient(config, logger)
   };
 }
 
@@ -146,9 +230,15 @@ function doubaoPlugin() {
 
 export const builtInProviderPlugins = [
   openAICompatiblePlugin,
+  openAIPlugin,
   anthropicPlugin,
   geminiPlugin,
   geminiLivePlugin,
+  groqPlugin,
+  openRouterPlugin,
+  githubModelsPlugin,
+  huggingFacePlugin,
+  mistralPlugin,
   qwenPlugin,
   grokPlugin,
   deepSeekPlugin,

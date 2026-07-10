@@ -11,6 +11,10 @@ function toProfile(rawConfig) {
         apiKey: rawConfig.aiApiKey,
         baseUrl: rawConfig.aiBaseUrl
       },
+      openai: {
+        apiKey: rawConfig.openaiApiKey,
+        baseUrl: rawConfig.openaiBaseUrl
+      },
       anthropic: {
         apiKey: rawConfig.anthropicApiKey,
         baseUrl: rawConfig.anthropicBaseUrl,
@@ -25,6 +29,26 @@ function toProfile(rawConfig) {
         baseUrl: rawConfig.geminiLiveBaseUrl,
         transcriptionModel: rawConfig.geminiLiveTranscriptionModel,
         ttsModel: rawConfig.geminiLiveTtsModel
+      },
+      groq: {
+        apiKey: rawConfig.groqApiKey,
+        baseUrl: rawConfig.groqBaseUrl
+      },
+      openrouter: {
+        apiKey: rawConfig.openrouterApiKey,
+        baseUrl: rawConfig.openrouterBaseUrl
+      },
+      githubModels: {
+        apiKey: rawConfig.githubModelsApiKey,
+        baseUrl: rawConfig.githubModelsBaseUrl
+      },
+      huggingface: {
+        apiKey: rawConfig.huggingfaceApiKey,
+        baseUrl: rawConfig.huggingfaceBaseUrl
+      },
+      mistral: {
+        apiKey: rawConfig.mistralApiKey,
+        baseUrl: rawConfig.mistralBaseUrl
       },
       qwen: {
         apiKey: rawConfig.qwenApiKey,

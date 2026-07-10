@@ -1,5 +1,93 @@
 # Telegram-AI-Bot-Pro
 
+## Multi Provider AI
+
+This bot supports per-user AI provider and model selection from Telegram inline buttons. Open **AI 模型 / AI model** in the main menu to switch between:
+
+- Gemini
+- Gemini Live
+- Groq
+- OpenRouter
+- GitHub Models
+- Hugging Face
+- Mistral
+- OpenAI
+- OpenAI-compatible custom gateways
+- Anthropic Claude
+- DeepSeek
+- Qwen
+- Grok
+- GLM
+- Doubao
+
+Gemini and Gemini Live are intentionally separate providers. Normal Gemini uses `generateContent` for text and vision. Gemini Live is reserved for live/audio-oriented transcription and TTS paths, and Telegram voice messages are handled as: voice file -> transcription provider -> normal AI reply. True continuous two-way WebSocket voice can be added later through a Web App surface.
+
+### Zeabur Minimum Config
+
+For a first deploy, set:
+
+```env
+BOT_TOKEN=...
+ADMIN_USER_IDS=...
+DATABASE_FILE=/data/bot-data.db
+DATA_FILE=/data/bot-data.json
+PORT=8080
+HEALTH_PORT=8080
+
+DEFAULT_AI_PROVIDER=gemini
+DEFAULT_AI_MODEL=copy_from_google_ai_studio
+GEMINI_API_KEY=...
+GEMINI_MODEL=copy_from_google_ai_studio
+```
+
+To enable automatic cross-provider fallback, add provider keys and current model IDs copied from the official consoles:
+
+```env
+ENABLE_PROVIDER_FALLBACK=true
+AI_PROVIDER_FALLBACK_ORDER=gemini,groq,openrouter
+
+GROQ_API_KEY=...
+GROQ_MODEL=copy_from_groq_console
+
+OPENROUTER_API_KEY=...
+OPENROUTER_MODEL=copy_from_openrouter_models
+OPENROUTER_HTTP_REFERER=
+OPENROUTER_APP_TITLE=Telegram AI Bot Pro
+```
+
+Free model names and quotas change. Do not hardcode model IDs from old tutorials; copy the current ID from each provider dashboard.
+
+### Provider Buttons
+
+The **AI 模型 / AI model** panel shows the current provider, current model, fallback setting, and provider health status. Callback data stays short (`ai:p:groq`, `ai:m:0`, `ai:auto`) so Telegram's 64-byte callback limit is not exceeded. User choices are saved in SQLite and survive restarts.
+
+Selecting **Auto** lets the bot choose by capability and health:
+
+- Text chat: preferred provider, then configured fallback order.
+- Image understanding: `VISION_PROVIDER`, usually Gemini.
+- Translation/router/memory: their dedicated provider variables.
+- Speech transcription/TTS: `TRANSCRIPTION_PROVIDER` and `TTS_PROVIDER`, usually Gemini Live.
+- Image generation/editing: `IMAGE_PROVIDER`.
+
+If one provider returns 401/403/404/408/429/5xx, times out, returns invalid JSON, or returns an empty result, the manager records the failure, applies a short cooldown, and tries the next eligible provider when fallback is enabled. API keys are never printed in Telegram messages or doctor output.
+
+### Common Errors
+
+- `401`: API key is wrong, expired, or attached to the wrong provider.
+- `403`: account, region, or model permission denied.
+- `404`: model ID is wrong or the provider removed it.
+- `429`: rate limit or free quota exhausted; fallback can switch provider.
+- Zeabur `BackOff`: check `BOT_TOKEN`, mounted `/data`, and `npm run doctor`.
+- Data lost after restart: mount persistent storage and keep `DATABASE_FILE=/data/bot-data.db`.
+
+Run checks locally:
+
+```bash
+npm run check:syntax
+npm run test:quick
+npm run doctor
+```
+
 <!-- ZEABUR_DEPLOY_START -->
 ## Zeabur 部署入口
 
