@@ -317,6 +317,152 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       background: rgba(220, 38, 38, .1);
     }
 
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .stat-box {
+      min-width: 0;
+      padding: 14px;
+      border-radius: 14px;
+      background: var(--tg-theme-bg-color, #f9fafb);
+    }
+
+    .stat-box span {
+      display: block;
+      color: var(--tg-theme-hint-color, #6b7280);
+      font-size: 12px;
+    }
+
+    .stat-box strong {
+      display: block;
+      margin-top: 6px;
+      font-size: 21px;
+      word-break: break-word;
+    }
+
+    .subsection {
+      margin-top: 20px;
+      padding-top: 17px;
+      border-top: 1px solid rgba(127, 127, 127, .18);
+    }
+
+    .subsection-title {
+      margin: 0 0 10px;
+      font-size: 15px;
+    }
+
+    .provider-list,
+    .user-list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .provider-item,
+    .user-item {
+      padding: 13px;
+      border-radius: 14px;
+      background: var(--tg-theme-bg-color, #f9fafb);
+    }
+
+    .provider-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .provider-name,
+    .user-name {
+      font-weight: 800;
+      word-break: break-word;
+    }
+
+    .provider-meta,
+    .user-meta {
+      margin-top: 4px;
+      color: var(--tg-theme-hint-color, #6b7280);
+      font-size: 12px;
+      line-height: 1.45;
+      word-break: break-word;
+    }
+
+    .status-pill {
+      flex: 0 0 auto;
+      padding: 5px 8px;
+      border-radius: 999px;
+      color: #166534;
+      background: rgba(22, 163, 74, .12);
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .status-pill.muted {
+      color: var(--tg-theme-hint-color, #6b7280);
+      background: rgba(127, 127, 127, .12);
+    }
+
+    .status-pill.blocked {
+      color: #991b1b;
+      background: rgba(220, 38, 38, .12);
+    }
+
+    .admin-toolbar {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    input[type="search"] {
+      min-width: 0;
+      min-height: 44px;
+      padding: 0 12px;
+      border: 1px solid rgba(127, 127, 127, .25);
+      border-radius: 12px;
+      color: var(--tg-theme-text-color, #111827);
+      background: var(--tg-theme-bg-color, #f9fafb);
+      font: inherit;
+      outline: none;
+    }
+
+    input[type="search"]:focus {
+      border-color: var(--tg-theme-button-color, #2481cc);
+    }
+
+    .compact-button {
+      width: auto;
+      min-height: 40px;
+      padding: 9px 13px;
+      font-size: 13px;
+    }
+
+    .danger-button {
+      color: #ffffff;
+      background: #dc2626;
+    }
+
+    .success-button {
+      color: #ffffff;
+      background: #16a34a;
+    }
+
+    .user-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .user-actions {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 11px;
+    }
+
     .hidden { display: none; }
 
     .small {
@@ -416,6 +562,48 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       </form>
     </section>
 
+    <section class="card hidden" id="adminPanel">
+      <div class="section-head">
+        <h2>管理员面板</h2>
+        <span class="badge">管理员</span>
+      </div>
+
+      <div id="adminNotice" class="notice hidden"></div>
+
+      <div class="stats-grid">
+        <div class="stat-box">
+          <span>用户总数</span>
+          <strong id="adminTotalUsers">—</strong>
+        </div>
+        <div class="stat-box">
+          <span>每日配额</span>
+          <strong id="adminDailyQuota">—</strong>
+        </div>
+        <div class="stat-box">
+          <span>已处理消息</span>
+          <strong id="adminMessages">—</strong>
+        </div>
+        <div class="stat-box">
+          <span>AI 调用</span>
+          <strong id="adminAiCalls">—</strong>
+        </div>
+      </div>
+
+      <div class="subsection">
+        <h3 class="subsection-title">Provider 配置状态</h3>
+        <div class="provider-list" id="adminProviderList"></div>
+      </div>
+
+      <div class="subsection">
+        <h3 class="subsection-title">用户管理</h3>
+        <div class="admin-toolbar">
+          <input id="adminUserSearch" type="search" placeholder="搜索 ID、用户名或姓名" />
+          <button class="secondary compact-button" id="adminSearchButton" type="button">搜索</button>
+        </div>
+        <div class="user-list" id="adminUserList"></div>
+      </div>
+    </section>
+
     <button class="secondary" id="closeButton" type="button" style="margin-top:14px">关闭控制台</button>
 
     <p class="small">
@@ -431,7 +619,9 @@ const MINI_APP_HTML = String.raw`<!doctype html>
     const state = {
       catalog: [],
       settings: null,
-      profile: null
+      profile: null,
+      adminLoaded: false,
+      adminUsers: []
     };
 
     const elements = {
@@ -453,6 +643,16 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       settingsNotice: document.getElementById('settingsNotice'),
       saveButton: document.getElementById('saveButton'),
       refreshButton: document.getElementById('refreshButton'),
+      adminPanel: document.getElementById('adminPanel'),
+      adminNotice: document.getElementById('adminNotice'),
+      adminTotalUsers: document.getElementById('adminTotalUsers'),
+      adminDailyQuota: document.getElementById('adminDailyQuota'),
+      adminMessages: document.getElementById('adminMessages'),
+      adminAiCalls: document.getElementById('adminAiCalls'),
+      adminProviderList: document.getElementById('adminProviderList'),
+      adminUserSearch: document.getElementById('adminUserSearch'),
+      adminSearchButton: document.getElementById('adminSearchButton'),
+      adminUserList: document.getElementById('adminUserList'),
       closeButton: document.getElementById('closeButton')
     };
 
@@ -542,6 +742,15 @@ const MINI_APP_HTML = String.raw`<!doctype html>
 
       if (elements.providerSelect.value === 'auto') {
         elements.modelSelect.disabled = true;
+      }
+
+      if (state.profile.isAdmin) {
+        elements.adminPanel.classList.remove('hidden');
+        if (!state.adminLoaded) {
+          loadAdmin();
+        }
+      } else {
+        elements.adminPanel.classList.add('hidden');
       }
     }
 
@@ -656,6 +865,234 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       }
     }
 
+    function showAdminNotice(message, type) {
+      elements.adminNotice.textContent = message;
+      elements.adminNotice.className = 'notice ' + (type || '');
+    }
+
+    function hideAdminNotice() {
+      elements.adminNotice.className = 'notice hidden';
+      elements.adminNotice.textContent = '';
+    }
+
+    function renderProviderStatus(providers) {
+      elements.adminProviderList.innerHTML = '';
+
+      (providers || []).forEach(function (provider) {
+        const item = document.createElement('div');
+        item.className = 'provider-item';
+
+        const copy = document.createElement('div');
+        const name = document.createElement('div');
+        const meta = document.createElement('div');
+        const pill = document.createElement('span');
+
+        name.className = 'provider-name';
+        name.textContent = provider.label || provider.id;
+
+        meta.className = 'provider-meta';
+        meta.textContent =
+          (provider.modelCount || 0) + ' 个模型' +
+          (provider.current ? ' · 当前默认' : '');
+
+        pill.className = provider.configured ? 'status-pill' : 'status-pill muted';
+        pill.textContent = provider.configured ? '已配置' : '未配置';
+
+        copy.appendChild(name);
+        copy.appendChild(meta);
+        item.appendChild(copy);
+        item.appendChild(pill);
+        elements.adminProviderList.appendChild(item);
+      });
+
+      if (!elements.adminProviderList.children.length) {
+        elements.adminProviderList.textContent = '暂无 Provider 信息。';
+      }
+    }
+
+    function userDisplayName(user) {
+      const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ');
+      if (fullName) return fullName;
+      if (user.username) return '@' + user.username;
+      return '用户 ' + user.id;
+    }
+
+    function renderAdminUsers(users) {
+      state.adminUsers = users || [];
+      elements.adminUserList.innerHTML = '';
+
+      state.adminUsers.forEach(function (user) {
+        const item = document.createElement('div');
+        item.className = 'user-item';
+
+        const head = document.createElement('div');
+        head.className = 'user-head';
+
+        const copy = document.createElement('div');
+        const name = document.createElement('div');
+        const meta = document.createElement('div');
+        const pill = document.createElement('span');
+
+        name.className = 'user-name';
+        name.textContent = userDisplayName(user);
+
+        meta.className = 'user-meta';
+        const parts = [
+          'ID ' + user.id,
+          user.username ? '@' + user.username : '',
+          '今日 ' + Number(user.dailyUsageCount || 0),
+          '总消息 ' + Number(user.totalMessages || 0)
+        ].filter(Boolean);
+        meta.textContent = parts.join(' · ');
+
+        if (user.isAdmin) {
+          pill.className = 'status-pill';
+          pill.textContent = '管理员';
+        } else if (user.isBlocked) {
+          pill.className = 'status-pill blocked';
+          pill.textContent = '已封禁';
+        } else {
+          pill.className = 'status-pill muted';
+          pill.textContent = '正常';
+        }
+
+        copy.appendChild(name);
+        copy.appendChild(meta);
+        head.appendChild(copy);
+        head.appendChild(pill);
+        item.appendChild(head);
+
+        const actions = document.createElement('div');
+        actions.className = 'user-actions';
+
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = user.isBlocked
+          ? 'success-button compact-button'
+          : 'danger-button compact-button';
+        button.textContent = user.isBlocked ? '解除封禁' : '封禁用户';
+        button.dataset.userId = String(user.id);
+        button.dataset.blocked = user.isBlocked ? 'true' : 'false';
+
+        const isSelf = state.profile && String(state.profile.id) === String(user.id);
+        button.disabled = Boolean(user.isAdmin || isSelf);
+        if (isSelf) button.textContent = '当前账号';
+        if (user.isAdmin && !isSelf) button.textContent = '管理员账号';
+
+        actions.appendChild(button);
+        item.appendChild(actions);
+        elements.adminUserList.appendChild(item);
+      });
+
+      if (!elements.adminUserList.children.length) {
+        const empty = document.createElement('div');
+        empty.className = 'notice';
+        empty.textContent = '没有找到用户。';
+        elements.adminUserList.appendChild(empty);
+      }
+    }
+
+    async function fetchAdminUsers(query) {
+      const params = new URLSearchParams();
+      params.set('limit', '50');
+      if (query) params.set('q', query);
+
+      const response = await fetch('/api/miniapp/admin/users?' + params.toString(), {
+        method: 'GET',
+        cache: 'no-store',
+        headers: authHeaders()
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.message || data.error || '读取用户失败');
+      }
+
+      renderAdminUsers(data.items || []);
+    }
+
+    async function loadAdmin() {
+      if (!state.profile || !state.profile.isAdmin) return;
+
+      showAdminNotice('正在读取管理员数据…', '');
+
+      try {
+        const response = await fetch('/api/miniapp/admin/overview', {
+          method: 'GET',
+          cache: 'no-store',
+          headers: authHeaders()
+        });
+
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.message || data.error || '读取管理员数据失败');
+        }
+
+        const stats = data.stats || {};
+        elements.adminTotalUsers.textContent = String(data.totalUsers ?? 0);
+        elements.adminDailyQuota.textContent = String(data.dailyQuota ?? 0);
+        elements.adminMessages.textContent = String(stats.messagesHandled ?? 0);
+        elements.adminAiCalls.textContent = String(stats.aiCalls ?? 0);
+        renderProviderStatus(data.providers || []);
+        await fetchAdminUsers(elements.adminUserSearch.value.trim());
+
+        state.adminLoaded = true;
+        hideAdminNotice();
+      } catch (error) {
+        showAdminNotice(error.message || '读取管理员数据失败。', 'failure');
+      }
+    }
+
+    function askConfirmation(message) {
+      return new Promise(function (resolve) {
+        if (tg && typeof tg.showConfirm === 'function') {
+          tg.showConfirm(message, resolve);
+          return;
+        }
+
+        resolve(window.confirm(message));
+      });
+    }
+
+    async function updateUserBlock(userId, currentlyBlocked) {
+      const nextBlocked = !currentlyBlocked;
+      const accepted = await askConfirmation(
+        nextBlocked ? '确定封禁这个用户吗？' : '确定解除这个用户的封禁吗？'
+      );
+
+      if (!accepted) return;
+
+      showAdminNotice(nextBlocked ? '正在封禁用户…' : '正在解除封禁…', '');
+
+      try {
+        const response = await fetch(
+          '/api/miniapp/admin/users/' + encodeURIComponent(userId),
+          {
+            method: 'PATCH',
+            headers: authHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ isBlocked: nextBlocked })
+          }
+        );
+
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.message || data.error || '操作失败');
+        }
+
+        await fetchAdminUsers(elements.adminUserSearch.value.trim());
+        showAdminNotice(nextBlocked ? '用户已封禁。' : '用户已解除封禁。', 'success');
+
+        if (tg && tg.HapticFeedback) {
+          tg.HapticFeedback.notificationOccurred('success');
+        }
+      } catch (error) {
+        showAdminNotice(error.message || '操作失败。', 'failure');
+        if (tg && tg.HapticFeedback) {
+          tg.HapticFeedback.notificationOccurred('error');
+        }
+      }
+    }
+
     function setupTelegram() {
       if (!tg) {
         elements.welcome.textContent = '当前在普通浏览器中打开，可查看状态；个人设置需要从 Telegram 打开。';
@@ -687,6 +1124,28 @@ const MINI_APP_HTML = String.raw`<!doctype html>
     elements.refreshButton.addEventListener('click', function () {
       loadStatus();
       loadSettings();
+      if (state.profile && state.profile.isAdmin) {
+        loadAdmin();
+      }
+    });
+
+    elements.adminSearchButton.addEventListener('click', function () {
+      fetchAdminUsers(elements.adminUserSearch.value.trim()).catch(function (error) {
+        showAdminNotice(error.message || '搜索失败。', 'failure');
+      });
+    });
+
+    elements.adminUserSearch.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        elements.adminSearchButton.click();
+      }
+    });
+
+    elements.adminUserList.addEventListener('click', function (event) {
+      const button = event.target.closest('button[data-user-id]');
+      if (!button || button.disabled) return;
+      updateUserBlock(button.dataset.userId, button.dataset.blocked === 'true');
     });
 
     elements.closeButton.addEventListener('click', function () {
@@ -915,8 +1374,22 @@ function readJsonBody(req) {
 }
 
 function isAdminUser(config, userId) {
-  const adminIds = Array.isArray(config.adminUserIds) ? config.adminUserIds : [];
-  return adminIds.map(String).includes(String(userId));
+  const rawIds = config.adminUserIds;
+  if (!rawIds) return false;
+
+  if (rawIds instanceof Set) {
+    return rawIds.has(String(userId));
+  }
+
+  if (Array.isArray(rawIds)) {
+    return rawIds.map(String).includes(String(userId));
+  }
+
+  if (typeof rawIds[Symbol.iterator] === 'function') {
+    return Array.from(rawIds, String).includes(String(userId));
+  }
+
+  return false;
 }
 
 async function getAuthenticatedUser(req, { db, config }) {
@@ -1021,6 +1494,205 @@ function authErrorResponse(error) {
   };
 }
 
+function buildAdminProviderStatus(config) {
+  return PROVIDER_ORDER
+    .filter((providerId) => providerId !== 'auto')
+    .map((providerId) => ({
+      id: providerId,
+      label: PROVIDER_LABELS[providerId] || providerId,
+      configured: hasProviderCredential(config, providerId),
+      current: String(config.aiProvider || '') === providerId,
+      modelCount: Array.isArray(config.providerModels?.[providerId])
+        ? config.providerModels[providerId].length
+        : 0
+    }));
+}
+
+function serializeAdminUser(db, user) {
+  const aiSettings = db.getUserAISettings(user.id);
+
+  return {
+    id: String(user.id),
+    username: user.username || '',
+    firstName: user.firstName || '',
+    lastName: user.lastName || '',
+    isAdmin: Boolean(user.isAdmin),
+    isBlocked: Boolean(user.isBlocked),
+    isAllowed: Boolean(user.isAllowed),
+    preferredLanguage: user.preferredLanguage || 'auto',
+    persona: user.persona || 'default',
+    dailyUsageDate: user.dailyUsageDate || '',
+    dailyUsageCount: Number(user.dailyUsageCount || 0),
+    totalMessages: Number(user.totalMessages || 0),
+    lastSeenAt: user.lastSeenAt || '',
+    aiProvider: aiSettings.providerId || 'auto',
+    aiModel: aiSettings.modelId || ''
+  };
+}
+
+async function getAuthenticatedAdmin(req, context) {
+  const auth = await getAuthenticatedUser(req, context);
+  const configuredAdmin = isAdminUser(context.config, auth.telegramUser.id);
+  const databaseAdmin = Boolean(context.db.findUser(auth.telegramUser.id)?.isAdmin);
+
+  if (!configuredAdmin && !databaseAdmin) {
+    throw new Error('ADMIN_REQUIRED');
+  }
+
+  return auth;
+}
+
+function logMiniAppAdminAction(context, {
+  actorId,
+  action,
+  targetId = '',
+  details = {},
+  req
+}) {
+  if (typeof context.db.logAudit !== 'function') return;
+
+  context.db.logAudit({
+    actorId: String(actorId),
+    actorType: 'telegram_miniapp',
+    action,
+    targetType: targetId ? 'user' : 'admin',
+    targetId: String(targetId || ''),
+    result: 'allow',
+    requestId: String(req.headers['x-request-id'] || ''),
+    ip: req.socket.remoteAddress || '',
+    userAgent: req.headers['user-agent'] || '',
+    details
+  });
+}
+
+async function handleMiniAppAdminApi(req, res, context, url) {
+  let auth;
+
+  try {
+    auth = await getAuthenticatedAdmin(req, context);
+  } catch (error) {
+    if (String(error?.message) === 'ADMIN_REQUIRED') {
+      sendJson(res, 403, {
+        ok: false,
+        error: 'ADMIN_REQUIRED',
+        message: '此账号没有管理员权限。'
+      });
+      return;
+    }
+
+    const response = authErrorResponse(error);
+    sendJson(res, response.statusCode, response.payload);
+    return;
+  }
+
+  const pathname = url.pathname;
+
+  if (pathname === '/api/miniapp/admin/overview' && req.method === 'GET') {
+    sendJson(res, 200, {
+      ok: true,
+      totalUsers: context.db.countUsers(),
+      dailyQuota: Number(context.config.dailyQuota || 0),
+      stats: context.db.getStats(),
+      currentProvider: context.config.aiProvider || '',
+      currentModel: context.config.defaultModel || '',
+      providers: buildAdminProviderStatus(context.config)
+    });
+    return;
+  }
+
+  if (pathname === '/api/miniapp/admin/users' && req.method === 'GET') {
+    const q = String(url.searchParams.get('q') || '').trim();
+    const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit')) || 50));
+    const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
+    const items = context.db
+      .listUsers({ q, limit, offset })
+      .map((user) => serializeAdminUser(context.db, user));
+
+    sendJson(res, 200, {
+      ok: true,
+      items,
+      total: context.db.countUsers({ q }),
+      limit,
+      offset
+    });
+    return;
+  }
+
+  const userMatch = pathname.match(/^\/api\/miniapp\/admin\/users\/([^/]+)$/);
+  if (userMatch && req.method === 'PATCH') {
+    try {
+      const targetUserId = decodeURIComponent(userMatch[1]);
+      const targetUser = context.db.findUser(targetUserId);
+
+      if (!targetUser) {
+        sendJson(res, 404, {
+          ok: false,
+          error: 'USER_NOT_FOUND',
+          message: '没有找到这个用户。'
+        });
+        return;
+      }
+
+      const payload = await readJsonBody(req);
+      if (typeof payload.isBlocked !== 'boolean') {
+        throw new Error('INVALID_BLOCK_STATE');
+      }
+
+      if (
+        payload.isBlocked &&
+        String(targetUserId) === String(auth.telegramUser.id)
+      ) {
+        sendJson(res, 409, {
+          ok: false,
+          error: 'CANNOT_BLOCK_SELF',
+          message: '不能封禁当前管理员账号。'
+        });
+        return;
+      }
+
+      if (payload.isBlocked && targetUser.isAdmin) {
+        sendJson(res, 409, {
+          ok: false,
+          error: 'CANNOT_BLOCK_ADMIN',
+          message: '不能在此页面封禁管理员账号。'
+        });
+        return;
+      }
+
+      const updated = await context.db.setUserSettings(targetUserId, {
+        isBlocked: payload.isBlocked
+      });
+
+      logMiniAppAdminAction(context, {
+        actorId: auth.telegramUser.id,
+        action: payload.isBlocked ? 'users.block' : 'users.unblock',
+        targetId: targetUserId,
+        details: { isBlocked: payload.isBlocked },
+        req
+      });
+
+      sendJson(res, 200, {
+        ok: true,
+        user: serializeAdminUser(context.db, updated)
+      });
+    } catch (error) {
+      const code = String(error?.message || 'ADMIN_USER_UPDATE_FAILED');
+      sendJson(res, 400, {
+        ok: false,
+        error: code,
+        message: '用户状态更新失败。'
+      });
+    }
+    return;
+  }
+
+  res.setHeader('Allow', 'GET, PATCH');
+  sendJson(res, 404, {
+    ok: false,
+    error: 'ADMIN_ROUTE_NOT_FOUND'
+  });
+}
+
 async function handleMiniAppApi(req, res, context) {
   let auth;
 
@@ -1108,6 +1780,11 @@ export function startHealthServer({ port, db, config, logger }) {
         return;
       }
 
+      if (pathname.startsWith('/api/miniapp/admin/')) {
+        await handleMiniAppAdminApi(req, res, context, url);
+        return;
+      }
+
       if (pathname === '/' || pathname === '/health') {
         try {
           sendJson(res, 200, buildHealthPayload({ db, config }));
@@ -1143,7 +1820,15 @@ export function startHealthServer({ port, db, config, logger }) {
       sendJson(res, 404, {
         ok: false,
         error: 'NOT_FOUND',
-        availableRoutes: ['/', '/app', '/api/miniapp/settings', '/health', '/ready']
+        availableRoutes: [
+          '/',
+          '/app',
+          '/api/miniapp/settings',
+          '/api/miniapp/admin/overview',
+          '/api/miniapp/admin/users',
+          '/health',
+          '/ready'
+        ]
       });
     })().catch((error) => {
       logger.error('Health/Mini App server request failed', {
@@ -1165,7 +1850,15 @@ export function startHealthServer({ port, db, config, logger }) {
 
   server.listen(port, () => {
     logger.info(`Health server listening on :${port}`, {
-      routes: ['/', '/app', '/api/miniapp/settings', '/health', '/ready']
+      routes: [
+        '/',
+        '/app',
+        '/api/miniapp/settings',
+        '/api/miniapp/admin/overview',
+        '/api/miniapp/admin/users',
+        '/health',
+        '/ready'
+      ]
     });
   });
 
