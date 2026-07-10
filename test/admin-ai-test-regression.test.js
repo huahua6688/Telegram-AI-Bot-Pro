@@ -15,6 +15,11 @@ test("admin AI test calls current AI model", () => {
   assert.match(source, /AI_OK/);
 });
 
+test("admin provider test bypasses stale cooldown state", () => {
+  assert.match(source, /async handleAdminProviderTestAll\(ctx\)/);
+  assert.match(source, /ignoreCooldown:\s*true/);
+});
+
 test("admin callback handles AI test action", () => {
   assert.match(source, /target === .ai_test./);
   assert.match(source, /handleAdminAiTest\(ctx\)/);

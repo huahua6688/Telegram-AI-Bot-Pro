@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { AIProviderManager } from '../src/services/ai-provider-manager.js';
+import { AIProviderManager, classifyProviderError } from '../src/services/ai-provider-manager.js';
 
 const logger = {
   info: () => {},
@@ -182,4 +182,39 @@ test('AIProviderManager strips tools for providers without tool calling', async 
 
   assert.equal(result.providerId, 'huggingface');
   assert.deepEqual(calls[0].tools, []);
+});
+
+test('AIProviderManager can ignore cooldown for admin provider tests', async () => {
+  const calls = [];
+  const manager = new AIProviderManager({
+    config: baseConfig(),
+    logger,
+    clientFactory: fakeFactory({
+      gemini: [{ text: 'gemini ok', messages: [{ role: 'assistant', content: 'gemini ok' }] }]
+    }, calls)
+  });
+  manager.setCooldown('gemini', 'chat', new Error('AI request failed (503): busy'), 60000);
+
+  const result = await manager.execute({
+    capability: 'chat',
+    preferredProvider: 'gemini',
+    preferredModel: 'gemini-model',
+    fallbackEnabled: false,
+    ignoreCooldown: true,
+    request: { messages: [{ role: 'user', content: 'hello' }], tools: [] }
+  });
+
+  assert.equal(result.providerId, 'gemini');
+  assert.equal(calls.length, 1);
+});
+
+test('provider error classifier detects OpenRouter model and credit failures', () => {
+  assert.equal(
+    classifyProviderError(new Error('AI request failed (400): No endpoints found matching your request')),
+    'model'
+  );
+  assert.equal(
+    classifyProviderError(new Error('AI request failed (402): insufficient credits')),
+    'quota'
+  );
 });

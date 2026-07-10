@@ -2325,7 +2325,8 @@ export class TelegramAIBot {
     locale = 'zh',
     userId = '',
     preferredProvider = '',
-    fallbackEnabled = this.config.enableProviderFallback
+    fallbackEnabled = this.config.enableProviderFallback,
+    ignoreCooldown = false
   } = {}) {
     if (this.providerManager) {
       const managed = await this.providerManager.execute({
@@ -2334,6 +2335,7 @@ export class TelegramAIBot {
         preferredProvider: preferredProvider || this.config.aiProvider,
         preferredModel: model,
         fallbackEnabled,
+        ignoreCooldown,
         request,
         scope
       });
@@ -2454,6 +2456,7 @@ export class TelegramAIBot {
         quota: '请求太频繁了，当前 AI 额度暂时用完。',
         noProvider: '没有可用的 AI 服务。请先在 Zeabur 环境变量里至少配置一个 Provider 的 API Key 和模型。',
         fallbackSetup: '如果想自动切换，还需要配置 Groq、OpenRouter 等备用 Provider，并保持 ENABLE_PROVIDER_FALLBACK=true。',
+        cooldown: '当前 AI 服务刚刚失败过，正在短暂冷却。请稍后再试，或使用已配置的备用 Provider。',
         auth: 'AI 服务认证失败。可能是 API Key 无效、额度权限不足，或环境变量配置错误。',
         timeout: 'AI 服务响应超时。可能是网络不稳定或模型响应太慢，请稍后再试。',
         model: '当前模型不可用。可能是模型名称写错、API Key 不支持这个模型，或模型已经下线。',
@@ -2466,6 +2469,7 @@ export class TelegramAIBot {
         quota: 'Too many requests. The current AI quota is temporarily exhausted.',
         noProvider: 'No AI provider is usable. Configure at least one provider API key and model in the environment variables.',
         fallbackSetup: 'For automatic fallback, configure backup providers such as Groq or OpenRouter and keep ENABLE_PROVIDER_FALLBACK=true.',
+        cooldown: 'The current AI provider recently failed and is cooling down. Please try again later or use a configured fallback provider.',
         auth: 'AI service authentication failed. The API key may be invalid, unauthorized, or misconfigured.',
         timeout: 'The AI service timed out. The network may be unstable or the model may be responding too slowly.',
         model: 'The current model is unavailable. The model name may be wrong, unsupported, or deprecated.',
@@ -2478,6 +2482,14 @@ export class TelegramAIBot {
     const lang = messages[locale] ? locale : 'zh';
     const t = messages[lang];
     const setupOnlyStatuses = ['unconfigured', 'disabled', 'model_missing', 'cooldown'];
+    const cooldownOnly =
+      attemptedProviders.length > 0 &&
+      statusList.length > 0 &&
+      statusList.every((status) => status === 'cooldown');
+    if (cooldownOnly) {
+      return t.cooldown;
+    }
+
     const noUsableProvider =
       error?.code === 'NO_USABLE_AI_PROVIDER' ||
       combinedLower.includes('no configured ai provider') ||
@@ -2525,6 +2537,18 @@ export class TelegramAIBot {
       combinedLower.includes('abort')
     ) {
       return t.timeout;
+    }
+
+    if (
+      statusList.includes('model') ||
+      combinedRaw.includes('400') && (
+        combinedLower.includes('model') ||
+        combinedLower.includes('no endpoints') ||
+        combinedLower.includes('invalid')
+      ) ||
+      combinedLower.includes('no endpoints')
+    ) {
+      return t.model;
     }
 
     if (
@@ -4229,6 +4253,7 @@ export class TelegramAIBot {
           capability: 'chat',
           preferredProvider: provider.id,
           fallbackEnabled: false,
+          ignoreCooldown: true,
           model: provider.models[0],
           locale,
           request: {

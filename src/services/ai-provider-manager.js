@@ -82,9 +82,21 @@ export function classifyProviderError(error) {
 
   if (/\b401\b/.test(raw) || lower.includes('unauthorized') || lower.includes('invalid api key')) return 'auth';
   if (/\b403\b/.test(raw) || lower.includes('permission') || lower.includes('forbidden')) return 'permission';
-  if (/\b404\b/.test(raw) || lower.includes('model') && lower.includes('not found')) return 'model';
+  if (
+    /\b404\b/.test(raw) ||
+    (/\b400\b/.test(raw) && (lower.includes('model') || lower.includes('no endpoints') || lower.includes('invalid'))) ||
+    lower.includes('model') && (lower.includes('not found') || lower.includes('not available') || lower.includes('unavailable')) ||
+    lower.includes('no endpoints')
+  ) return 'model';
   if (/\b408\b/.test(raw) || lower.includes('timeout') || lower.includes('aborted')) return 'timeout';
-  if (/\b429\b/.test(raw) || lower.includes('quota') || lower.includes('rate limit') || lower.includes('resource_exhausted')) return 'quota';
+  if (
+    /\b429\b/.test(raw) ||
+    lower.includes('quota') ||
+    lower.includes('rate limit') ||
+    lower.includes('resource_exhausted') ||
+    lower.includes('insufficient credits') ||
+    lower.includes('insufficient balance')
+  ) return 'quota';
   if (/\b5\d\d\b/.test(raw) || lower.includes('econnreset') || lower.includes('fetch failed') || lower.includes('network')) return 'transient';
   if (lower.includes('empty response') || lower.includes('did not return')) return 'empty';
   if (lower.includes('safety') || lower.includes('content filter') || lower.includes('blocked')) return 'safety';
@@ -321,6 +333,7 @@ export class AIProviderManager {
     preferredProvider = '',
     preferredModel = '',
     fallbackEnabled = this.config.enableProviderFallback,
+    ignoreCooldown = false,
     request = {},
     scope = 'chat'
   } = {}) {
@@ -337,7 +350,7 @@ export class AIProviderManager {
         attempted.push({ providerId, status: 'unconfigured' });
         continue;
       }
-      if (this.getCooldown(providerId, capability)) {
+      if (!ignoreCooldown && this.getCooldown(providerId, capability)) {
         attempted.push({ providerId, status: 'cooldown' });
         continue;
       }

@@ -46,3 +46,36 @@ test('setup-only provider failures still explain missing configuration', () => {
 
   assert.match(message, /No AI provider is usable/i);
 });
+
+test('cooldown provider failures do not look like missing configuration', () => {
+  const error = new Error('No usable AI provider is configured: gemini/cooldown');
+  error.code = 'NO_USABLE_AI_PROVIDER';
+  error.attemptedProviders = [
+    {
+      providerId: 'gemini',
+      status: 'cooldown'
+    }
+  ];
+
+  const message = TelegramAIBot.prototype.formatUserFacingError.call({}, error, 'en');
+
+  assert.match(message, /cooling down/i);
+  assert.doesNotMatch(message, /No AI provider is usable/i);
+});
+
+test('OpenRouter no-endpoint failures explain model availability', () => {
+  const error = new Error('All configured AI providers failed: openrouter/model');
+  error.code = 'AI_PROVIDERS_FAILED';
+  error.cause = new Error('AI request failed (400): No endpoints found matching your request');
+  error.attemptedProviders = [
+    {
+      providerId: 'openrouter',
+      status: 'model',
+      message: 'No endpoints found matching your request'
+    }
+  ];
+
+  const message = TelegramAIBot.prototype.formatUserFacingError.call({}, error, 'en');
+
+  assert.match(message, /model is unavailable/i);
+});
