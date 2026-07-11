@@ -230,6 +230,8 @@ npm run verify
 - Mini App 只用于 Provider/模型、人格、语言、聊天历史和管理员功能；聊天、联网搜索、翻译、图片、文件和语音继续直接在 Telegram 对话中使用。
 - Telegram 命令菜单只保留 `/start`、`/help`；Mini App 使用 BotFather 已配置的输入框左侧菜单按钮打开。
 - Mini App 菜单按钮和网址由 BotFather 管理，程序不会重复修改。
+- 输入框左侧入口名称保持为你在 BotFather 设置的“控制台”；Bot 只在 `/start`、`/help` 和功能菜单显示隐私聊天、搜索、翻译、图片、工具箱等必要按钮。
+- 普通 AI 回复不重复附加功能按钮；隐私聊天及数据库内容加密实现保持独立，不依赖控制台设置按钮。
 
 ## English
 

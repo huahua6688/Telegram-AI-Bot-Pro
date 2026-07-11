@@ -8,6 +8,7 @@ import {
 } from '../src/services/memory-manager.js';
 import { ToolRegistry } from '../src/services/tool-registry.js';
 import { TelegramAIBot } from '../src/services/telegram-bot.js';
+import { PrivacyTelegramAIBot } from '../src/services/privacy-telegram-bot.js';
 
 function logger() {
   return {
@@ -440,6 +441,30 @@ test('Mini App mode does not duplicate BotFather menu or persistent keyboards', 
   assert.doesNotMatch(bot.registerCommands.toString(), /command\('app'/);
   assert.doesNotMatch(bot.init.toString(), /setChatMenuButton|configureMiniAppMenuButton/);
   assert.match(bot.handleIncomingMessage.toString(), /miniAppEnabled === false/);
+});
+
+test('necessary feature menu keeps privacy chat reachable without App-owned settings', () => {
+  const bot = Object.create(PrivacyTelegramAIBot.prototype);
+  bot.config = { miniAppEnabled: true };
+
+  const keyboard = bot.createEssentialMenuKeyboard('zh');
+  const callbacks = keyboard.reply_markup.inline_keyboard
+    .flat()
+    .map((button) => button.callback_data);
+
+  assert.ok(callbacks.includes('privacy_pick:menu'));
+  assert.ok(callbacks.includes('menu:web'));
+  assert.ok(callbacks.includes('menu:translate'));
+  assert.ok(callbacks.includes('menu:image'));
+  assert.ok(callbacks.includes('menu:toolbox'));
+  assert.ok(callbacks.includes('menu:close'));
+  assert.ok(!callbacks.includes('menu:settings'));
+  assert.ok(!callbacks.includes('menu:admin'));
+
+  const toolboxCallbacks = bot.createToolboxKeyboard('zh').reply_markup.inline_keyboard
+    .flat()
+    .map((button) => button.callback_data);
+  assert.ok(!toolboxCallbacks.includes('toolbox:settings'));
 });
 
 test('search replies hide naked source URLs behind clickable titles', async () => {

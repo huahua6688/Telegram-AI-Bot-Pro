@@ -1169,6 +1169,21 @@ export class TelegramAIBot {
     ]);
   }
 
+  createEssentialMenuKeyboard(locale = 'zh') {
+    const labels = this.getMenuLabels(locale);
+    return Markup.inlineKeyboard([
+      [
+        Markup.button.callback(labels.web, 'menu:web'),
+        Markup.button.callback(labels.translate, 'menu:translate')
+      ],
+      [
+        Markup.button.callback(labels.image, 'menu:image'),
+        Markup.button.callback(labels.toolbox, 'menu:toolbox')
+      ],
+      [Markup.button.callback(this.ui(locale, 'close'), 'menu:close')]
+    ]);
+  }
+
 
   createSettingsKeyboard(locale = 'zh') {
     const labels = {
@@ -1232,6 +1247,11 @@ export class TelegramAIBot {
             close: this.ui(locale, 'close')
           };
 
+    const memoryActions = [Markup.button.callback(labels.clear, 'toolbox:clear')];
+    if (!this.config?.miniAppEnabled) {
+      memoryActions.push(Markup.button.callback(labels.settings, 'toolbox:settings'));
+    }
+
     return Markup.inlineKeyboard([
       [
         Markup.button.callback(labels.web, 'toolbox:web'),
@@ -1245,10 +1265,7 @@ export class TelegramAIBot {
         Markup.button.callback(labels.file, 'toolbox:file'),
         Markup.button.callback(labels.memory, 'toolbox:memory')
       ],
-      [
-        Markup.button.callback(labels.clear, 'toolbox:clear'),
-        Markup.button.callback(labels.settings, 'toolbox:settings')
-      ],
+      memoryActions,
       [
         Markup.button.callback(labels.main, 'toolbox:back'),
         Markup.button.callback(labels.close, 'toolbox:close')
@@ -3115,15 +3132,15 @@ export class TelegramAIBot {
             'Hi, I am your AI assistant.',
             '',
             'Chat, search, translation, image requests, files, and voice all stay in this conversation.',
-            'Open AI App beside the message box only for settings, history, and administration.'
+            'Open Console beside the message box only for settings, history, and administration.'
           ].join('\n')
         : [
             '你好，我是你的 AI 助手。',
             '',
             '聊天、联网搜索、翻译、图片、文件和语音都直接在这里发送。',
-            '输入框旁的 AI App 只用于设置、聊天记录和管理。'
+            '输入框旁的「控制台」只用于设置、聊天记录和管理。'
           ].join('\n');
-      await ctx.reply(text, this.createBottomKeyboard(locale));
+      await ctx.reply(text, this.createEssentialMenuKeyboard(locale));
       return;
     }
 
@@ -3192,14 +3209,14 @@ export class TelegramAIBot {
         ? [
             'Send chat, search, translation, image, file, or voice requests directly here.',
             '',
-            'Open AI App beside the message box only for provider/model settings, persona, language, history, and administration.'
+            'Open Console beside the message box only for provider/model settings, persona, language, history, and administration.'
           ].join('\n')
         : [
             '聊天、联网搜索、翻译、图片、文件和语音都直接在这里发送。',
             '',
-            '输入框旁的 AI App 只用于 Provider/模型、人格、语言、聊天记录和管理。'
+            '输入框旁的「控制台」只用于 Provider/模型、人格、语言、聊天记录和管理。'
           ].join('\n');
-      await sendTextReply(ctx, helpText, this.config.maxOutputChars, this.createBottomKeyboard(locale));
+      await sendTextReply(ctx, helpText, this.config.maxOutputChars, this.createEssentialMenuKeyboard(locale));
       return;
     }
 
@@ -3428,7 +3445,7 @@ export class TelegramAIBot {
 
   async handleMenu(ctx) {
     const locale = this.getLocale(ctx);
-    await ctx.reply(this.t(locale, 'menu'), this.createMenuKeyboard(locale));
+    await ctx.reply(this.t(locale, 'menu'), this.createEssentialMenuKeyboard(locale));
   }
 
   async handleModels(ctx) {
