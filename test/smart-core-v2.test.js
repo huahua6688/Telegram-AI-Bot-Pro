@@ -329,6 +329,7 @@ test('persona settings open from a callback without a message payload', async ()
 
 test('opening the main menu does not send a shortcut status message', async () => {
   const bot = Object.create(TelegramAIBot.prototype);
+  bot.config = { miniAppEnabled: false };
   bot.getLocale = () => 'zh';
   bot.t = () => '请选择功能：';
   bot.createMenuKeyboard = () => ({ reply_markup: { inline_keyboard: [] } });
@@ -385,6 +386,7 @@ test('free web search fallback returns real HTML search results', async () => {
 test('localized slash commands stay minimal and refresh per chat', async () => {
   const calls = [];
   const bot = Object.create(TelegramAIBot.prototype);
+  bot.config = { miniAppEnabled: false };
   bot.logger = logger();
   bot.bot = {
     telegram: {
@@ -410,4 +412,63 @@ test('localized slash commands stay minimal and refresh per chat', async () => {
   const chatCall = calls.at(-1);
   assert.deepEqual(chatCall.options.scope, { type: 'chat', chat_id: 99 });
   assert.equal(chatCall.commands.find((item) => item.command === 'reset').description, '清除目前對話');
+});
+
+test('Mini App mode exposes only start, app, and help commands', async () => {
+  const calls = [];
+  const bot = Object.create(TelegramAIBot.prototype);
+  bot.config = { miniAppEnabled: true };
+  bot.logger = logger();
+  bot.bot = {
+    telegram: {
+      async setMyCommands(commands, options = {}) {
+        calls.push({ commands, options });
+      }
+    }
+  };
+
+  await bot.setLocalizedBotCommands();
+  assert.deepEqual(calls[0].commands.map((item) => item.command), ['start', 'app', 'help']);
+});
+
+test('search replies hide naked source URLs behind clickable titles', async () => {
+  const replies = [];
+  const bot = Object.create(TelegramAIBot.prototype);
+  bot.config = {
+    aiProvider: 'gemini',
+    enableWebSearch: true,
+    enableGeminiGoogleSearch: true,
+    defaultModel: 'gemini-2.5-flash',
+    availableModels: ['gemini-2.5-flash'],
+    maxOutputChars: 3500
+  };
+  bot.logger = logger();
+  bot.db = {
+    findUser() {
+      return { preferredModel: 'gemini-2.5-flash', preferredLanguage: 'zh' };
+    },
+    async incrementStats() {}
+  };
+  bot.aiClient = {
+    async searchWeb() {
+      return {
+        text: '今天的重要新闻摘要。\n\nSources:\n1. Example News — https://example.com/current-news'
+      };
+    }
+  };
+
+  await bot.runWebSearch({
+    from: { id: 1, language_code: 'zh' },
+    chat: { id: 1, type: 'private' },
+    message: { message_id: 10, text: 'today news' },
+    async sendChatAction() {},
+    async reply(message, extra) {
+      replies.push({ message, extra });
+    }
+  }, 'today news');
+
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0].extra.parse_mode, 'HTML');
+  assert.match(replies[0].message, /<a href="https:\/\/example\.com\/current-news">Example News<\/a>/);
+  assert.doesNotMatch(replies[0].message.replace(/href="[^"]+"/g, ''), /https:\/\//);
 });

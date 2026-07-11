@@ -115,8 +115,32 @@ const BOT_COMMAND_DESCRIPTIONS = {
   nl: ['Assistent openen', 'Functiemenu openen', 'Help tonen', 'Op internet zoeken', 'AI-model wijzigen', 'Persona wijzigen', 'Taal wijzigen', 'Gesprek wissen', 'Telegram-ID tonen', 'Beheerderstatus']
 };
 
-function createLocalizedBotCommands(locale = 'en') {
+const MINI_APP_COMMAND_DESCRIPTIONS = {
+  zh: '打开 AI Mini App',
+  'zh-hant': '開啟 AI Mini App',
+  en: 'Open AI Mini App',
+  km: 'បើក AI Mini App',
+  ms: 'Buka AI Mini App',
+  id: 'Buka AI Mini App',
+  ko: 'AI Mini App 열기',
+  ja: 'AI Mini App を開く',
+  th: 'เปิด AI Mini App',
+  vi: 'Mở AI Mini App',
+  es: 'Abrir AI Mini App',
+  fr: 'Ouvrir AI Mini App',
+  de: 'AI Mini App öffnen'
+};
+
+function createLocalizedBotCommands(locale = 'en', compact = false) {
   const normalized = normalizeLanguageCode(locale, 'en');
+  if (compact) {
+    const descriptions = BOT_COMMAND_DESCRIPTIONS[normalized] || BOT_COMMAND_DESCRIPTIONS.en;
+    return [
+      { command: 'start', description: descriptions[0] || BOT_COMMAND_DESCRIPTIONS.en[0] },
+      { command: 'app', description: MINI_APP_COMMAND_DESCRIPTIONS[normalized] || MINI_APP_COMMAND_DESCRIPTIONS.en },
+      { command: 'help', description: descriptions[2] || BOT_COMMAND_DESCRIPTIONS.en[2] }
+    ];
+  }
   const minimalDescriptions = {
     zh: ['打开助手', '打开简洁菜单', '查看帮助', '清空当前对话', '查看 Telegram ID'],
     'zh-hant': ['開啟助手', '開啟簡潔選單', '查看說明', '清除目前對話', '查看 Telegram ID'],
@@ -610,6 +634,79 @@ async function sendTextReply(ctx, text, maxLength, extra = {}) {
   }
 }
 
+function escapeTelegramHtml(value = '') {
+  return String(value || '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function readableSourceTitle(title = '', url = '') {
+  const cleaned = cleanBotOutput(title).replace(/^[-–—\s]+|[-–—\s]+$/g, '').trim();
+  if (cleaned && cleaned !== url) return cleaned.slice(0, 120);
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return '打开来源';
+  }
+}
+
+function formatSearchReplyHtml(text = '', locale = 'zh') {
+  let body = String(text || '').trim();
+  const references = [];
+  const addReference = (title, url) => {
+    const cleanUrl = String(url || '').replace(/[),.;]+$/, '');
+    if (!/^https?:\/\//i.test(cleanUrl)) return;
+    if (references.some((item) => item.url === cleanUrl)) return;
+    references.push({ title: readableSourceTitle(title, cleanUrl), url: cleanUrl });
+  };
+
+  body = body.replace(/\[([^\]]+)]\((https?:\/\/[^)]+)\)/g, (_, title, url) => {
+    addReference(title, url);
+    return title;
+  });
+
+  body = body.replace(/^\s*\d+[.)]\s*(.*?)\s+[—–-]\s+(https?:\/\/\S+)\s*$/gm, (_, title, url) => {
+    addReference(title, url);
+    return '';
+  });
+
+  body = body.replace(/https?:\/\/[^\s<>]+/g, (url) => {
+    addReference('', url);
+    return '';
+  });
+
+  body = cleanBotOutput(body)
+    .replace(/^\s*(?:Sources?|References?|参考链接|参考来源|来源)\s*[:：]?\s*$/gim, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  const escapedBody = escapeTelegramHtml(body);
+  if (references.length === 0) return escapedBody;
+
+  const heading = locale === 'en' ? 'Sources' : '参考来源';
+  const links = references.slice(0, 8).map((item, index) =>
+    `${index + 1}. <a href="${escapeTelegramHtml(item.url)}">${escapeTelegramHtml(item.title)}</a>`
+  );
+  return `${escapedBody}\n\n${heading}：\n${links.join('\n')}`.trim();
+}
+
+async function sendSearchReply(ctx, text, maxLength, locale = 'zh') {
+  const truncated = truncateText(String(text || ''), Math.max(500, maxLength - 200));
+  const html = formatSearchReplyHtml(truncated, locale);
+  try {
+    await ctx.reply(html, {
+      parse_mode: 'HTML',
+      link_preview_options: { is_disabled: true },
+      reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined
+    });
+  } catch {
+    await sendTextReply(ctx, text, maxLength);
+  }
+}
+
 async function sendHtmlReply(ctx, text, maxLength, extra = {}) {
   const chunks = splitMessage(String(text || '').trim(), maxLength);
   for (const chunk of chunks) {
@@ -1055,6 +1152,14 @@ export class TelegramAIBot {
 
 
   createBottomKeyboard(locale = 'zh') {
+    if (this.config?.miniAppEnabled !== false) {
+      const miniAppUrl = this.getMiniAppUrl();
+      if (!miniAppUrl) return Markup.removeKeyboard();
+      return Markup.keyboard([
+        [Markup.button.webApp(locale === 'en' ? 'Open AI App' : '打开 AI App', miniAppUrl)]
+      ]).resize().persistent();
+    }
+
     return {
       reply_markup: {
         keyboard: [
@@ -1069,6 +1174,18 @@ export class TelegramAIBot {
   }
 
   createMenuKeyboard(locale) {
+    if (this.config?.miniAppEnabled !== false) {
+      const miniAppUrl = this.getMiniAppUrl();
+      const rows = [];
+      if (miniAppUrl) {
+        rows.push([
+          Markup.button.webApp(locale === 'en' ? 'Open AI App' : '打开 AI App', miniAppUrl)
+        ]);
+      }
+      rows.push([Markup.button.callback(this.ui(locale, 'close'), 'menu:close')]);
+      return Markup.inlineKeyboard(rows);
+    }
+
     return Markup.inlineKeyboard([
       [
         Markup.button.callback(this.ui(locale, 'help'), 'menu:help'),
@@ -2857,12 +2974,13 @@ export class TelegramAIBot {
   }
 
   async setLocalizedBotCommands() {
-    await this.bot.telegram.setMyCommands(createLocalizedBotCommands('en'));
+    const compact = this.config?.miniAppEnabled !== false;
+    await this.bot.telegram.setMyCommands(createLocalizedBotCommands('en', compact));
 
     for (const languageCode of Object.keys(BOT_COMMAND_DESCRIPTIONS)) {
       if (!/^[a-z]{2,3}$/.test(languageCode)) continue;
       try {
-        await this.bot.telegram.setMyCommands(createLocalizedBotCommands(languageCode), {
+        await this.bot.telegram.setMyCommands(createLocalizedBotCommands(languageCode, compact), {
           language_code: languageCode
         });
       } catch (error) {
@@ -2879,14 +2997,44 @@ export class TelegramAIBot {
     if (!chatId) return false;
 
     try {
-      await this.bot.telegram.setMyCommands(createLocalizedBotCommands(locale), {
+      await this.bot.telegram.setMyCommands(
+        createLocalizedBotCommands(locale, this.config?.miniAppEnabled !== false),
+        {
         scope: { type: 'chat', chat_id: chatId }
-      });
+        }
+      );
       return true;
     } catch (error) {
       this.logger?.warn?.('Failed to update chat bot commands', {
         chatId,
         locale,
+        error: error.message
+      });
+      return false;
+    }
+  }
+
+  getMiniAppUrl() {
+    const value = String(this.config?.miniAppUrl || '').trim();
+    return /^https:\/\//i.test(value) ? value : '';
+  }
+
+  async configureMiniAppMenuButton() {
+    if (this.config?.miniAppEnabled === false) return false;
+    const url = this.getMiniAppUrl();
+    if (!url) return false;
+
+    try {
+      await this.bot.telegram.setChatMenuButton({
+        menuButton: {
+          type: 'web_app',
+          text: 'AI App',
+          web_app: { url }
+        }
+      });
+      return true;
+    } catch (error) {
+      this.logger.warn('Failed to configure Mini App menu button', {
         error: error.message
       });
       return false;
@@ -2901,7 +3049,10 @@ export class TelegramAIBot {
     this.bot.use(async (ctx, next) => {
       // global_plain_text_reply_cleaner
       const oldReply = ctx.reply.bind(ctx);
-      ctx.reply = async (text, extra = {}) => oldReply(typeof text === 'string' ? cleanBotOutput(text) : text, extra);
+      ctx.reply = async (text, extra = {}) => oldReply(
+        typeof text === 'string' && extra?.parse_mode !== 'HTML' ? cleanBotOutput(text) : text,
+        extra
+      );
       return next();
     });
 
@@ -2928,10 +3079,12 @@ export class TelegramAIBot {
     const me = await this.bot.telegram.getMe();
     this.botUsername = me.username || '';
     await this.setLocalizedBotCommands();
+    await this.configureMiniAppMenuButton();
   }
 
   registerCommands() {
     this.bot.command('start', (ctx) => this.handleStart(ctx));
+    this.bot.command('app', (ctx) => this.handleMiniAppLaunch(ctx));
     this.bot.command('menu', (ctx) => this.handleMenu(ctx));
     this.bot.command('models', (ctx) => this.handleModels(ctx));
     this.bot.command('memory', (ctx) => this.handleMemoryPrompt(ctx));
@@ -3013,6 +3166,25 @@ export class TelegramAIBot {
 
   async handleStart(ctx) {
     const locale = this.getLocale(ctx);
+
+    if (this.config?.miniAppEnabled !== false) {
+      const text = locale === 'en'
+        ? [
+            'Hi, I am your AI assistant.',
+            '',
+            'Send a message here for normal conversation.',
+            'For search, translation, models, personas, language, and memory, open the AI App beside the message box.'
+          ].join('\n')
+        : [
+            '你好，我是你的 AI 助手。',
+            '',
+            '普通聊天直接发消息就可以。',
+            '联网搜索、翻译、模型、人格、语言和记忆都已整合到输入框旁的 AI App。'
+          ].join('\n');
+      await ctx.reply(text, this.createBottomKeyboard(locale));
+      return;
+    }
+
     const adminLine = this.isAdmin(ctx)
       ? isEnglishLocale(locale)
         ? '\nAdmin: tap 🛠 Admin for management.'
@@ -3072,6 +3244,24 @@ export class TelegramAIBot {
 
   async handleHelp(ctx) {
     const locale = this.getLocale(ctx);
+
+    if (this.config?.miniAppEnabled !== false) {
+      const helpText = locale === 'en'
+        ? [
+            'Just send a message to chat with me.',
+            '',
+            'Open AI App beside the message box for web search, translation, image prompts, model, persona, language, and memory settings.',
+            'Send files, photos, or voice messages directly in this chat.'
+          ].join('\n')
+        : [
+            '直接发消息就能和我对话。',
+            '',
+            '联网搜索、翻译、图片提示、模型、人格、语言和记忆设置，请打开输入框旁的 AI App。',
+            '文件、照片或语音仍然直接发送到聊天里。'
+          ].join('\n');
+      await sendTextReply(ctx, helpText, this.config.maxOutputChars, this.createBottomKeyboard(locale));
+      return;
+    }
 
     const helpText =
       isEnglishLocale(locale)
@@ -3298,7 +3488,96 @@ export class TelegramAIBot {
 
   async handleMenu(ctx) {
     const locale = this.getLocale(ctx);
+    if (this.config?.miniAppEnabled !== false) {
+      await this.handleMiniAppLaunch(ctx);
+      return;
+    }
     await ctx.reply(this.t(locale, 'menu'), this.createMenuKeyboard(locale));
+  }
+
+  async handleMiniAppLaunch(ctx) {
+    const locale = this.getLocale(ctx);
+    const miniAppUrl = this.getMiniAppUrl();
+    const text = locale === 'en'
+      ? 'Open AI App from the menu button beside the message box.'
+      : '请点击输入框旁的 AI App 按钮打开功能工作台。';
+
+    if (miniAppUrl) {
+      await ctx.reply(text, Markup.inlineKeyboard([
+        [Markup.button.webApp(locale === 'en' ? 'Open AI App' : '打开 AI App', miniAppUrl)]
+      ]));
+      return;
+    }
+
+    await ctx.reply(text, Markup.removeKeyboard());
+  }
+
+  createMiniAppContext(user = {}, text = '') {
+    const chatId = Number(user.id);
+    const telegram = this.bot.telegram;
+    return {
+      from: user,
+      chat: { id: chatId, type: 'private' },
+      message: {
+        text,
+        date: Math.floor(Date.now() / 1000),
+        chat: { id: chatId, type: 'private' },
+        from: user
+      },
+      telegram,
+      sendChatAction: (action) => telegram.sendChatAction(chatId, action),
+      reply: (message, extra = {}) => telegram.sendMessage(chatId, message, extra),
+      replyWithPhoto: (photo, extra = {}) => telegram.sendPhoto(chatId, photo, extra),
+      replyWithVoice: (voice, extra = {}) => telegram.sendVoice(chatId, voice, extra),
+      replyWithAudio: (audio, extra = {}) => telegram.sendAudio(chatId, audio, extra),
+      replyWithDocument: (document, extra = {}) => telegram.sendDocument(chatId, document, extra)
+    };
+  }
+
+  async handleMiniAppRequest({ user = {}, action = 'chat', text = '', targetLanguage = 'auto' } = {}) {
+    const content = String(text || '').trim();
+    if (!user?.id || !content) throw new Error('Mini App request requires a user and text.');
+
+    const ctx = this.createMiniAppContext(user, content);
+    if (!this.isAllowed(ctx)) {
+      await ctx.reply(this.t(this.getLocale(ctx), 'noAccess'));
+      return false;
+    }
+
+    this.pendingMenuActions.delete(this.getPendingMenuKey(ctx));
+    this.clearActiveMode(ctx);
+
+    if (action === 'web') {
+      await this.runWebSearch(ctx, content);
+      return true;
+    }
+    if (action === 'translate') {
+      await this.runTranslation(ctx, content, targetLanguage || 'auto');
+      return true;
+    }
+    if (action === 'image') {
+      await this.runImageGeneration(ctx, content, 'generate');
+      return true;
+    }
+    if (action !== 'chat') throw new Error(`Unsupported Mini App action: ${action}`);
+
+    await this.handleIncomingMessage(ctx);
+    return true;
+  }
+
+  async clearMiniAppMemory(user = {}) {
+    if (!user?.id) throw new Error('Mini App memory clear requires a user.');
+
+    const ctx = this.createMiniAppContext(user, '');
+    const userId = ctx.from.id;
+    const chatId = ctx.chat.id;
+
+    await this.db.clearConversation(createSessionId(ctx));
+    const memoryCount = this.db.deleteMemoryItems?.({ userId, chatId }) || 0;
+    const topicCount = this.db.clearTopicStates?.({ userId, chatId }) || 0;
+    this.db.clearActiveContext?.({ userId, chatId });
+
+    return { memoryCount, topicCount };
   }
 
   async handleModels(ctx) {
@@ -3739,7 +4018,7 @@ export class TelegramAIBot {
               if (grounded?.text) {
                 await this.db.incrementStats('toolCalls');
                 await this.db.incrementStats('aiCalls');
-                await sendTextReply(ctx, grounded.text, this.config.maxOutputChars);
+                await sendSearchReply(ctx, grounded.text, this.config.maxOutputChars, locale);
                 return;
               }
             } catch (error) {
@@ -5625,6 +5904,21 @@ export class TelegramAIBot {
 
 
   async handleIncomingMessage(ctx) {
+    if (ctx.message?.web_app_data?.data) {
+      try {
+        const payload = JSON.parse(ctx.message.web_app_data.data);
+        await this.handleMiniAppRequest({
+          user: ctx.from,
+          action: payload.action || 'chat',
+          text: payload.text || '',
+          targetLanguage: payload.targetLanguage || 'auto'
+        });
+      } catch (error) {
+        await ctx.reply(this.formatUserFacingError(error, this.getLocale(ctx)));
+      }
+      return;
+    }
+
     const text = ctx.message.text || '';
     const caption = ctx.message.caption || '';
     const command = normalizeCommand(text);

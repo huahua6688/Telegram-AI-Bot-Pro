@@ -224,6 +224,13 @@ npm run verify
 - `429`: 限流或免费额度用完
 - Zeabur `BackOff`: 先检查 `BOT_TOKEN`、`PORT=8080`、`DATABASE_FILE=/data/bot-data.db`
 
+## Telegram Mini App
+
+- BotFather 已配置网址时无需重复设置；默认入口为 `https://你的域名/app`。
+- 工作台整合聊天、联网搜索、翻译、图片生成、Provider/模型、人格、语言、记忆、历史和管理员功能。
+- Telegram 命令菜单默认只保留 `/start`、`/app`、`/help`，其他功能直接在工作台或自然语言对话中使用。
+- 如需由程序自动更新 Telegram 菜单按钮，再设置 `MINI_APP_URL=https://你的域名/app`。
+
 ## English
 
 ## One-Copy Zeabur Environment Variables
