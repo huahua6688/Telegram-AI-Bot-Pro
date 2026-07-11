@@ -228,8 +228,8 @@ npm run verify
 
 - BotFather 已配置网址时无需重复设置；默认入口为 `https://你的域名/app`。
 - Mini App 只用于 Provider/模型、人格、语言、聊天历史和管理员功能；聊天、联网搜索、翻译、图片、文件和语音继续直接在 Telegram 对话中使用。
-- Telegram 命令菜单默认只保留 `/start`、`/app`、`/help`，其他功能直接在工作台或自然语言对话中使用。
-- 如需由程序自动更新 Telegram 菜单按钮，再设置 `MINI_APP_URL=https://你的域名/app`。
+- Telegram 命令菜单只保留 `/start`、`/help`；Mini App 使用 BotFather 已配置的输入框左侧菜单按钮打开。
+- Mini App 菜单按钮和网址由 BotFather 管理，程序不会重复修改。
 
 ## English
 

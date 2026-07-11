@@ -414,7 +414,7 @@ test('localized slash commands stay minimal and refresh per chat', async () => {
   assert.equal(chatCall.commands.find((item) => item.command === 'reset').description, '清除目前對話');
 });
 
-test('Mini App mode exposes only start, app, and help commands', async () => {
+test('Mini App mode exposes only start and help commands', async () => {
   const calls = [];
   const bot = Object.create(TelegramAIBot.prototype);
   bot.config = { miniAppEnabled: true };
@@ -428,7 +428,18 @@ test('Mini App mode exposes only start, app, and help commands', async () => {
   };
 
   await bot.setLocalizedBotCommands();
-  assert.deepEqual(calls[0].commands.map((item) => item.command), ['start', 'app', 'help']);
+  assert.deepEqual(calls[0].commands.map((item) => item.command), ['start', 'help']);
+});
+
+test('Mini App mode does not duplicate BotFather menu or persistent keyboards', () => {
+  const bot = Object.create(TelegramAIBot.prototype);
+  bot.config = { miniAppEnabled: true };
+
+  assert.equal(bot.createBottomKeyboard('zh')?.reply_markup?.remove_keyboard, true);
+  assert.equal(bot.createMenuKeyboard('zh'), undefined);
+  assert.doesNotMatch(bot.registerCommands.toString(), /command\('app'/);
+  assert.doesNotMatch(bot.init.toString(), /setChatMenuButton|configureMiniAppMenuButton/);
+  assert.match(bot.handleIncomingMessage.toString(), /miniAppEnabled === false/);
 });
 
 test('search replies hide naked source URLs behind clickable titles', async () => {

@@ -58,7 +58,7 @@ Zeabur 设置：
 
     /ready
 
-Telegram Mini App 入口为 `/app`。如果已在 BotFather 配置 `https://你的域名/app`，无需重复设置；如需由程序自动更新菜单按钮，可设置 `MINI_APP_URL=https://你的域名/app`。
+Telegram Mini App 入口为 `/app`。菜单按钮和网址由 BotFather 管理，程序不会重复修改。
 
 ## Admin API
 
