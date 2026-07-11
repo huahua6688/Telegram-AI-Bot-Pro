@@ -271,48 +271,6 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       margin-top: 18px;
     }
 
-    .action-grid {
-      display: grid;
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 9px;
-      margin-top: 14px;
-      padding: 5px;
-      border-radius: 16px;
-      background: var(--tg-theme-bg-color, #f3f4f6);
-    }
-
-    .action-tab {
-      min-height: 42px;
-      border-radius: 12px;
-      color: var(--tg-theme-hint-color, #6b7280);
-      background: transparent;
-      font-size: 13px;
-    }
-
-    .action-tab.active {
-      color: var(--tg-theme-button-color, #2481cc);
-      background: var(--tg-theme-secondary-bg-color, #ffffff);
-      box-shadow: 0 3px 12px rgba(0, 0, 0, .07);
-    }
-
-    textarea {
-      width: 100%;
-      min-height: 132px;
-      resize: vertical;
-      padding: 13px;
-      border: 1px solid rgba(127, 127, 127, .25);
-      border-radius: 13px;
-      color: var(--tg-theme-text-color, #111827);
-      background: var(--tg-theme-bg-color, #f9fafb);
-      font: inherit;
-      line-height: 1.55;
-      outline: none;
-    }
-
-    textarea:focus {
-      border-color: var(--tg-theme-button-color, #2481cc);
-    }
-
     button {
       width: 100%;
       min-height: 48px;
@@ -655,46 +613,6 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       </div>
     </section>
 
-    <section class="card" id="assistantPanel">
-      <div class="section-head">
-        <h2>AI 工作台</h2>
-        <span class="badge" id="assistantBadge">等待连接</span>
-      </div>
-
-      <div class="action-grid" role="tablist" aria-label="AI 功能">
-        <button class="action-tab active" data-action="chat" type="button">对话</button>
-        <button class="action-tab" data-action="web" type="button">联网搜索</button>
-        <button class="action-tab" data-action="translate" type="button">翻译</button>
-        <button class="action-tab" data-action="image" type="button">生成图片</button>
-      </div>
-
-      <div class="field hidden" id="targetLanguageField">
-        <label for="targetLanguageSelect">翻译成</label>
-        <select id="targetLanguageSelect">
-          <option value="zh">简体中文</option>
-          <option value="zh-hant">繁體中文</option>
-          <option value="en">English</option>
-          <option value="km">ភាសាខ្មែរ</option>
-          <option value="ms">Bahasa Melayu</option>
-          <option value="id">Bahasa Indonesia</option>
-          <option value="ja">日本語</option>
-          <option value="ko">한국어</option>
-        </select>
-      </div>
-
-      <div class="field">
-        <label for="assistantPrompt">内容</label>
-        <textarea id="assistantPrompt" placeholder="直接描述你的问题或目标…"></textarea>
-      </div>
-
-      <div id="assistantNotice" class="notice hidden"></div>
-
-      <div class="actions">
-        <button class="primary" id="assistantSendButton" type="button" disabled>发送到聊天</button>
-        <button class="secondary" id="memoryClearButton" type="button" disabled>清空记忆</button>
-      </div>
-    </section>
-
     <section class="card">
       <div class="section-head">
         <h2>我的 AI 设置</h2>
@@ -845,7 +763,6 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       : null;
 
     const state = {
-      action: 'chat',
       catalog: [],
       settings: null,
       profile: null,
@@ -864,14 +781,6 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       uptime: document.getElementById('uptime'),
       messages: document.getElementById('messages'),
       aiCalls: document.getElementById('aiCalls'),
-      assistantBadge: document.getElementById('assistantBadge'),
-      actionTabs: Array.from(document.querySelectorAll('.action-tab')),
-      targetLanguageField: document.getElementById('targetLanguageField'),
-      targetLanguageSelect: document.getElementById('targetLanguageSelect'),
-      assistantPrompt: document.getElementById('assistantPrompt'),
-      assistantNotice: document.getElementById('assistantNotice'),
-      assistantSendButton: document.getElementById('assistantSendButton'),
-      memoryClearButton: document.getElementById('memoryClearButton'),
       userIdLabel: document.getElementById('userIdLabel'),
       telegramRequired: document.getElementById('telegramRequired'),
       settingsForm: document.getElementById('settingsForm'),
@@ -996,7 +905,6 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       elements.fallbackToggle.checked = state.settings.fallbackEnabled !== false;
       elements.userIdLabel.textContent = state.profile.id ? 'ID ' + state.profile.id : '';
       setSettingsEnabled(true);
-      setAssistantEnabled(true);
 
       if (elements.providerSelect.value === 'auto') {
         elements.modelSelect.disabled = true;
@@ -1022,103 +930,6 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         headers['X-Telegram-Init-Data'] = tg.initData;
       }
       return headers;
-    }
-
-    function showAssistantNotice(message, type) {
-      elements.assistantNotice.textContent = message;
-      elements.assistantNotice.className = 'notice ' + (type || '');
-    }
-
-    function hideAssistantNotice() {
-      elements.assistantNotice.className = 'notice hidden';
-      elements.assistantNotice.textContent = '';
-    }
-
-    function setAssistantEnabled(enabled) {
-      elements.assistantSendButton.disabled = !enabled;
-      elements.memoryClearButton.disabled = !enabled;
-      elements.assistantPrompt.disabled = !enabled;
-      elements.targetLanguageSelect.disabled = !enabled;
-      elements.actionTabs.forEach(function (button) {
-        button.disabled = !enabled;
-      });
-      elements.assistantBadge.textContent = enabled ? '已连接' : '等待连接';
-    }
-
-    function setAssistantAction(action) {
-      state.action = action;
-      elements.actionTabs.forEach(function (button) {
-        button.classList.toggle('active', button.dataset.action === action);
-      });
-      elements.targetLanguageField.classList.toggle('hidden', action !== 'translate');
-
-      const placeholders = {
-        chat: '直接描述你的问题或目标…',
-        web: '输入要查询的最新信息，例如：今天的重要新闻',
-        translate: '输入需要翻译的文字…',
-        image: '描述图片内容、风格、构图和比例…'
-      };
-      elements.assistantPrompt.placeholder = placeholders[action] || placeholders.chat;
-    }
-
-    async function sendAssistantAction() {
-      const text = elements.assistantPrompt.value.trim();
-      if (!text) {
-        showAssistantNotice('请先输入内容。', 'failure');
-        return;
-      }
-
-      elements.assistantSendButton.disabled = true;
-      elements.assistantSendButton.textContent = '正在执行…';
-      hideAssistantNotice();
-
-      try {
-        const response = await fetch('/api/miniapp/action', {
-          method: 'POST',
-          headers: authHeaders({ 'Content-Type': 'application/json' }),
-          body: JSON.stringify({
-            action: state.action,
-            text: text,
-            targetLanguage: elements.targetLanguageSelect.value
-          })
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.message || data.error || '执行失败');
-
-        elements.assistantPrompt.value = '';
-        showAssistantNotice('结果已发送到机器人聊天。', 'success');
-        if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
-        loadStatus();
-        loadMySessions();
-      } catch (error) {
-        showAssistantNotice(error.message || '执行失败，请稍后重试。', 'failure');
-        if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('error');
-      } finally {
-        elements.assistantSendButton.disabled = !(tg && tg.initData);
-        elements.assistantSendButton.textContent = '发送到聊天';
-      }
-    }
-
-    async function clearAssistantMemory() {
-      if (!window.confirm('确定清空当前对话、长期记忆和话题状态吗？')) return;
-      elements.memoryClearButton.disabled = true;
-      hideAssistantNotice();
-
-      try {
-        const response = await fetch('/api/miniapp/memory', {
-          method: 'DELETE',
-          headers: authHeaders()
-        });
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.message || data.error || '清空失败');
-        showAssistantNotice('对话和长期记忆已清空。', 'success');
-        if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
-        loadMySessions();
-      } catch (error) {
-        showAssistantNotice(error.message || '清空失败，请稍后重试。', 'failure');
-      } finally {
-        elements.memoryClearButton.disabled = !(tg && tg.initData);
-      }
     }
 
     async function loadStatus() {
@@ -1151,7 +962,6 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       if (!tg || !tg.initData) {
         elements.telegramRequired.className = 'notice';
         setSettingsEnabled(false);
-        setAssistantEnabled(false);
         return;
       }
 
@@ -1174,7 +984,6 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         hideNotice();
       } catch (error) {
         setSettingsEnabled(false);
-        setAssistantEnabled(false);
         showNotice(error.message || '读取个人设置失败。', 'failure');
       }
     }
@@ -1789,15 +1598,6 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       updateModelOptions('');
     });
 
-    elements.actionTabs.forEach(function (button) {
-      button.addEventListener('click', function () {
-        setAssistantAction(button.dataset.action);
-      });
-    });
-
-    elements.assistantSendButton.addEventListener('click', sendAssistantAction);
-    elements.memoryClearButton.addEventListener('click', clearAssistantMemory);
-
     elements.settingsForm.addEventListener('submit', saveSettings);
 
     elements.refreshButton.addEventListener('click', function () {
@@ -1875,8 +1675,6 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       }
     });
 
-    setAssistantAction('chat');
-    setAssistantEnabled(false);
     setupTelegram();
     loadStatus();
     loadSettings();
@@ -2715,103 +2513,8 @@ async function handleMiniAppApi(req, res, context) {
   });
 }
 
-async function handleMiniAppActionApi(req, res, context) {
-  let auth;
-
-  try {
-    auth = await getAuthenticatedUser(req, context);
-  } catch (error) {
-    const response = authErrorResponse(error);
-    sendJson(res, response.statusCode, response.payload);
-    return;
-  }
-
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST');
-    sendJson(res, 405, { ok: false, error: 'METHOD_NOT_ALLOWED' });
-    return;
-  }
-
-  if (!context.bot?.handleMiniAppRequest) {
-    sendJson(res, 503, {
-      ok: false,
-      error: 'BOT_NOT_READY',
-      message: '机器人还没有准备好，请稍后重试。'
-    });
-    return;
-  }
-
-  try {
-    const payload = await readJsonBody(req);
-    const action = String(payload.action || 'chat').trim();
-    const text = String(payload.text || '').trim().slice(0, context.config.maxInputChars || 12000);
-    const targetLanguage = String(payload.targetLanguage || 'auto').trim();
-
-    if (!['chat', 'web', 'translate', 'image'].includes(action)) {
-      throw new Error('ACTION_NOT_SUPPORTED');
-    }
-    if (!text) throw new Error('TEXT_REQUIRED');
-
-    const delivered = await context.bot.handleMiniAppRequest({
-      user: auth.telegramUser,
-      action,
-      text,
-      targetLanguage
-    });
-
-    sendJson(res, 200, { ok: true, delivered: delivered !== false });
-  } catch (error) {
-    const code = String(error?.message || 'ACTION_FAILED');
-    context.logger.warn('Mini App action failed', {
-      userId: String(auth.telegramUser.id),
-      error: code
-    });
-    sendJson(res, ['INVALID_JSON', 'BODY_TOO_LARGE', 'TEXT_REQUIRED', 'ACTION_NOT_SUPPORTED'].includes(code) ? 400 : 502, {
-      ok: false,
-      error: code,
-      message: code === 'TEXT_REQUIRED' ? '请先输入内容。' : '执行失败，请稍后重试。'
-    });
-  }
-}
-
-async function handleMiniAppMemoryApi(req, res, context) {
-  let auth;
-
-  try {
-    auth = await getAuthenticatedUser(req, context);
-  } catch (error) {
-    const response = authErrorResponse(error);
-    sendJson(res, response.statusCode, response.payload);
-    return;
-  }
-
-  if (req.method !== 'DELETE') {
-    res.setHeader('Allow', 'DELETE');
-    sendJson(res, 405, { ok: false, error: 'METHOD_NOT_ALLOWED' });
-    return;
-  }
-
-  try {
-    const result = context.bot?.clearMiniAppMemory
-      ? await context.bot.clearMiniAppMemory(auth.telegramUser)
-      : null;
-    if (!result) throw new Error('BOT_NOT_READY');
-    sendJson(res, 200, { ok: true, ...result });
-  } catch (error) {
-    context.logger.warn('Mini App memory clear failed', {
-      userId: String(auth.telegramUser.id),
-      error: String(error?.message || error)
-    });
-    sendJson(res, 502, {
-      ok: false,
-      error: 'MEMORY_CLEAR_FAILED',
-      message: '清空记忆失败，请稍后重试。'
-    });
-  }
-}
-
-export function startHealthServer({ port, db, config, logger, bot = null }) {
-  const context = { db, config, logger, bot };
+export function startHealthServer({ port, db, config, logger }) {
+  const context = { db, config, logger };
 
   const server = http.createServer((req, res) => {
     void (async () => {
@@ -2825,16 +2528,6 @@ export function startHealthServer({ port, db, config, logger, bot = null }) {
 
       if (pathname === '/api/miniapp/settings') {
         await handleMiniAppApi(req, res, context);
-        return;
-      }
-
-      if (pathname === '/api/miniapp/action') {
-        await handleMiniAppActionApi(req, res, context);
-        return;
-      }
-
-      if (pathname === '/api/miniapp/memory') {
-        await handleMiniAppMemoryApi(req, res, context);
         return;
       }
 
@@ -2887,8 +2580,6 @@ export function startHealthServer({ port, db, config, logger, bot = null }) {
           '/',
           '/app',
           '/api/miniapp/settings',
-          '/api/miniapp/action',
-          '/api/miniapp/memory',
           '/api/miniapp/sessions',
           '/api/miniapp/sessions/:id',
           '/api/miniapp/admin/overview',
@@ -2922,8 +2613,6 @@ export function startHealthServer({ port, db, config, logger, bot = null }) {
         '/',
         '/app',
         '/api/miniapp/settings',
-        '/api/miniapp/action',
-        '/api/miniapp/memory',
         '/api/miniapp/sessions',
         '/api/miniapp/sessions/:id',
         '/api/miniapp/admin/overview',

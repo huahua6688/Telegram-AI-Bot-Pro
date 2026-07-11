@@ -28,7 +28,7 @@ function signInitData(botToken, user) {
   return params.toString();
 }
 
-test('Mini App securely integrates actions, settings, and memory', async (t) => {
+test('Mini App securely exposes settings without chat input actions', async (t) => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-mini-app-'));
   const db = new BotDatabase(path.join(tempDir, 'bot-data.db'));
   await db.init();
@@ -41,18 +41,6 @@ test('Mini App securely integrates actions, settings, and memory', async (t) => 
     language_code: 'zh-CN'
   };
   const initData = signInitData(botToken, telegramUser);
-  const actions = [];
-  const memoryClears = [];
-  const bot = {
-    async handleMiniAppRequest(payload) {
-      actions.push(payload);
-      return true;
-    },
-    async clearMiniAppMemory(user) {
-      memoryClears.push(user.id);
-      return { memoryCount: 2, topicCount: 1 };
-    }
-  };
   const config = {
     botToken,
     adminUserIds: new Set(),
@@ -62,7 +50,7 @@ test('Mini App securely integrates actions, settings, and memory', async (t) => 
     aiProviderFallbackOrder: [],
     maxInputChars: 12000
   };
-  const server = startHealthServer({ port: 0, db, config, logger: logger(), bot });
+  const server = startHealthServer({ port: 0, db, config, logger: logger() });
 
   t.after(async () => {
     await new Promise((resolve) => server.close(resolve));
@@ -80,19 +68,13 @@ test('Mini App securely integrates actions, settings, and memory', async (t) => 
   const appResponse = await fetch(`${base}/app`);
   assert.equal(appResponse.status, 200);
   const appHtml = await appResponse.text();
-  assert.match(appHtml, /AI 工作台/);
-  assert.match(appHtml, /\/api\/miniapp\/action/);
-  assert.match(appHtml, /联网搜索/);
+  assert.match(appHtml, /我的 AI 设置/);
+  assert.doesNotMatch(appHtml, /AI 工作台/);
+  assert.doesNotMatch(appHtml, /\/api\/miniapp\/action/);
+  assert.doesNotMatch(appHtml, /发送到聊天/);
 
   const denied = await fetch(`${base}/api/miniapp/settings`);
   assert.equal(denied.status, 401);
-
-  const invalid = await fetch(`${base}/api/miniapp/action`, {
-    method: 'POST',
-    headers: { ...headers, 'X-Telegram-Init-Data': `${initData}broken` },
-    body: JSON.stringify({ action: 'chat', text: 'hello' })
-  });
-  assert.equal(invalid.status, 401);
 
   const settingsResponse = await fetch(`${base}/api/miniapp/settings`, { headers });
   assert.equal(settingsResponse.status, 200);
@@ -100,25 +82,10 @@ test('Mini App securely integrates actions, settings, and memory', async (t) => 
   assert.equal(settings.profile.id, String(telegramUser.id));
   assert.ok(settings.providers.some((provider) => provider.id === 'gemini'));
 
-  const action = await fetch(`${base}/api/miniapp/action`, {
+  const removedAction = await fetch(`${base}/api/miniapp/action`, {
     method: 'POST',
     headers,
     body: JSON.stringify({ action: 'web', text: 'today news' })
   });
-  assert.equal(action.status, 200);
-  assert.equal(actions[0].action, 'web');
-  assert.equal(actions[0].text, 'today news');
-  assert.equal(actions[0].user.id, telegramUser.id);
-
-  const memory = await fetch(`${base}/api/miniapp/memory`, {
-    method: 'DELETE',
-    headers
-  });
-  assert.equal(memory.status, 200);
-  assert.deepEqual(memoryClears, [telegramUser.id]);
-  assert.deepEqual(await memory.json(), {
-    ok: true,
-    memoryCount: 2,
-    topicCount: 1
-  });
+  assert.equal(removedAction.status, 404);
 });
