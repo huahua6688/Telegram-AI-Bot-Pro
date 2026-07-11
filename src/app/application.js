@@ -6,10 +6,12 @@ import { ErrorCodes } from '../core/errors/error-codes.js';
 import { loadEnvConfig } from '../adapters/config/env-config-adapter.js';
 import { createDatabase } from '../adapters/persistence/database-adapter.js';
 import { createAIProviderClient } from '../adapters/ai/ai-client-adapter.js';
+import { createAIProviderManager } from '../services/ai-provider-manager.js';
 import { createToolRegistry } from '../adapters/tools/tool-registry-adapter.js';
 import { createPluginManager } from '../adapters/plugins/plugin-manager-adapter.js';
 import { createTelegramBot } from '../adapters/telegram/telegram-bot-adapter.js';
 import { startHealthServer } from '../services/health-server.js';
+import { installEnhancedStatusRoutes } from '../services/status-routes.js';
 import { startAdminApiServer } from '../services/admin-api-server.js';
 import { assertRuntimeConfig } from './runtime-config-validation.js';
 import { AccessControlService } from '../services/access-control-service.js';
@@ -42,6 +44,7 @@ export async function createApplication() {
     const db = await createDatabase(runtimeConfig);
     const accessControl = new AccessControlService({ config: runtimeConfig, db, logger });
     const aiClient = createAIProviderClient(runtimeConfig, logger);
+    const providerManager = createAIProviderManager(runtimeConfig, logger, db);
     const toolRegistry = createToolRegistry(runtimeConfig, logger, accessControl);
     const pluginManager = await createPluginManager(runtimeConfig, logger);
 
@@ -49,6 +52,7 @@ export async function createApplication() {
       config: runtimeConfig,
       db,
       aiClient,
+      providerManager,
       toolRegistry,
       pluginManager,
       logger,
@@ -63,6 +67,7 @@ export async function createApplication() {
       translationModel: runtimeConfig.translationModel,
       routerModel: runtimeConfig.routerModel,
       availableModels: runtimeConfig.availableModels,
+      providerFallbackOrder: runtimeConfig.aiProviderFallbackOrder,
       healthPort: runtimeConfig.healthPort,
       databaseFile: runtimeConfig.databaseFile,
       aiRouterMode: runtimeConfig.enableAiRouter ? runtimeConfig.aiRouterMode : 'off',
@@ -76,6 +81,16 @@ export async function createApplication() {
       logger,
       bot
     });
+
+    installEnhancedStatusRoutes({
+      server: healthServer,
+      db,
+      config: runtimeConfig,
+      bot,
+      providerManager,
+      logger
+    });
+
     const adminServer = startAdminApiServer({
       port: runtimeConfig.adminApiPort,
       db,

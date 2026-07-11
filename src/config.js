@@ -9,18 +9,26 @@ const personaPresets = {
   writer: 'You are a writing assistant. Improve clarity, structure, tone, and creativity while preserving intent.'
 };
 
-function normalizeProvider(value = '') {
+function normalizeProvider(value = '', fallback = 'openai-compatible') {
   const provider = String(value).trim().toLowerCase();
-  if (provider === 'openai' || provider === 'openai-compatible') return 'openai-compatible';
+  if (!provider) return fallback;
+  if (provider === 'auto') return 'auto';
+  if (provider === 'openai-compatible' || provider === 'compatible' || provider === 'custom') return 'openai-compatible';
+  if (provider === 'openai' || provider === 'openai-official') return 'openai';
   if (provider === 'anthropic' || provider === 'claude') return 'anthropic';
   if (provider === 'google' || provider === 'gemini') return 'gemini';
   if (provider === 'gemini-live' || provider === 'gemini_live' || provider === 'google-live') return 'gemini-live';
+  if (provider === 'groq') return 'groq';
+  if (provider === 'openrouter' || provider === 'open-router') return 'openrouter';
+  if (provider === 'github' || provider === 'github-models' || provider === 'github_models') return 'github-models';
+  if (provider === 'huggingface' || provider === 'hugging-face' || provider === 'hf') return 'huggingface';
+  if (provider === 'mistral' || provider === 'mistral-ai') return 'mistral';
   if (provider === 'qwen' || provider === 'tongyi' || provider === 'dashscope') return 'qwen';
   if (provider === 'grok' || provider === 'xai') return 'grok';
   if (provider === 'deepseek') return 'deepseek';
   if (provider === 'glm' || provider === 'zhipu' || provider === 'chatglm') return 'glm';
   if (provider === 'doubao' || provider === 'ark' || provider === 'volcengine') return 'doubao';
-  return 'openai-compatible';
+  return fallback;
 }
 
 function parseBoolean(value, defaultValue = false) {
@@ -40,14 +48,38 @@ function parseList(value) {
     .filter(Boolean);
 }
 
+function normalizeProviderList(value, fallback = []) {
+  const items = parseList(value).map((item) => normalizeProvider(item, '')).filter(Boolean);
+  return items.length > 0 ? Array.from(new Set(items)) : fallback;
+}
+
+function compactList(...values) {
+  return Array.from(
+    new Set(
+      values
+        .flat()
+        .map((item) => String(item || '').trim())
+        .filter(Boolean)
+    )
+  );
+}
+
 export function loadConfig() {
-  const aiProvider = normalizeProvider(process.env.AI_PROVIDER || 'openai-compatible');
+  const aiProvider = normalizeProvider(
+    process.env.DEFAULT_AI_PROVIDER || process.env.AI_PROVIDER || 'openai-compatible'
+  );
   const configuredFallbackModels = parseList(process.env.AI_FALLBACK_MODELS);
   const providerDefaultModels = {
     'openai-compatible': 'gpt-4.1-mini',
+    openai: 'gpt-4.1-mini',
     anthropic: 'claude-3-5-sonnet-latest',
-    gemini: 'gemini-3.5-flash',
+    gemini: 'gemini-2.5-flash',
     'gemini-live': 'gemini-2.5-flash-preview-native-audio-dialog',
+    groq: '',
+    openrouter: '',
+    'github-models': '',
+    huggingface: '',
+    mistral: '',
     qwen: 'qwen-plus',
     grok: 'grok-3-mini-beta',
     deepseek: 'deepseek-chat',
@@ -55,27 +87,87 @@ export function loadConfig() {
     doubao: 'doubao-seed-1-6-250615'
   };
   const providerFallbackModels = {
-    gemini: ['gemini-2.5-flash', 'gemini-2.5-flash-lite']
+    gemini: ['gemini-2.5-flash-lite']
   };
-  const defaultModel = process.env.AI_MODEL || providerDefaultModels[aiProvider];
+  const legacyModelFor = (providerId) => (aiProvider === providerId ? process.env.AI_MODEL : '');
+  const providerModels = {
+    'openai-compatible': compactList(process.env.AI_MODEL, configuredFallbackModels),
+    openai: compactList(process.env.OPENAI_MODEL, legacyModelFor('openai'), parseList(process.env.OPENAI_FALLBACK_MODELS)),
+    anthropic: compactList(process.env.ANTHROPIC_MODEL, legacyModelFor('anthropic'), parseList(process.env.ANTHROPIC_FALLBACK_MODELS)),
+    gemini: compactList(
+      process.env.GEMINI_MODEL,
+      legacyModelFor('gemini'),
+      parseList(process.env.GEMINI_FALLBACK_MODELS || process.env.AI_FALLBACK_MODELS),
+      providerDefaultModels.gemini,
+      providerFallbackModels.gemini
+    ),
+    'gemini-live': compactList(
+      process.env.GEMINI_LIVE_MODEL,
+      legacyModelFor('gemini-live'),
+      providerDefaultModels['gemini-live'],
+      process.env.GEMINI_LIVE_TRANSCRIPTION_MODEL,
+      process.env.GEMINI_LIVE_TTS_MODEL
+    ),
+    groq: compactList(process.env.GROQ_MODEL, legacyModelFor('groq'), parseList(process.env.GROQ_FALLBACK_MODELS)),
+    openrouter: compactList(process.env.OPENROUTER_MODEL, legacyModelFor('openrouter'), parseList(process.env.OPENROUTER_FALLBACK_MODELS)),
+    'github-models': compactList(process.env.GITHUB_MODELS_MODEL, legacyModelFor('github-models'), parseList(process.env.GITHUB_MODELS_FALLBACK_MODELS)),
+    huggingface: compactList(process.env.HUGGINGFACE_MODEL, legacyModelFor('huggingface'), parseList(process.env.HUGGINGFACE_FALLBACK_MODELS)),
+    mistral: compactList(process.env.MISTRAL_MODEL, legacyModelFor('mistral'), parseList(process.env.MISTRAL_FALLBACK_MODELS)),
+    qwen: compactList(process.env.QWEN_MODEL, legacyModelFor('qwen'), parseList(process.env.QWEN_FALLBACK_MODELS)),
+    grok: compactList(process.env.GROK_MODEL, legacyModelFor('grok'), parseList(process.env.GROK_FALLBACK_MODELS)),
+    deepseek: compactList(process.env.DEEPSEEK_MODEL, legacyModelFor('deepseek'), parseList(process.env.DEEPSEEK_FALLBACK_MODELS)),
+    glm: compactList(process.env.GLM_MODEL, legacyModelFor('glm'), parseList(process.env.GLM_FALLBACK_MODELS)),
+    doubao: compactList(process.env.DOUBAO_MODEL, legacyModelFor('doubao'), parseList(process.env.DOUBAO_FALLBACK_MODELS))
+  };
+  for (const [providerId, models] of Object.entries(providerModels)) {
+    if (models.length === 0 && providerDefaultModels[providerId]) {
+      providerModels[providerId] = [providerDefaultModels[providerId]];
+    }
+  }
   const fallbackModels = configuredFallbackModels.length > 0
     ? configuredFallbackModels
     : providerFallbackModels[aiProvider] || [];
+  const defaultModel =
+    process.env.DEFAULT_AI_MODEL ||
+    providerModels[aiProvider]?.[0] ||
+    process.env.AI_MODEL ||
+    providerDefaultModels[aiProvider] ||
+    'gpt-4.1-mini';
+  providerModels[aiProvider] = compactList(defaultModel, providerModels[aiProvider] || [], fallbackModels);
+  const fallbackOrder = normalizeProviderList(
+    process.env.AI_PROVIDER_FALLBACK_ORDER,
+    compactList(aiProvider, 'gemini', 'groq', 'openrouter').map((item) => normalizeProvider(item, '')).filter(Boolean)
+  ).filter((item) => item !== 'auto');
   const databaseFile = path.resolve(process.cwd(), process.env.DATABASE_FILE || './data/bot-data.db');
   const legacyDataFile = path.resolve(process.cwd(), process.env.DATA_FILE || './data/bot-data.json');
 
   return {
     botToken: process.env.BOT_TOKEN || '',
     aiProvider,
+    defaultAIProvider: aiProvider,
     aiApiKey: process.env.AI_API_KEY || '',
     aiBaseUrl: (process.env.AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, ''),
+    openaiApiKey: process.env.OPENAI_API_KEY || process.env.AI_API_KEY || '',
+    openaiBaseUrl: (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, ''),
     anthropicApiKey: process.env.ANTHROPIC_API_KEY || process.env.AI_API_KEY || '',
     anthropicBaseUrl: (process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/$/, ''),
     anthropicApiVersion: process.env.ANTHROPIC_API_VERSION || '2023-06-01',
     geminiApiKey: process.env.GEMINI_API_KEY || process.env.AI_API_KEY || '',
     geminiBaseUrl: (process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, ''),
-    geminiLiveApiKey: process.env.GEMINI_LIVE_API_KEY || process.env.GEMINI_API_KEY || process.env.AI_API_KEY || '',
+    geminiLiveApiKey: process.env.GEMINI_LIVE_API_KEY || '',
     geminiLiveBaseUrl: (process.env.GEMINI_LIVE_BASE_URL || process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, ''),
+    groqApiKey: process.env.GROQ_API_KEY || '',
+    groqBaseUrl: (process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1').replace(/\/$/, ''),
+    openrouterApiKey: process.env.OPENROUTER_API_KEY || '',
+    openrouterBaseUrl: (process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1').replace(/\/$/, ''),
+    openrouterHttpReferer: process.env.OPENROUTER_HTTP_REFERER || '',
+    openrouterAppTitle: process.env.OPENROUTER_APP_TITLE || 'Telegram AI Bot Pro',
+    githubModelsApiKey: process.env.GITHUB_MODELS_API_KEY || process.env.GITHUB_TOKEN || '',
+    githubModelsBaseUrl: (process.env.GITHUB_MODELS_BASE_URL || 'https://models.github.ai/inference').replace(/\/$/, ''),
+    huggingfaceApiKey: process.env.HUGGINGFACE_API_KEY || process.env.HF_TOKEN || '',
+    huggingfaceBaseUrl: (process.env.HUGGINGFACE_BASE_URL || 'https://router.huggingface.co/v1').replace(/\/$/, ''),
+    mistralApiKey: process.env.MISTRAL_API_KEY || '',
+    mistralBaseUrl: (process.env.MISTRAL_BASE_URL || 'https://api.mistral.ai/v1').replace(/\/$/, ''),
     qwenApiKey: process.env.QWEN_API_KEY || process.env.AI_API_KEY || '',
     qwenBaseUrl: (process.env.QWEN_BASE_URL || 'https://dashscope.aliyuncs.com/compatible-mode/v1').replace(/\/$/, ''),
     qwenApiVersion: process.env.QWEN_API_VERSION || '',
@@ -92,20 +184,39 @@ export function loadConfig() {
     doubaoBaseUrl: (process.env.DOUBAO_BASE_URL || 'https://ark.cn-beijing.volces.com/api/v3').replace(/\/$/, ''),
     doubaoApiVersion: process.env.DOUBAO_API_VERSION || '',
     defaultModel,
-    availableModels: Array.from(new Set([defaultModel, ...fallbackModels].filter(Boolean))),
+    providerModels,
+    providerDefaultModels,
+    availableModels: compactList(defaultModel, providerModels[aiProvider] || [], fallbackModels),
+    enableUserProviderSelection: parseBoolean(process.env.ENABLE_USER_PROVIDER_SELECTION, true),
+    enableUserModelSelection: parseBoolean(process.env.ENABLE_USER_MODEL_SELECTION, true),
+    enableProviderFallback: parseBoolean(process.env.ENABLE_PROVIDER_FALLBACK, true),
+    aiProviderFallbackOrder: fallbackOrder,
+    aiProviderMaxRetries: parseInteger(process.env.AI_PROVIDER_MAX_RETRIES, 1),
+    aiProviderRetryDelayMs: parseInteger(process.env.AI_PROVIDER_RETRY_DELAY_MS, 800),
+    aiProviderCooldownMs: parseInteger(process.env.AI_PROVIDER_COOLDOWN_MS, 60000),
+    modelListCacheTtlMs: parseInteger(process.env.MODEL_LIST_CACHE_TTL_MS, 3600000),
     systemPrompt: process.env.AI_SYSTEM_PROMPT || personaPresets.default,
     temperature: Number.parseFloat(process.env.AI_TEMPERATURE || '0.6') || 0.6,
+    transcriptionProvider: normalizeProvider(process.env.TRANSCRIPTION_PROVIDER || 'gemini-live', 'gemini-live'),
     transcriptionModel: process.env.TRANSCRIPTION_MODEL || 'gpt-4o-mini-transcribe',
+    ttsProvider: normalizeProvider(process.env.TTS_PROVIDER || 'gemini-live', 'gemini-live'),
     ttsModel: process.env.TTS_MODEL || 'gpt-4o-mini-tts',
     geminiLiveTranscriptionModel: process.env.GEMINI_LIVE_TRANSCRIPTION_MODEL || process.env.TRANSCRIPTION_MODEL || defaultModel,
     geminiLiveTtsModel: process.env.GEMINI_LIVE_TTS_MODEL || process.env.TTS_MODEL || defaultModel,
     ttsVoice: process.env.TTS_VOICE || 'alloy',
+    translationProvider: normalizeProvider(process.env.TRANSLATION_PROVIDER || aiProvider, aiProvider),
     translationModel: process.env.TRANSLATION_MODEL || defaultModel,
+    routerProvider: normalizeProvider(process.env.ROUTER_PROVIDER || aiProvider, aiProvider),
     routerModel: process.env.ROUTER_MODEL || process.env.TRANSLATION_MODEL || defaultModel,
+    memoryProvider: normalizeProvider(process.env.MEMORY_PROVIDER || aiProvider, aiProvider),
+    memoryModel: process.env.MEMORY_MODEL || process.env.ROUTER_MODEL || defaultModel,
+    visionProvider: normalizeProvider(process.env.VISION_PROVIDER || 'gemini', 'gemini'),
+    visionModel: process.env.VISION_MODEL || providerModels.gemini?.[0] || defaultModel,
     enableAiRouter: parseBoolean(process.env.ENABLE_AI_ROUTER, false),
     aiRouterMode: process.env.AI_ROUTER_MODE || 'single-pass',
     enableMemorySummary: parseBoolean(process.env.ENABLE_MEMORY_SUMMARY, true),
     memorySummaryInterval: Math.max(1, Number.parseInt(process.env.MEMORY_SUMMARY_INTERVAL || '5', 10) || 5),
+    imageProvider: normalizeProvider(process.env.IMAGE_PROVIDER || 'openai-compatible', 'openai-compatible'),
     imageModel: process.env.IMAGE_MODEL || 'gpt-image-1',
     imageSize: process.env.IMAGE_SIZE || '1024x1024',
     documentMaxBytes: parseInteger(process.env.DOCUMENT_MAX_BYTES, 6 * 1024 * 1024),
@@ -143,7 +254,7 @@ export function loadConfig() {
     adminApiEnabled: parseBoolean(process.env.ADMIN_API_ENABLED, false),
     miniAppEnabled: parseBoolean(process.env.MINI_APP_ENABLED, true),
     miniAppUrl: String(process.env.MINI_APP_URL || '').trim(),
-    miniAppAuthMaxAgeSeconds: parseInteger(process.env.MINI_APP_AUTH_MAX_AGE_SECONDS, 86400),
+    miniAppAuthMaxAgeSeconds: parseInteger(process.env.MINI_APP_AUTH_MAX_AGE_SECONDS, 3600),
     databaseFile,
     legacyDataFile,
     adminUserIds: new Set(parseList(process.env.ADMIN_USER_IDS).map(String)),
@@ -160,4 +271,4 @@ export function loadConfig() {
   };
 }
 
-export { personaPresets };
+export { normalizeProvider, personaPresets };

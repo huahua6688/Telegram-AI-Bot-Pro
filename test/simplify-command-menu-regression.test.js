@@ -78,10 +78,15 @@ test("Telegram slash command menu exposes user-facing essentials", () => {
   const end = source.indexOf("const BOT_COMMAND_DESCRIPTIONS", start);
   const commands = source.slice(start, end);
 
-  for (const command of ['start', 'menu', 'help', 'web', 'models', 'persona', 'language', 'reset', 'whoami', 'status']) {
+  for (const command of ['start', 'menu', 'help', 'reset', 'whoami']) {
     assert.match(commands, new RegExp(`['"]${command}['"]`));
   }
 
+  assert.doesNotMatch(commands, /['"]web['"]/);
+  assert.doesNotMatch(commands, /['"]models['"]/);
+  assert.doesNotMatch(commands, /['"]persona['"]/);
+  assert.doesNotMatch(commands, /['"]language['"]/);
+  assert.doesNotMatch(commands, /['"]status['"]/);
   assert.doesNotMatch(commands, /['"]memory['"]/);
   assert.doesNotMatch(commands, /['"]translate['"]/);
   assert.doesNotMatch(commands, /['"]clear['"]/);

@@ -56,9 +56,23 @@ test('loadConfig resolves gemini-live aliases and keys', () => {
   resetEnv();
   process.env.AI_PROVIDER = 'google-live';
   process.env.GEMINI_API_KEY = 'gemini-shared-key';
+  process.env.GEMINI_LIVE_API_KEY = 'gemini-live-key';
   const config = loadConfig();
   assert.equal(config.aiProvider, 'gemini-live');
-  assert.equal(config.geminiLiveApiKey, 'gemini-shared-key');
+  assert.equal(config.geminiLiveApiKey, 'gemini-live-key');
+  assert.equal(config.geminiApiKey, 'gemini-shared-key');
+});
+
+test('loadConfig keeps Gemini Live separate from ordinary Gemini keys', () => {
+  resetEnv();
+  process.env.AI_PROVIDER = 'gemini-live';
+  process.env.GEMINI_API_KEY = 'gemini-key';
+  delete process.env.GEMINI_LIVE_API_KEY;
+
+  const config = loadConfig();
+  assert.equal(config.aiProvider, 'gemini-live');
+  assert.equal(config.geminiApiKey, 'gemini-key');
+  assert.equal(config.geminiLiveApiKey, '');
 });
 
 test('loadConfig resolves first-batch native provider aliases', () => {
@@ -78,6 +92,45 @@ test('loadConfig resolves first-batch native provider aliases', () => {
   process.env.AI_PROVIDER = 'ark';
   config = loadConfig();
   assert.equal(config.aiProvider, 'doubao');
+});
+
+test('loadConfig resolves multi-provider defaults and fallback order', () => {
+  resetEnv();
+  process.env.DEFAULT_AI_PROVIDER = 'groq';
+  process.env.GROQ_MODEL = 'llama-current';
+  process.env.GROQ_FALLBACK_MODELS = 'qwen-current';
+  process.env.OPENROUTER_MODEL = 'openrouter/free-model:free';
+  process.env.AI_PROVIDER_FALLBACK_ORDER = 'groq,openrouter,gemini';
+
+  const config = loadConfig();
+  assert.equal(config.aiProvider, 'groq');
+  assert.equal(config.defaultModel, 'llama-current');
+  assert.deepEqual(config.providerModels.groq, ['llama-current', 'qwen-current']);
+  assert.equal(config.providerModels.openrouter[0], 'openrouter/free-model:free');
+  assert.deepEqual(config.aiProviderFallbackOrder, ['groq', 'openrouter', 'gemini']);
+  assert.equal(config.enableUserProviderSelection, true);
+  assert.equal(config.enableProviderFallback, true);
+});
+
+test('loadConfig resolves second-batch provider aliases and keys', () => {
+  resetEnv();
+  process.env.AI_PROVIDER = 'github';
+  process.env.GITHUB_TOKEN = 'gh-token';
+  let config = loadConfig();
+  assert.equal(config.aiProvider, 'github-models');
+  assert.equal(config.githubModelsApiKey, 'gh-token');
+
+  process.env.AI_PROVIDER = 'hf';
+  process.env.HF_TOKEN = 'hf-token';
+  config = loadConfig();
+  assert.equal(config.aiProvider, 'huggingface');
+  assert.equal(config.huggingfaceApiKey, 'hf-token');
+
+  process.env.AI_PROVIDER = 'mistral-ai';
+  process.env.MISTRAL_API_KEY = 'mistral-key';
+  config = loadConfig();
+  assert.equal(config.aiProvider, 'mistral');
+  assert.equal(config.mistralApiKey, 'mistral-key');
 });
 
 test('loadConfig supports provider-specific key fallback to AI_API_KEY', () => {

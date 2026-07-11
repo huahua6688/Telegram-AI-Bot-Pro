@@ -57,6 +57,14 @@ test("assistant action keyboard hides incomplete favorite button", () => {
   assert.match(body, /act:clear/);
 });
 
+test("assistant model action opens the real AI provider settings", () => {
+  const body = methodBody("handleAssistantActionCallback");
+  assert.match(body, /action === 'model'/);
+  assert.match(body, /this\.getEffectiveAISettings\(state\.userId\)/);
+  assert.match(body, /this\.formatAISettingsPanel\(settings, state\.locale\)/);
+  assert.match(body, /this\.createAIProviderKeyboard\(settings, state\.locale\)/);
+});
+
 test("translation mode is persistent until exit", () => {
   assert.match(source, /this\.activeModes = new Map\(\)/);
   assert.match(source, /async handleActiveMode\(ctx, mode\)/);

@@ -20,12 +20,37 @@ test("telegram language codes are not limited to zh/en", () => {
 
 test("ui labels use current locale and commands are localized", () => {
   assert.ok(bot.includes("function uiLabel"), "uiLabel helper should exist");
+  assert.ok(bot.includes("function uiTextLocale"), "UI messages should share one locale decision helper");
   assert.ok(
     bot.includes("this.ui(locale, 'help')") || bot.includes('this.ui(locale, "help")'),
     "visible buttons should use localized ui labels"
   );
   assert.ok(bot.includes("setLocalizedBotCommands"), "localized slash command helper should exist");
   assert.ok(bot.includes("language_code"), "slash commands should support language_code");
+});
+
+test("button replies avoid mixed-language labels", () => {
+  assert.doesNotMatch(bot, /返回主菜单 \/ Main menu/);
+  assert.doesNotMatch(bot, /当前 Provider/);
+  assert.doesNotMatch(bot, /Provider 状态/);
+  assert.match(bot, /localText\(locale, '平台状态', 'Provider status'\)/);
+  assert.match(bot, /localText\(locale, '🧰 工具箱', '🧰 Toolbox'\)/);
+});
+
+test("settings submenus expose local back paths", () => {
+  assert.match(bot, /function localStatus/);
+  assert.match(bot, /createSettingsNavigationRows\(locale = 'zh'\)/);
+  assert.match(bot, /createWhoamiKeyboard\(ctx, locale = 'zh'\)/);
+  assert.match(bot, /localStatus\(item\.status, locale\)/);
+  assert.doesNotMatch(bot, /messagesHandled：/);
+  assert.match(bot, /已处理消息：/);
+});
+
+test("start and help copy stay compact", () => {
+  assert.doesNotMatch(bot, /Try asking me to:/);
+  assert.doesNotMatch(bot, /直接描述你想要的结果。例如：/);
+  assert.match(bot, /直接发文字、图片、语音、文件或链接/);
+  assert.match(bot, /需要更换模型、语言、记忆或人格/);
 });
 
 test("persona affects natural-agent answers and followups", () => {

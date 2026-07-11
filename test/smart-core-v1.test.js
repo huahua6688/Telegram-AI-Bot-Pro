@@ -150,7 +150,7 @@ test('Gemini defaults favor the current model and a larger conversation window',
 
   try {
     const config = loadConfig();
-    assert.equal(config.defaultModel, 'gemini-3.5-flash');
+    assert.equal(config.defaultModel, 'gemini-2.5-flash');
     assert.equal(config.enableAiRouter, false);
     assert.equal(config.maxHistoryMessages, 32);
     assert.equal(config.enableGeminiGoogleSearch, true);

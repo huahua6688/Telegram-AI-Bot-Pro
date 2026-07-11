@@ -26,10 +26,11 @@ test('runtime config rejects missing bot token', () => {
   assert.throws(() => assertRuntimeConfig(validConfig({ botToken: '' })), /BOT_TOKEN/);
 });
 
-test('runtime config rejects missing provider API key', () => {
+test('runtime config allows missing provider API key so deployment can start', () => {
   const errors = getRuntimeConfigErrors(validConfig({ geminiApiKey: '' }));
 
-  assert.ok(errors.some((item) => item.includes('gemini requires')));
+  assert.deepEqual(errors, []);
+  assert.doesNotThrow(() => assertRuntimeConfig(validConfig({ geminiApiKey: '' })));
 });
 
 test('runtime config rejects enabled Admin API without token', () => {

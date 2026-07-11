@@ -8,7 +8,7 @@
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
     "test": "node --test",
-    "test:quick": "node --test test/config.test.js test/telegram-utils.test.js test/conversation-utils.test.js test/tool-access-policy.test.js test/provider-loader.test.js test/phase-g.smoke.test.js test/mini-app.test.js test/ai-fallback-regression.test.js test/runtime-config-validation.test.js test/menu-inline-regression.test.js test/image-menu-regression.test.js test/voice-menu-regression.test.js test/file-menu-regression.test.js test/admin-menu-regression.test.js test/back-to-main-menu-regression.test.js test/admin-ai-test-regression.test.js test/compact-callback-replies-regression.test.js test/simplify-command-menu-regression.test.js test/admin-power-pack-regression.test.js test/ux-power-pack-regression.test.js test/toolbox-power-pack-regression.test.js test/menu-target-reference-regression.test.js test/settings-center-regression.test.js test/productize-core-regression.test.js test/bottom-keyboard-status-regression.test.js test/real-tools-clean-output-regression.test.js test/product-agent-regression.test.js test/search-translate-output-regression.test.js test/natural-agent-regression.test.js test/human-like-agent-regression.test.js test/smart-agent-v3-regression.test.js test/smart-core-v1.test.js test/smart-core-v2.test.js test/context-links-v4-regression.test.js test/button-router-v5-regression.test.js test/button-router-v5b-regression.test.js test/button-router-v6-regression.test.js test/button-router-v7-regression.test.js test/button-router-v8-regression.test.js test/button-router-v9-regression.test.js test/language-persona-context-v10-regression.test.js",
+    "test:quick": "node --test test/config.test.js test/telegram-utils.test.js test/conversation-utils.test.js test/tool-access-policy.test.js test/provider-loader.test.js test/provider-manager.test.js test/provider-fallback.test.js test/provider-health.test.js test/user-ai-settings.test.js test/groq-provider.test.js test/openrouter-provider.test.js test/gemini-provider.test.js test/gemini-live-provider.test.js test/provider-menu.test.js test/model-menu.test.js test/provider-callback-security.test.js test/provider-config-compatibility.test.js test/phase-g.smoke.test.js test/mini-app.test.js test/ai-fallback-regression.test.js test/runtime-config-validation.test.js test/menu-inline-regression.test.js test/image-menu-regression.test.js test/voice-menu-regression.test.js test/file-menu-regression.test.js test/admin-menu-regression.test.js test/back-to-main-menu-regression.test.js test/admin-ai-test-regression.test.js test/compact-callback-replies-regression.test.js test/simplify-command-menu-regression.test.js test/admin-power-pack-regression.test.js test/ux-power-pack-regression.test.js test/toolbox-power-pack-regression.test.js test/menu-target-reference-regression.test.js test/settings-center-regression.test.js test/productize-core-regression.test.js test/bottom-keyboard-status-regression.test.js test/real-tools-clean-output-regression.test.js test/product-agent-regression.test.js test/search-translate-output-regression.test.js test/natural-agent-regression.test.js test/human-like-agent-regression.test.js test/smart-agent-v3-regression.test.js test/smart-core-v1.test.js test/smart-core-v2.test.js test/context-links-v4-regression.test.js test/button-router-v5-regression.test.js test/button-router-v5b-regression.test.js test/button-router-v6-regression.test.js test/button-router-v7-regression.test.js test/button-router-v8-regression.test.js test/button-router-v9-regression.test.js test/language-persona-context-v10-regression.test.js",
     "test:smoke": "node --test test/phase-g.smoke.test.js",
     "test:e2e": "node --test test/phase-g.e2e.test.js",
     "test:regression": "node --test test/db.test.js test/access-control-service.test.js test/admin-api-server.test.js test/ai-client-factory.test.js test/provider-loader.test.js test/phase-g.regression.test.js",
@@ -17,13 +17,13 @@
     "test:full": "npm run test:quick && npm run test:e2e && npm run test:regression",
     "test:release": "npm run test:full && npm run test:load && npm run test:fault",
     "doctor": "node scripts/doctor.js",
-    "check:syntax": "find src test scripts -name \"*.js\" -print0 | xargs -0 -n1 node --check",
+    "check:syntax": "node scripts/check-syntax.js",
     "verify": "npm run check:secrets && npm run check:syntax && npm run test:quick",
     "predeploy": "npm run doctor && npm run verify && npm run docker:verify",
     "docker:build": "docker build -t telegram-ai-bot-pro:test .",
     "docker:doctor": "bash scripts/docker-doctor.sh",
     "docker:verify": "npm run docker:build && npm run docker:doctor",
-    "check:secrets": "bash scripts/check-secrets.sh"
+    "check:secrets": "node scripts/check-secrets.js"
   },
   "keywords": [
     "telegram",

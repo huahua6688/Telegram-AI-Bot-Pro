@@ -71,7 +71,7 @@ test('BotDatabase imports legacy JSON data into SQLite', async (t) => {
   assert.equal(db.findChat('200')?.triggerMode, 'mention');
   assert.deepEqual(db.getConversation('200:100:main'), [{ role: 'user', content: 'hello' }]);
   assert.equal(db.getStats().aiCalls, 4);
-  assert.equal(db.getMeta('schemaVersion'), '4');
+  assert.equal(db.getMeta('schemaVersion'), '5');
 });
 
 test('BotDatabase provides RBAC, feature flags, policy rules and audit logs', async (t) => {
@@ -162,6 +162,37 @@ test('BotDatabase persists updates, quota counters, and favorites', async (t) =>
   assert.equal(db.findUser(1)?.dailyUsageCount, 1);
   assert.equal(favorite?.text, 'assistant text');
   assert.equal(db.listFavorites({ userId: 1 }).length, 1);
+});
+
+test('BotDatabase persists per-user AI provider settings', async (t) => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-ai-bot-pro-db-'));
+
+  const db = new BotDatabase(path.join(tempDir, 'bot-data.db'));
+  let reopened = null;
+  t.after(() => {
+    db.close();
+    reopened?.close();
+    return fs.rm(tempDir, { recursive: true, force: true });
+  });
+  await db.init();
+  await db.upsertUser({ id: 9, username: 'provider-user', first_name: 'Provider', language_code: 'en' });
+
+  db.setUserProvider(9, 'groq');
+  db.setUserModel(9, 'llama-current');
+  db.setUserFallbackEnabled(9, false);
+
+  let settings = db.getUserAISettings(9);
+  assert.equal(settings.providerId, 'groq');
+  assert.equal(settings.modelId, 'llama-current');
+  assert.equal(settings.fallbackEnabled, false);
+
+  db.close();
+  reopened = new BotDatabase(path.join(tempDir, 'bot-data.db'));
+  await reopened.init();
+  settings = reopened.getUserAISettings(9);
+  assert.equal(settings.providerId, 'groq');
+  assert.equal(settings.modelId, 'llama-current');
+  assert.equal(settings.fallbackEnabled, false);
 });
 
 test('BotDatabase tracks assistant regenerate message versions', async (t) => {

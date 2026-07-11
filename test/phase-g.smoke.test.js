@@ -50,7 +50,7 @@ test('smoke: health endpoint is reachable with sqlite runtime', async (t) => {
   try {
     if (!server.listening) await once(server, 'listening');
     const port = server.address().port;
-    const appRes = await fetch(`http://127.0.0.1:${port}/`);
+    const appRes = await fetch(`http://127.0.0.1:${port}/app`);
     assert.equal(appRes.status, 200);
     assert.match(appRes.headers.get('content-type') || '', /text\/html/);
 

@@ -6,9 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { once } from 'node:events';
 import { BotDatabase } from '../src/db.js';
-import { personaPresets } from '../src/config.js';
 import { startHealthServer } from '../src/services/health-server.js';
-import { validateTelegramInitData } from '../src/services/mini-app-service.js';
 
 function logger() {
   return { info() {}, warn() {}, error() {}, debug() {} };
@@ -30,7 +28,7 @@ function signInitData(botToken, user) {
   return params.toString();
 }
 
-test('Mini App validates Telegram identity and integrates settings and actions', async (t) => {
+test('Mini App securely integrates actions, settings, and memory', async (t) => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-mini-app-'));
   const db = new BotDatabase(path.join(tempDir, 'bot-data.db'));
   await db.init();
@@ -43,37 +41,36 @@ test('Mini App validates Telegram identity and integrates settings and actions',
     language_code: 'zh-CN'
   };
   const initData = signInitData(botToken, telegramUser);
-  assert.equal(validateTelegramInitData(initData, botToken)?.user?.id, telegramUser.id);
-  assert.equal(validateTelegramInitData(`${initData}broken`, botToken), null);
-
   const actions = [];
-  const commandUpdates = [];
+  const memoryClears = [];
   const bot = {
     async handleMiniAppRequest(payload) {
       actions.push(payload);
+      return true;
     },
-    async setChatBotCommands(ctx, locale) {
-      commandUpdates.push({ chatId: ctx.chat.id, locale });
+    async clearMiniAppMemory(user) {
+      memoryClears.push(user.id);
+      return { memoryCount: 2, topicCount: 1 };
     }
   };
   const config = {
-    miniAppEnabled: true,
-    miniAppAuthMaxAgeSeconds: 86400,
     botToken,
     adminUserIds: new Set(),
-    availableModels: ['gemini-3.5-flash', 'gemini-2.5-flash'],
-    defaultModel: 'gemini-3.5-flash',
-    personaPresets,
-    enableWebSearch: true,
+    aiProvider: 'gemini',
+    defaultModel: 'gemini-2.5-flash',
+    providerModels: { gemini: ['gemini-2.5-flash'] },
+    aiProviderFallbackOrder: [],
     maxInputChars: 12000
   };
   const server = startHealthServer({ port: 0, db, config, logger: logger(), bot });
+
   t.after(async () => {
     await new Promise((resolve) => server.close(resolve));
     db.close();
     await fs.rm(tempDir, { recursive: true, force: true });
   });
   if (!server.listening) await once(server, 'listening');
+
   const base = `http://127.0.0.1:${server.address().port}`;
   const headers = {
     'Content-Type': 'application/json',
@@ -82,31 +79,28 @@ test('Mini App validates Telegram identity and integrates settings and actions',
 
   const appResponse = await fetch(`${base}/app`);
   assert.equal(appResponse.status, 200);
-  assert.match(await appResponse.text(), /你的 AI 工作台/);
+  const appHtml = await appResponse.text();
+  assert.match(appHtml, /AI 工作台/);
+  assert.match(appHtml, /\/api\/miniapp\/action/);
+  assert.match(appHtml, /联网搜索/);
 
-  const denied = await fetch(`${base}/mini-app/api/bootstrap`);
+  const denied = await fetch(`${base}/api/miniapp/settings`);
   assert.equal(denied.status, 401);
 
-  const bootstrap = await fetch(`${base}/mini-app/api/bootstrap`, { headers });
-  assert.equal(bootstrap.status, 200);
-  const bootstrapPayload = await bootstrap.json();
-  assert.equal(bootstrapPayload.user.id, String(telegramUser.id));
-  assert.ok(bootstrapPayload.options.personas.some((item) => item.id === 'coder'));
-
-  const settings = await fetch(`${base}/mini-app/api/settings`, {
+  const invalid = await fetch(`${base}/api/miniapp/action`, {
     method: 'POST',
-    headers,
-    body: JSON.stringify({
-      model: 'gemini-2.5-flash',
-      persona: 'coder',
-      language: 'zh-hant'
-    })
+    headers: { ...headers, 'X-Telegram-Init-Data': `${initData}broken` },
+    body: JSON.stringify({ action: 'chat', text: 'hello' })
   });
-  assert.equal(settings.status, 200);
-  assert.equal(db.findUser(telegramUser.id)?.persona, 'coder');
-  assert.deepEqual(commandUpdates, [{ chatId: telegramUser.id, locale: 'zh-hant' }]);
+  assert.equal(invalid.status, 401);
 
-  const action = await fetch(`${base}/mini-app/api/action`, {
+  const settingsResponse = await fetch(`${base}/api/miniapp/settings`, { headers });
+  assert.equal(settingsResponse.status, 200);
+  const settings = await settingsResponse.json();
+  assert.equal(settings.profile.id, String(telegramUser.id));
+  assert.ok(settings.providers.some((provider) => provider.id === 'gemini'));
+
+  const action = await fetch(`${base}/api/miniapp/action`, {
     method: 'POST',
     headers,
     body: JSON.stringify({ action: 'web', text: 'today news' })
@@ -114,4 +108,17 @@ test('Mini App validates Telegram identity and integrates settings and actions',
   assert.equal(action.status, 200);
   assert.equal(actions[0].action, 'web');
   assert.equal(actions[0].text, 'today news');
+  assert.equal(actions[0].user.id, telegramUser.id);
+
+  const memory = await fetch(`${base}/api/miniapp/memory`, {
+    method: 'DELETE',
+    headers
+  });
+  assert.equal(memory.status, 200);
+  assert.deepEqual(memoryClears, [telegramUser.id]);
+  assert.deepEqual(await memory.json(), {
+    ok: true,
+    memoryCount: 2,
+    topicCount: 1
+  });
 });

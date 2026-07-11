@@ -22,6 +22,10 @@ test("normal messages use the main single-pass agent", () => {
 
 test("visible main menu is minimal", () => {
   const menu = methodSlice(bot, "createMenuKeyboard", "createSettingsKeyboard");
+  assert.doesNotMatch(menu, /menu:models/);
+  assert.doesNotMatch(menu, /menu:image/);
+  assert.doesNotMatch(menu, /menu:file/);
+  assert.doesNotMatch(menu, /menu:tts/);
   assert.match(menu, /menu:help/);
   assert.match(menu, /menu:settings/);
   assert.match(menu, /menu:admin/);
@@ -29,11 +33,18 @@ test("visible main menu is minimal", () => {
 
   assert.doesNotMatch(menu, /menu:chat/);
   assert.doesNotMatch(menu, /menu:translate/);
-  assert.doesNotMatch(menu, /menu:file/);
   assert.doesNotMatch(menu, /menu:web/);
-  assert.doesNotMatch(menu, /menu:image/);
-  assert.doesNotMatch(menu, /menu:tts/);
-  assert.match(menu, /menu:toolbox/);
+  assert.doesNotMatch(menu, /menu:toolbox/);
+});
+
+test("AI provider menu uses short callback data", () => {
+  const menu = methodSlice(bot, "createAIProviderKeyboard", "createAIModelKeyboard");
+  const models = methodSlice(bot, "createAIModelKeyboard", "formatAISettingsPanel");
+  assert.match(menu, /`ai:p:\$\{providerId\}`/);
+  assert.match(menu, /ai:auto/);
+  assert.match(models, /ai:m:\$\{index\}/);
+  assert.doesNotMatch(menu, /\[x\]/);
+  assert.doesNotMatch(models, /\[x\]/);
 });
 
 test("visible settings menu has no toolbox entry", () => {
@@ -43,9 +54,9 @@ test("visible settings menu has no toolbox entry", () => {
 });
 
 test("bottom assistant buttons remain minimal", () => {
-  assert.match(bot, /🆘 帮助/);
-  assert.match(bot, /⚙️ 设置/);
-  assert.match(bot, /🛠 管理/);
-  assert.match(bot, /退出模式/);
-  assert.match(bot, /关闭菜单|Close menu/);
+  assert.match(bot, /menu:help/);
+  assert.match(bot, /menu:settings/);
+  assert.match(bot, /menu:admin/);
+  assert.match(bot, /this\.ui\(locale, 'exit'\)/);
+  assert.match(bot, /menu:close/);
 });
