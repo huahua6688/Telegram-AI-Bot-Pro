@@ -1170,6 +1170,10 @@ export class TelegramAIBot {
   }
 
   createEssentialMenuKeyboard(locale = 'zh') {
+    if (this.config?.miniAppEnabled !== false) {
+      return undefined;
+    }
+
     const labels = this.getMenuLabels(locale);
     return Markup.inlineKeyboard([
       [
@@ -1220,6 +1224,10 @@ export class TelegramAIBot {
   }
 
   createToolboxKeyboard(locale = 'zh') {
+    if (this.config?.miniAppEnabled !== false) {
+      return undefined;
+    }
+
     const labels =
       isEnglishLocale(locale)
         ? {
@@ -3131,16 +3139,16 @@ export class TelegramAIBot {
         ? [
             'Hi, I am your AI assistant.',
             '',
-            'Chat, search, translation, image requests, files, and voice all stay in this conversation.',
-            'Open Console beside the message box only for settings, history, and administration.'
+            'Tell me what you need or send content directly. I will choose the right capability automatically.',
+            'Use the button below only when you want to enable private chat. Open Console beside the message box for settings and history.'
           ].join('\n')
         : [
             '你好，我是你的 AI 助手。',
             '',
-            '聊天、联网搜索、翻译、图片、文件和语音都直接在这里发送。',
-            '输入框旁的「控制台」只用于设置、聊天记录和管理。'
+            '直接告诉我你要做什么或发送内容，我会自动选择合适的能力。',
+            '只有需要开启隐私聊天时才用下方按钮；设置和聊天记录在输入框旁的「控制台」。'
           ].join('\n');
-      await ctx.reply(text, this.createEssentialMenuKeyboard(locale));
+      await ctx.reply(text, this.createBottomKeyboard(locale));
       return;
     }
 
@@ -3207,16 +3215,16 @@ export class TelegramAIBot {
     if (this.config?.miniAppEnabled !== false) {
       const helpText = locale === 'en'
         ? [
-            'Send chat, search, translation, image, file, or voice requests directly here.',
+            'Describe the result you want directly. Features that can be detected automatically do not need buttons.',
             '',
-            'Open Console beside the message box only for provider/model settings, persona, language, history, and administration.'
+            'Use the button below for private chat. Open Console beside the message box for provider/model settings, persona, language, history, and administration.'
           ].join('\n')
         : [
-            '聊天、联网搜索、翻译、图片、文件和语音都直接在这里发送。',
+            '直接描述你想要的结果即可；能够自动识别的功能不需要按钮。',
             '',
-            '输入框旁的「控制台」只用于 Provider/模型、人格、语言、聊天记录和管理。'
+            '隐私聊天使用下方按钮；Provider/模型、人格、语言、聊天记录和管理在输入框旁的「控制台」。'
           ].join('\n');
-      await sendTextReply(ctx, helpText, this.config.maxOutputChars, this.createEssentialMenuKeyboard(locale));
+      await sendTextReply(ctx, helpText, this.config.maxOutputChars, this.createBottomKeyboard(locale));
       return;
     }
 
@@ -3445,6 +3453,10 @@ export class TelegramAIBot {
 
   async handleMenu(ctx) {
     const locale = this.getLocale(ctx);
+    if (this.config?.miniAppEnabled !== false) {
+      await this.handleHelp(ctx);
+      return;
+    }
     await ctx.reply(this.t(locale, 'menu'), this.createEssentialMenuKeyboard(locale));
   }
 
@@ -4814,6 +4826,10 @@ export class TelegramAIBot {
     }
 
     if (target === 'toolbox') {
+      if (this.config?.miniAppEnabled !== false) {
+        await this.handleHelp(ctx);
+        return;
+      }
       await ctx.reply(localText(locale, '🧰 工具箱', '🧰 Toolbox'), this.createToolboxKeyboard(locale));
       return;
     }
@@ -4837,6 +4853,11 @@ export class TelegramAIBot {
     const target = String(ctx.match?.[1] || '').trim();
 
     await ctx.answerCbQuery();
+
+    if (this.config?.miniAppEnabled !== false) {
+      await this.handleHelp(ctx);
+      return;
+    }
 
     if (target === 'web') {
       this.setPendingMenuAction(ctx, 'web_prompt');
@@ -5718,6 +5739,10 @@ export class TelegramAIBot {
     }
 
     if (type === 'toolbox_menu') {
+      if (this.config?.miniAppEnabled !== false) {
+        await this.handleHelp(ctx);
+        return true;
+      }
       await ctx.reply(localText(locale, '🧰 工具箱', '🧰 Toolbox'), this.createToolboxKeyboard(locale));
       return true;
     }
