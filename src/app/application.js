@@ -73,7 +73,8 @@ export async function createApplication() {
       port: runtimeConfig.healthPort,
       db,
       config: runtimeConfig,
-      logger
+      logger,
+      bot
     });
     const adminServer = startAdminApiServer({
       port: runtimeConfig.adminApiPort,

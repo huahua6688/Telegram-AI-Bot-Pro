@@ -62,7 +62,7 @@ test('e2e: provider switch + persistence + admin api flow', async (t) => {
     'Content-Type': 'application/json'
   };
 
-  const healthRes = await fetch(`http://127.0.0.1:${healthPort}/`);
+  const healthRes = await fetch(`http://127.0.0.1:${healthPort}/health`);
   assert.equal(healthRes.status, 200);
 
   const providersRes = await fetch(`http://127.0.0.1:${adminPort}/admin/api/v1/providers`, { headers });

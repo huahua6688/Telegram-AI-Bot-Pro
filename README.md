@@ -70,11 +70,9 @@ Zeabur 环境变量模板：
 ### Telegram 核心能力
 - 私聊直接对话
 - 群聊支持 `@机器人`、回复机器人、关键词触发
-- `/start`、`/help`、`/reset`、`/clear`
-- `/model`、`/models`
-- `/language`、`/menu`
-- `/persona`
-- `/stats`
+- Mini App 集成对话、联网搜索、翻译、图片生成、模型、人格、语言和记忆设置
+- 默认只显示 `/start`、`/app`、`/help` 三个用户命令
+- 其他能力直接在 Mini App 或自然语言对话中使用
 
 ### AI 与多模态能力
 - 多平台 AI 提供商（OpenAI 兼容 / Anthropic / Gemini / Qwen / Grok / DeepSeek / GLM / Doubao）
@@ -149,18 +147,16 @@ npm run dev
 ## 常用命令
 
 - `/start` 启动说明
+- `/app` 打开 AI Mini App
 - `/help` 查看帮助
-- `/reset` / `/clear` 清空当前会话记忆
-- `/models` 查看可用模型
-- `/model gpt-4.1-mini` 切换模型
-- `/persona coder` 切换人格
-- `/language en` 切换界面语言
-- `/menu` 显示常用功能按钮
-- `/web 最新 AI 新闻` 联网搜索
-- `/image 一只在赛博城市飞行的机械猫` 生成图片
-- `/tts 你好，这是测试语音` 生成语音
-- `/stats` 查看用量
-- 也支持直接发送：`搜索 OpenAI 最新消息`、`生成图片 一只机械猫`、`朗读 这段文本`
+- 直接发送自然语言即可，例如：`搜索 OpenAI 最新消息`、`生成图片 一只机械猫`、`朗读 这段文本`
+
+## Telegram Mini App
+
+- 默认启用，域名首页 `/`、`/app`、`/mini-app` 都会打开同一个 Mini App。
+- 如果已经在 BotFather 配置了 Mini App 域名，无需再次设置 `MINI_APP_URL`。
+- 如需让程序自动设置 Telegram 菜单按钮，可设置 `MINI_APP_URL=https://你的域名/`。
+- 健康检查请使用 `/health` 或 `/ready`，不要再使用域名首页。
 
 ## 群聊触发模式
 

@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="color-scheme" content="light dark">
+    <title>AI 助手</title>
+    <script src="https://telegram.org/js/telegram-web-app.js?62"></script>
+    <link rel="stylesheet" href="/mini-app/styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <header class="hero">
+        <div class="brand-mark">AI</div>
+        <div>
+          <p class="eyebrow">TELEGRAM INTELLIGENCE</p>
+          <h1>你的 AI 工作台</h1>
+          <p id="welcome" class="muted">正在连接机器人…</p>
+        </div>
+      </header>
+
+      <section class="card composer-card">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">QUICK ACTION</p>
+            <h2>想让我做什么？</h2>
+          </div>
+          <span id="connection" class="status-dot">连接中</span>
+        </div>
+
+        <div id="actionTabs" class="action-tabs" role="tablist">
+          <button class="action-tab active" data-action="chat" type="button">对话</button>
+          <button class="action-tab" data-action="web" type="button">联网搜索</button>
+          <button class="action-tab" data-action="translate" type="button">翻译</button>
+          <button class="action-tab" data-action="image" type="button">生成图片</button>
+        </div>
+
+        <label class="field-label" for="prompt">内容</label>
+        <textarea id="prompt" rows="5" placeholder="直接描述你的问题或目标…"></textarea>
+
+        <label id="targetLanguageWrap" class="field hidden" for="targetLanguage">
+          <span class="field-label">翻译目标语言</span>
+          <select id="targetLanguage">
+            <option value="auto">自动判断</option>
+            <option value="zh">简体中文</option>
+            <option value="en">English</option>
+            <option value="km">ភាសាខ្មែរ</option>
+            <option value="ms">Bahasa Melayu</option>
+            <option value="ja">日本語</option>
+            <option value="ko">한국어</option>
+          </select>
+        </label>
+
+        <button id="sendAction" class="primary-button" type="button">发送到聊天</button>
+        <p class="helper">结果会由机器人发送到当前私聊，不会把 API Key 暴露给网页。</p>
+      </section>
+
+      <section class="card">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">PERSONALIZE</p>
+            <h2>助手设置</h2>
+          </div>
+          <span id="saveState" class="muted small">自动保存</span>
+        </div>
+
+        <div class="settings-grid">
+          <label class="field" for="model">
+            <span class="field-label">模型</span>
+            <select id="model"></select>
+          </label>
+          <label class="field" for="persona">
+            <span class="field-label">人格</span>
+            <select id="persona"></select>
+          </label>
+          <label class="field field-wide" for="language">
+            <span class="field-label">界面语言</span>
+            <select id="language"></select>
+          </label>
+        </div>
+      </section>
+
+      <section class="card utility-card">
+        <div>
+          <p class="eyebrow">MEMORY</p>
+          <h2>对话记忆</h2>
+          <p class="muted">清空当前私聊上下文、长期记忆和话题状态。</p>
+        </div>
+        <button id="clearMemory" class="secondary-button danger" type="button">清空记忆</button>
+      </section>
+
+      <section class="card note-card">
+        <p class="eyebrow">FILES & VOICE</p>
+        <h2>文件、图片和语音</h2>
+        <p class="muted">需要上传内容时，点“返回聊天”，直接使用 Telegram 的附件或语音按钮发送给机器人。</p>
+        <button id="closeApp" class="secondary-button" type="button">返回聊天</button>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script src="/mini-app/app.js" defer></script>
+  </body>
+</html>

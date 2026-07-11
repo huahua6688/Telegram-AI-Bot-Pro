@@ -50,13 +50,14 @@ Zeabur 设置：
 
 可访问：
 
-    /
     /health
     /ready
 
 推荐使用：
 
     /ready
+
+域名首页 `/` 用于 Telegram Mini App。如果已在 BotFather 配置该域名，无需重复设置；如需由程序自动更新菜单按钮，可设置 `MINI_APP_URL=https://你的域名/`。
 
 ## Admin API
 

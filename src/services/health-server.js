@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { createMiniAppHandler } from './mini-app-service.js';
 
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, {
@@ -26,12 +27,15 @@ function buildHealthPayload({ db, config }) {
   };
 }
 
-export function startHealthServer({ port, db, config, logger }) {
-  const server = http.createServer((req, res) => {
+export function startHealthServer({ port, db, config, logger, bot = null }) {
+  const handleMiniApp = createMiniAppHandler({ db, config, logger, bot });
+  const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     const pathname = url.pathname;
 
-    if (pathname === '/' || pathname === '/health') {
+    if (await handleMiniApp(req, res, url)) return;
+
+    if (pathname === '/health') {
       try {
         sendJson(res, 200, buildHealthPayload({ db, config }));
       } catch (error) {
@@ -66,13 +70,13 @@ export function startHealthServer({ port, db, config, logger }) {
     sendJson(res, 404, {
       ok: false,
       error: 'NOT_FOUND',
-      availableRoutes: ['/', '/health', '/ready']
+      availableRoutes: ['/', '/app', '/health', '/ready']
     });
   });
 
   server.listen(port, () => {
     logger.info(`Health server listening on :${port}`, {
-      routes: ['/', '/health', '/ready']
+      routes: ['/', '/app', '/mini-app/api', '/health', '/ready']
     });
   });
 
