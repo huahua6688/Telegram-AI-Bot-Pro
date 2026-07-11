@@ -21,7 +21,7 @@ test("normal messages use the main single-pass agent", () => {
 });
 
 test("visible main menu is minimal", () => {
-  const menu = methodSlice(bot, "createMenuKeyboard", "createSettingsKeyboard");
+  const menu = methodSlice(bot, "createMenuKeyboard", "createEssentialMenuKeyboard");
   assert.doesNotMatch(menu, /menu:models/);
   assert.doesNotMatch(menu, /menu:image/);
   assert.doesNotMatch(menu, /menu:file/);
