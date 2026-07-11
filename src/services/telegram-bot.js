@@ -3172,14 +3172,14 @@ export class TelegramAIBot {
         ? [
             'Hi, I am your AI assistant.',
             '',
-            'Send a message here for normal conversation.',
-            'For search, translation, models, personas, language, and memory, open the AI App beside the message box.'
+            'Chat, search, translation, image requests, files, and voice all stay in this conversation.',
+            'Open AI App beside the message box only for settings, history, and administration.'
           ].join('\n')
         : [
             '你好，我是你的 AI 助手。',
             '',
-            '普通聊天直接发消息就可以。',
-            '联网搜索、翻译、模型、人格、语言和记忆都已整合到输入框旁的 AI App。'
+            '聊天、联网搜索、翻译、图片、文件和语音都直接在这里发送。',
+            '输入框旁的 AI App 只用于设置、聊天记录和管理。'
           ].join('\n');
       await ctx.reply(text, this.createBottomKeyboard(locale));
       return;
@@ -3248,16 +3248,14 @@ export class TelegramAIBot {
     if (this.config?.miniAppEnabled !== false) {
       const helpText = locale === 'en'
         ? [
-            'Just send a message to chat with me.',
+            'Send chat, search, translation, image, file, or voice requests directly here.',
             '',
-            'Open AI App beside the message box for web search, translation, image prompts, model, persona, language, and memory settings.',
-            'Send files, photos, or voice messages directly in this chat.'
+            'Open AI App beside the message box only for provider/model settings, persona, language, history, and administration.'
           ].join('\n')
         : [
-            '直接发消息就能和我对话。',
+            '聊天、联网搜索、翻译、图片、文件和语音都直接在这里发送。',
             '',
-            '联网搜索、翻译、图片提示、模型、人格、语言和记忆设置，请打开输入框旁的 AI App。',
-            '文件、照片或语音仍然直接发送到聊天里。'
+            '输入框旁的 AI App 只用于 Provider/模型、人格、语言、聊天记录和管理。'
           ].join('\n');
       await sendTextReply(ctx, helpText, this.config.maxOutputChars, this.createBottomKeyboard(locale));
       return;
@@ -3499,8 +3497,8 @@ export class TelegramAIBot {
     const locale = this.getLocale(ctx);
     const miniAppUrl = this.getMiniAppUrl();
     const text = locale === 'en'
-      ? 'Open AI App from the menu button beside the message box.'
-      : '请点击输入框旁的 AI App 按钮打开功能工作台。';
+      ? 'Open AI App from the menu button beside the message box to manage settings and history.'
+      : '请点击输入框旁的 AI App 按钮管理设置和聊天记录。';
 
     if (miniAppUrl) {
       await ctx.reply(text, Markup.inlineKeyboard([
@@ -3510,74 +3508,6 @@ export class TelegramAIBot {
     }
 
     await ctx.reply(text, Markup.removeKeyboard());
-  }
-
-  createMiniAppContext(user = {}, text = '') {
-    const chatId = Number(user.id);
-    const telegram = this.bot.telegram;
-    return {
-      from: user,
-      chat: { id: chatId, type: 'private' },
-      message: {
-        text,
-        date: Math.floor(Date.now() / 1000),
-        chat: { id: chatId, type: 'private' },
-        from: user
-      },
-      telegram,
-      sendChatAction: (action) => telegram.sendChatAction(chatId, action),
-      reply: (message, extra = {}) => telegram.sendMessage(chatId, message, extra),
-      replyWithPhoto: (photo, extra = {}) => telegram.sendPhoto(chatId, photo, extra),
-      replyWithVoice: (voice, extra = {}) => telegram.sendVoice(chatId, voice, extra),
-      replyWithAudio: (audio, extra = {}) => telegram.sendAudio(chatId, audio, extra),
-      replyWithDocument: (document, extra = {}) => telegram.sendDocument(chatId, document, extra)
-    };
-  }
-
-  async handleMiniAppRequest({ user = {}, action = 'chat', text = '', targetLanguage = 'auto' } = {}) {
-    const content = String(text || '').trim();
-    if (!user?.id || !content) throw new Error('Mini App request requires a user and text.');
-
-    const ctx = this.createMiniAppContext(user, content);
-    if (!this.isAllowed(ctx)) {
-      await ctx.reply(this.t(this.getLocale(ctx), 'noAccess'));
-      return false;
-    }
-
-    this.pendingMenuActions.delete(this.getPendingMenuKey(ctx));
-    this.clearActiveMode(ctx);
-
-    if (action === 'web') {
-      await this.runWebSearch(ctx, content);
-      return true;
-    }
-    if (action === 'translate') {
-      await this.runTranslation(ctx, content, targetLanguage || 'auto');
-      return true;
-    }
-    if (action === 'image') {
-      await this.runImageGeneration(ctx, content, 'generate');
-      return true;
-    }
-    if (action !== 'chat') throw new Error(`Unsupported Mini App action: ${action}`);
-
-    await this.handleIncomingMessage(ctx);
-    return true;
-  }
-
-  async clearMiniAppMemory(user = {}) {
-    if (!user?.id) throw new Error('Mini App memory clear requires a user.');
-
-    const ctx = this.createMiniAppContext(user, '');
-    const userId = ctx.from.id;
-    const chatId = ctx.chat.id;
-
-    await this.db.clearConversation(createSessionId(ctx));
-    const memoryCount = this.db.deleteMemoryItems?.({ userId, chatId }) || 0;
-    const topicCount = this.db.clearTopicStates?.({ userId, chatId }) || 0;
-    this.db.clearActiveContext?.({ userId, chatId });
-
-    return { memoryCount, topicCount };
   }
 
   async handleModels(ctx) {
@@ -5904,21 +5834,6 @@ export class TelegramAIBot {
 
 
   async handleIncomingMessage(ctx) {
-    if (ctx.message?.web_app_data?.data) {
-      try {
-        const payload = JSON.parse(ctx.message.web_app_data.data);
-        await this.handleMiniAppRequest({
-          user: ctx.from,
-          action: payload.action || 'chat',
-          text: payload.text || '',
-          targetLanguage: payload.targetLanguage || 'auto'
-        });
-      } catch (error) {
-        await ctx.reply(this.formatUserFacingError(error, this.getLocale(ctx)));
-      }
-      return;
-    }
-
     const text = ctx.message.text || '';
     const caption = ctx.message.caption || '';
     const command = normalizeCommand(text);
