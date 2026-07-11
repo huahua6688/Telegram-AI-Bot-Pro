@@ -285,6 +285,7 @@ test('empty AI results normalize instead of crashing text/message consumers', ()
 
 test('toolbox exposes real feature callbacks and unknown buttons get a visible fallback', async () => {
   const bot = Object.create(TelegramAIBot.prototype);
+  bot.config = { miniAppEnabled: false };
   bot.logger = logger();
   bot.getLocale = () => 'en';
   bot.createMenuKeyboard = () => ({ reply_markup: { inline_keyboard: [] } });
@@ -432,7 +433,7 @@ test('Mini App mode exposes only start and help commands', async () => {
   assert.deepEqual(calls[0].commands.map((item) => item.command), ['start', 'help']);
 });
 
-test('Mini App mode does not duplicate BotFather menu or persistent keyboards', () => {
+test('Mini App mode does not duplicate the BotFather Console entry', () => {
   const bot = Object.create(TelegramAIBot.prototype);
   bot.config = { miniAppEnabled: true };
 
@@ -443,28 +444,32 @@ test('Mini App mode does not duplicate BotFather menu or persistent keyboards', 
   assert.match(bot.handleIncomingMessage.toString(), /miniAppEnabled === false/);
 });
 
-test('necessary feature menu keeps privacy chat reachable without App-owned settings', () => {
+test('Mini App mode keeps only private chat in the bottom keyboard', async () => {
   const bot = Object.create(PrivacyTelegramAIBot.prototype);
-  bot.config = { miniAppEnabled: true };
+  bot.config = { miniAppEnabled: true, maxOutputChars: 3500 };
+  bot.getLocale = () => 'zh';
 
-  const keyboard = bot.createEssentialMenuKeyboard('zh');
-  const callbacks = keyboard.reply_markup.inline_keyboard
-    .flat()
-    .map((button) => button.callback_data);
+  const keyboard = bot.createBottomKeyboard('zh');
+  assert.deepEqual(keyboard.reply_markup.keyboard, [['🔒 隐私聊天']]);
+  assert.equal(keyboard.reply_markup.is_persistent, true);
+  assert.equal(bot.createEssentialMenuKeyboard('zh'), undefined);
+  assert.equal(bot.createToolboxKeyboard('zh'), undefined);
+  assert.match(bot.handleBottomKeyboardAction.toString(), /隐私聊天/);
+  assert.match(TelegramAIBot.prototype.handleStart.toString(), /createBottomKeyboard/);
+  assert.match(TelegramAIBot.prototype.handleHelp.toString(), /createBottomKeyboard/);
+  assert.match(TelegramAIBot.prototype.handleToolboxCallback.toString(), /miniAppEnabled !== false/);
 
-  assert.ok(callbacks.includes('privacy_pick:menu'));
-  assert.ok(callbacks.includes('menu:web'));
-  assert.ok(callbacks.includes('menu:translate'));
-  assert.ok(callbacks.includes('menu:image'));
-  assert.ok(callbacks.includes('menu:toolbox'));
-  assert.ok(callbacks.includes('menu:close'));
-  assert.ok(!callbacks.includes('menu:settings'));
-  assert.ok(!callbacks.includes('menu:admin'));
+  const replies = [];
+  const ctx = {
+    reply: async (message, extra) => replies.push({ message, extra })
+  };
+  await bot.handleStart(ctx);
+  await bot.handleHelp(ctx);
 
-  const toolboxCallbacks = bot.createToolboxKeyboard('zh').reply_markup.inline_keyboard
-    .flat()
-    .map((button) => button.callback_data);
-  assert.ok(!toolboxCallbacks.includes('toolbox:settings'));
+  assert.equal(replies.length, 2);
+  assert.deepEqual(replies[0].extra.reply_markup.keyboard, [['🔒 隐私聊天']]);
+  assert.deepEqual(replies[1].extra.reply_markup.keyboard, [['🔒 隐私聊天']]);
+  assert.doesNotMatch(replies.map((item) => item.message).join('\n'), /工具箱|联网搜索、翻译、图片/);
 });
 
 test('search replies hide naked source URLs behind clickable titles', async () => {

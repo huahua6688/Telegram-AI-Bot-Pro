@@ -99,17 +99,29 @@ export class PrivacyTelegramAIBot extends TelegramAIBot {
     return localText(locale, '🔒 隐私聊天', '🔒 Private chat');
   }
 
-  createEssentialMenuKeyboard(locale = 'zh') {
-    const keyboard = super.createEssentialMenuKeyboard(locale);
-    const rows = keyboard?.reply_markup?.inline_keyboard;
-    if (Array.isArray(rows)) {
-      rows.unshift([Markup.button.callback(this.getPrivacyLabel(locale), 'privacy_pick:menu')]);
+  createBottomKeyboard(locale = 'zh') {
+    if (this.config?.miniAppEnabled !== false) {
+      return {
+        reply_markup: {
+          keyboard: [[this.getPrivacyLabel(locale)]],
+          resize_keyboard: true,
+          is_persistent: true,
+          input_field_placeholder: localText(locale, '直接输入需求，我会自动判断…', 'Ask naturally; I will route it automatically…')
+        }
+      };
+    }
+
+    const keyboard = super.createBottomKeyboard(locale);
+    const rows = keyboard?.reply_markup?.keyboard;
+    if (Array.isArray(rows) && !rows.flat().includes(this.getPrivacyLabel(locale))) {
+      rows.unshift([this.getPrivacyLabel(locale)]);
     }
     return keyboard;
   }
 
   createSettingsKeyboard(locale = 'zh') {
     const keyboard = super.createSettingsKeyboard(locale);
+    if (this.config?.miniAppEnabled !== false) return keyboard;
     const rows = keyboard?.reply_markup?.inline_keyboard;
     if (Array.isArray(rows)) {
       rows.splice(1, 0, [Markup.button.callback(this.getPrivacyLabel(locale), 'privacy_pick:menu')]);
@@ -123,7 +135,7 @@ export class PrivacyTelegramAIBot extends TelegramAIBot {
       [Markup.button.callback(localText(locale, '🕶 临时上下文（仅内存）', '🕶 Temporary in-memory context'), 'privacy_pick:temporary')],
       [Markup.button.callback(localText(locale, '📋 当前隐私状态', '📋 Privacy status'), 'privacy_pick:status')],
       [Markup.button.callback(localText(locale, '❌ 退出隐私聊天', '❌ Exit private chat'), 'privacy_pick:exit')],
-      [Markup.button.callback(localText(locale, '⬅️ 返回功能', '⬅️ Features'), 'menu:back')]
+      [Markup.button.callback(localText(locale, '⬅️ 返回聊天', '⬅️ Back to chat'), 'menu:close')]
     ]);
   }
 
@@ -152,7 +164,7 @@ export class PrivacyTelegramAIBot extends TelegramAIBot {
     if (ctx.chat?.type !== 'private') {
       await ctx.reply(
         localText(locale, '隐私聊天只允许在与 Bot 的私聊中使用。', 'Private chat is available only in a direct chat with the bot.'),
-        this.createEssentialMenuKeyboard(locale)
+        this.createBottomKeyboard(locale)
       );
       return;
     }
@@ -236,7 +248,7 @@ export class PrivacyTelegramAIBot extends TelegramAIBot {
         existed
           ? localText(locale, '已退出隐私聊天，临时上下文已清除。', 'Private chat exited and temporary context cleared.')
           : localText(locale, '当前没有开启隐私聊天。', 'Private chat is not currently active.'),
-        this.createEssentialMenuKeyboard(locale)
+        this.createBottomKeyboard(locale)
       );
       return;
     }
@@ -309,7 +321,7 @@ export class PrivacyTelegramAIBot extends TelegramAIBot {
 
     if (/^(退出|退出模式|退出隐私|结束|关闭|stop|exit|cancel)$/i.test(input)) {
       this.clearActiveMode(ctx);
-      await ctx.reply(localText(locale, '已退出隐私聊天，临时上下文已清除。', 'Private chat exited and temporary context cleared.'), this.createEssentialMenuKeyboard(locale));
+      await ctx.reply(localText(locale, '已退出隐私聊天，临时上下文已清除。', 'Private chat exited and temporary context cleared.'), this.createBottomKeyboard(locale));
       return true;
     }
 
