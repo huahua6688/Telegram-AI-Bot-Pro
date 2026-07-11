@@ -115,29 +115,12 @@ const BOT_COMMAND_DESCRIPTIONS = {
   nl: ['Assistent openen', 'Functiemenu openen', 'Help tonen', 'Op internet zoeken', 'AI-model wijzigen', 'Persona wijzigen', 'Taal wijzigen', 'Gesprek wissen', 'Telegram-ID tonen', 'Beheerderstatus']
 };
 
-const MINI_APP_COMMAND_DESCRIPTIONS = {
-  zh: '打开 AI Mini App',
-  'zh-hant': '開啟 AI Mini App',
-  en: 'Open AI Mini App',
-  km: 'បើក AI Mini App',
-  ms: 'Buka AI Mini App',
-  id: 'Buka AI Mini App',
-  ko: 'AI Mini App 열기',
-  ja: 'AI Mini App を開く',
-  th: 'เปิด AI Mini App',
-  vi: 'Mở AI Mini App',
-  es: 'Abrir AI Mini App',
-  fr: 'Ouvrir AI Mini App',
-  de: 'AI Mini App öffnen'
-};
-
 function createLocalizedBotCommands(locale = 'en', compact = false) {
   const normalized = normalizeLanguageCode(locale, 'en');
   if (compact) {
     const descriptions = BOT_COMMAND_DESCRIPTIONS[normalized] || BOT_COMMAND_DESCRIPTIONS.en;
     return [
       { command: 'start', description: descriptions[0] || BOT_COMMAND_DESCRIPTIONS.en[0] },
-      { command: 'app', description: MINI_APP_COMMAND_DESCRIPTIONS[normalized] || MINI_APP_COMMAND_DESCRIPTIONS.en },
       { command: 'help', description: descriptions[2] || BOT_COMMAND_DESCRIPTIONS.en[2] }
     ];
   }
@@ -1153,11 +1136,7 @@ export class TelegramAIBot {
 
   createBottomKeyboard(locale = 'zh') {
     if (this.config?.miniAppEnabled !== false) {
-      const miniAppUrl = this.getMiniAppUrl();
-      if (!miniAppUrl) return Markup.removeKeyboard();
-      return Markup.keyboard([
-        [Markup.button.webApp(locale === 'en' ? 'Open AI App' : '打开 AI App', miniAppUrl)]
-      ]).resize().persistent();
+      return Markup.removeKeyboard();
     }
 
     return {
@@ -1175,15 +1154,7 @@ export class TelegramAIBot {
 
   createMenuKeyboard(locale) {
     if (this.config?.miniAppEnabled !== false) {
-      const miniAppUrl = this.getMiniAppUrl();
-      const rows = [];
-      if (miniAppUrl) {
-        rows.push([
-          Markup.button.webApp(locale === 'en' ? 'Open AI App' : '打开 AI App', miniAppUrl)
-        ]);
-      }
-      rows.push([Markup.button.callback(this.ui(locale, 'close'), 'menu:close')]);
-      return Markup.inlineKeyboard(rows);
+      return undefined;
     }
 
     return Markup.inlineKeyboard([
@@ -3014,33 +2985,6 @@ export class TelegramAIBot {
     }
   }
 
-  getMiniAppUrl() {
-    const value = String(this.config?.miniAppUrl || '').trim();
-    return /^https:\/\//i.test(value) ? value : '';
-  }
-
-  async configureMiniAppMenuButton() {
-    if (this.config?.miniAppEnabled === false) return false;
-    const url = this.getMiniAppUrl();
-    if (!url) return false;
-
-    try {
-      await this.bot.telegram.setChatMenuButton({
-        menuButton: {
-          type: 'web_app',
-          text: 'AI App',
-          web_app: { url }
-        }
-      });
-      return true;
-    } catch (error) {
-      this.logger.warn('Failed to configure Mini App menu button', {
-        error: error.message
-      });
-      return false;
-    }
-  }
-
   async init() {
     this.bot.catch((error, ctx) => {
       this.logger.error('Telegram handler error', { chatId: ctx.chat?.id, error: this.formatLogError(error) });
@@ -3079,12 +3023,10 @@ export class TelegramAIBot {
     const me = await this.bot.telegram.getMe();
     this.botUsername = me.username || '';
     await this.setLocalizedBotCommands();
-    await this.configureMiniAppMenuButton();
   }
 
   registerCommands() {
     this.bot.command('start', (ctx) => this.handleStart(ctx));
-    this.bot.command('app', (ctx) => this.handleMiniAppLaunch(ctx));
     this.bot.command('menu', (ctx) => this.handleMenu(ctx));
     this.bot.command('models', (ctx) => this.handleModels(ctx));
     this.bot.command('memory', (ctx) => this.handleMemoryPrompt(ctx));
@@ -3486,28 +3428,7 @@ export class TelegramAIBot {
 
   async handleMenu(ctx) {
     const locale = this.getLocale(ctx);
-    if (this.config?.miniAppEnabled !== false) {
-      await this.handleMiniAppLaunch(ctx);
-      return;
-    }
     await ctx.reply(this.t(locale, 'menu'), this.createMenuKeyboard(locale));
-  }
-
-  async handleMiniAppLaunch(ctx) {
-    const locale = this.getLocale(ctx);
-    const miniAppUrl = this.getMiniAppUrl();
-    const text = locale === 'en'
-      ? 'Open AI App from the menu button beside the message box to manage settings and history.'
-      : '请点击输入框旁的 AI App 按钮管理设置和聊天记录。';
-
-    if (miniAppUrl) {
-      await ctx.reply(text, Markup.inlineKeyboard([
-        [Markup.button.webApp(locale === 'en' ? 'Open AI App' : '打开 AI App', miniAppUrl)]
-      ]));
-      return;
-    }
-
-    await ctx.reply(text, Markup.removeKeyboard());
   }
 
   async handleModels(ctx) {
@@ -6027,7 +5948,7 @@ export class TelegramAIBot {
       }
 
       const reply = await this.sendAssistantReply(ctx, visibleAssistantText);
-      if (reply?.lastMessageId) {
+      if (reply?.lastMessageId && this.config?.miniAppEnabled === false) {
         const state = this.createAssistantActionState({
           chatId: ctx.chat.id,
           userId: ctx.from.id,
