@@ -11,6 +11,7 @@ import { createToolRegistry } from '../adapters/tools/tool-registry-adapter.js';
 import { createPluginManager } from '../adapters/plugins/plugin-manager-adapter.js';
 import { createTelegramBot } from '../adapters/telegram/telegram-bot-adapter.js';
 import { startHealthServer } from '../services/health-server.js';
+import { installEnhancedStatusRoutes } from '../services/status-routes.js';
 import { startAdminApiServer } from '../services/admin-api-server.js';
 import { assertRuntimeConfig } from './runtime-config-validation.js';
 import { AccessControlService } from '../services/access-control-service.js';
@@ -79,6 +80,16 @@ export async function createApplication() {
       config: runtimeConfig,
       logger
     });
+
+    installEnhancedStatusRoutes({
+      server: healthServer,
+      db,
+      config: runtimeConfig,
+      bot,
+      providerManager,
+      logger
+    });
+
     const adminServer = startAdminApiServer({
       port: runtimeConfig.adminApiPort,
       db,
