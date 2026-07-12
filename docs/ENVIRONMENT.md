@@ -31,7 +31,7 @@
     ENABLE_SECRETARY_AUTO_REPLY=true   Secretary 连接获得回复权限后自动答复
     GUARD_DEFAULT_ACTION=queue          Guard 初始模式：queue 审核 / approve 开放 / decline 严格
     BOT_COLLABORATION_COOLDOWN_MS=5000  同一 Bot 在同一群的最短回复间隔
-    INLINE_QUERY_DEBOUNCE_MS=700        停止输入多久后处理最后一条 Inline Query
+    INLINE_QUERY_DEBOUNCE_MS=1200        停止输入多久后处理最后一条 Inline Query
     INLINE_QUERY_CACHE_TTL_MS=60000     相同 Inline 问题的个人缓存时间
 
 Guest、Inline 和 Secretary 收到的第三方原文不会写入普通聊天记录或长期记忆。Guard 默认采用安全策略：黑名单拒绝、白名单/管理员通过、其他请求排队人工审核。
