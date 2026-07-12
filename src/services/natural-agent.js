@@ -1,15 +1,9 @@
 import { splitMessage, truncateText } from '../utils/text.js';
+import { createTelegramSessionId as createSessionId, getTelegramReplyContext } from '../utils/telegram.js';
 import { personaPresets } from '../config.js';
 
 const TARGET_LANGUAGE_PATTERN =
   '(韩语|韓語|韩国语|韓國語|korean|日语|日語|japanese|英语|英文|english|中文|chinese|高棉语|高棉語|柬埔寨语|柬埔寨語|khmer|粤语|粵語|cantonese|泰语|泰語|thai|马来语|馬來語|malay|越南语|越南語|vietnamese|法语|法語|french|西班牙语|西班牙語|spanish)';
-
-function createSessionId(ctx) {
-  const chatId = String(ctx.chat?.id || '');
-  const userId = String(ctx.from?.id || 'anonymous');
-  const threadId = ctx.message?.message_thread_id ? String(ctx.message.message_thread_id) : 'main';
-  return `${chatId}:${userId}:${threadId}`;
-}
 
 function escapeHtml(value = '') {
   return String(value || '')
@@ -818,6 +812,10 @@ export async function tryHandleNaturalAgent(bot, ctx) {
 
   if (!text) return false;
   if (typeof bot.getActiveMode === 'function' && bot.getActiveMode(ctx)) return false;
+
+  // Quoted replies need the main conversation loop so the selected passage,
+  // history, memory, and tools remain available together.
+  if (getTelegramReplyContext(ctx.message)) return false;
 
   const locale = bot.getLocale(ctx);
 

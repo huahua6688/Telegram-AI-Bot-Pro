@@ -228,7 +228,7 @@ npm run verify
 
 - BotFather 已配置网址时无需重复设置；默认入口为 `https://你的域名/app`。
 - Mini App 只用于 Provider/模型、人格、语言、聊天历史和管理员功能；聊天、联网搜索、翻译、图片、文件和语音继续直接在 Telegram 对话中使用。
-- Telegram 命令菜单只保留 `/start`、`/help`；Mini App 使用 BotFather 已配置的输入框左侧菜单按钮打开。
+- Telegram 命令菜单只保留 `/start`、`/help`、`/whoami`；Mini App 使用 BotFather 已配置的输入框左侧菜单按钮打开。
 - Mini App 菜单按钮和网址由 BotFather 管理，程序不会重复修改。
 - 输入框左侧入口名称保持为你在 BotFather 设置的“控制台”；联网搜索、翻译、图片、语音、文件、链接和记忆操作由自然语言或消息类型自动识别，不在 `/start`、`/help` 或工具箱重复显示按钮。
 - 输入框下方只保留 App 没有、也不能安全自动开启的 `🔒 隐私聊天` 按钮；普通 AI 回复不重复附加功能按钮，数据库内容加密实现保持独立。
