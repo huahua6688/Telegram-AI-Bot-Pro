@@ -165,6 +165,25 @@ test('loadConfig parses tool policy and document parsing options', () => {
   assert.equal(config.documentMaxBytes, 2048);
 });
 
+test('loadConfig exposes safe Telegram platform mode defaults', () => {
+  resetEnv();
+  delete process.env.ENABLE_SECRETARY_AUTO_REPLY;
+  delete process.env.GUARD_DEFAULT_ACTION;
+  delete process.env.BOT_COLLABORATION_COOLDOWN_MS;
+  let config = loadConfig();
+  assert.equal(config.enableSecretaryAutoReply, true);
+  assert.equal(config.guardDefaultAction, 'queue');
+  assert.equal(config.botCollaborationCooldownMs, 5000);
+
+  process.env.ENABLE_SECRETARY_AUTO_REPLY = 'false';
+  process.env.GUARD_DEFAULT_ACTION = 'decline';
+  process.env.BOT_COLLABORATION_COOLDOWN_MS = '9000';
+  config = loadConfig();
+  assert.equal(config.enableSecretaryAutoReply, false);
+  assert.equal(config.guardDefaultAction, 'decline');
+  assert.equal(config.botCollaborationCooldownMs, 9000);
+});
+
 test('loadConfig parses admin API options', () => {
   resetEnv();
   process.env.ADMIN_API_ENABLED = 'true';

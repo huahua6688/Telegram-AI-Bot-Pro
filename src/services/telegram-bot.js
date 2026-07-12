@@ -775,6 +775,7 @@ export class TelegramAIBot {
     this.bot = new Telegraf(config.botToken);
     this.botUsername = '';
     this.botUserId = '';
+    this.botInfo = null;
     this.bot.action(/^memory_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleMemoryTargetCallback(ctx)));
     this.bot.action(/^clear_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleClearTargetCallback(ctx)));
     this.bot.action(/^translate_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleTranslateTargetCallback(ctx)));
@@ -3045,6 +3046,7 @@ export class TelegramAIBot {
     this.bot.on('message', (ctx) => this.handleIncomingMessage(ctx));
 
     const me = await this.bot.telegram.getMe();
+    this.botInfo = me;
     this.botUsername = me.username || '';
     this.botUserId = String(me.id || '');
     await this.setLocalizedBotCommands();
