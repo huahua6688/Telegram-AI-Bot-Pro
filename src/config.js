@@ -259,7 +259,7 @@ export function loadConfig() {
       ? String(process.env.GUARD_DEFAULT_ACTION).toLowerCase()
       : 'queue',
     botCollaborationCooldownMs: parseInteger(process.env.BOT_COLLABORATION_COOLDOWN_MS, 5000),
-    inlineQueryDebounceMs: parseInteger(process.env.INLINE_QUERY_DEBOUNCE_MS, 700),
+    inlineQueryDebounceMs: parseInteger(process.env.INLINE_QUERY_DEBOUNCE_MS, 1200),
     inlineQueryCacheTtlMs: parseInteger(process.env.INLINE_QUERY_CACHE_TTL_MS, 60000),
     databaseFile,
     legacyDataFile,
