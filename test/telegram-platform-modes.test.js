@@ -14,6 +14,8 @@ function createBot(overrides = {}) {
     guardDefaultAction: 'queue',
     enableSecretaryAutoReply: true,
     botCollaborationCooldownMs: 5000,
+    inlineQueryDebounceMs: 100,
+    inlineQueryCacheTtlMs: 60000,
     ...overrides.config
   };
   bot.db = {
@@ -26,6 +28,8 @@ function createBot(overrides = {}) {
   bot.processedPlatformMessages = new Set();
   bot.botPairCooldowns = new Map();
   bot.terminalBotReplyIds = new Set();
+  bot.inlineQueryStates = new Map();
+  bot.inlineResultCache = new Map();
   bot.bot = overrides.bot || { telegram: { async callApi() {} } };
   bot.getLocale = () => 'zh';
   bot.formatLogError = (error) => ({ detail: String(error?.message || error) });
@@ -55,7 +59,7 @@ test('/help owns the five Telegram platform mode buttons while /whoami stays cle
   assert.doesNotMatch(PlatformModesTelegramAIBot.prototype.registerCommands.toString(), /platform_mode:/);
 });
 
-test('inline mode returns a personal, non-cached AI article', async () => {
+test('inline mode returns a personal AI article with short Telegram caching', async () => {
   const bot = createBot({
     methods: {
       async completePlatformRequest({ text }) {
@@ -78,7 +82,62 @@ test('inline mode returns a personal, non-cached AI article', async () => {
   assert.equal(answers.length, 1);
   assert.equal(answers[0].results[0].type, 'article');
   assert.equal(answers[0].results[0].input_message_content.message_text, '今天的重要新闻摘要。');
-  assert.deepEqual(answers[0].extra, { cache_time: 0, is_personal: true });
+  assert.deepEqual(answers[0].extra, { cache_time: 30, is_personal: true });
+});
+
+test('inline mode coalesces rapid typing and only calls AI for the last query', async () => {
+  let aiCalls = 0;
+  const answers = [];
+  const bot = createBot({
+    methods: {
+      async completePlatformRequest({ text }) {
+        aiCalls += 1;
+        return `answer:${text}`;
+      }
+    }
+  });
+  const makeContext = (id, query) => ({
+    update: {
+      inline_query: {
+        id,
+        query,
+        from: { id: 77, language_code: 'zh-CN' }
+      }
+    },
+    answerInlineQuery: async (results, extra) => answers.push({ id, results, extra })
+  });
+
+  const first = bot.handleInlineQuery(makeContext('q1', '今日'));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const second = bot.handleInlineQuery(makeContext('q2', '今日新闻'));
+  await Promise.all([first, second]);
+
+  assert.equal(aiCalls, 1);
+  assert.equal(answers.find((item) => item.id === 'q1').results.length, 0);
+  assert.equal(
+    answers.find((item) => item.id === 'q2').results[0].input_message_content.message_text,
+    'answer:今日新闻'
+  );
+});
+
+test('inline mode reuses a personal short-term cache for identical queries', async () => {
+  let aiCalls = 0;
+  const bot = createBot({
+    methods: {
+      async completePlatformRequest() {
+        aiCalls += 1;
+        return 'cached answer';
+      }
+    }
+  });
+  const makeContext = (id) => ({
+    update: { inline_query: { id, query: 'same question', from: { id: 78, language_code: 'en' } } },
+    answerInlineQuery: async () => undefined
+  });
+
+  await bot.handleInlineQuery(makeContext('same-1'));
+  await bot.handleInlineQuery(makeContext('same-2'));
+  assert.equal(aiCalls, 1);
 });
 
 test('guest mode answers once through answerGuestQuery without saving a conversation', async () => {
@@ -162,6 +221,47 @@ test('guard mode resolves a Telegram join request query', async () => {
     method: 'answerChatJoinRequestQuery',
     payload: { chat_join_request_query_id: 'join-1', result: 'queue' }
   }]);
+});
+
+test('Guard detail gives admins persistent allowlist and blocklist controls', async () => {
+  const updated = [];
+  let existingUser;
+  const bot = createBot({
+    config: { adminUserIds: new Set(['42']) },
+    db: {
+      findUser(id) {
+        return String(id) === '9001' ? existingUser : undefined;
+      },
+      async upsertUser(user) {
+        existingUser = { id: String(user.id), isAllowed: false, isBlocked: false };
+        return existingUser;
+      },
+      async setUserSettings(id, patch) {
+        existingUser = { ...existingUser, ...patch };
+        updated.push({ id: String(id), patch });
+        return existingUser;
+      }
+    }
+  });
+  bot.activeModes = new Map();
+  bot.getPendingMenuKey = () => 'guard-admin';
+
+  const keyboard = bot.createPlatformModeDetailKeyboard('zh', 'guard', { from: { id: 42 } });
+  assert.deepEqual(
+    keyboard.reply_markup.inline_keyboard.flat().map((button) => button.callback_data).filter(Boolean),
+    ['guard_manage:allow', 'guard_manage:block', 'guard_manage:disallow', 'guard_manage:unblock', 'guard_manage:list', 'platform_mode:back']
+  );
+
+  bot.setActiveMode({ from: { id: 42 } }, { type: 'guard_manage', action: 'allow' });
+  const replies = [];
+  const ctx = {
+    from: { id: 42 },
+    message: { text: '9001' },
+    reply: async (text) => replies.push(text)
+  };
+  await bot.handleActiveMode(ctx, bot.getActiveMode(ctx));
+  assert.deepEqual(updated, [{ id: '9001', patch: { isAllowed: true, isBlocked: false } }]);
+  assert.match(replies[0], /9001/);
 });
 
 test('secretary mode replies through the business connection without writing customer text to chat history', async () => {

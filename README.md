@@ -239,11 +239,13 @@ npm run verify
 
 - **Inline Mode**：在任意聊天输入 `@机器人用户名 问题`，生成一条可直接发送的 AI 答案。
 - **Guest Chat Mode**：无需把 Bot 加入聊天，@提及或回复后进行一次性回答。
-- **Guard Mode**：处理入群请求；黑名单拒绝、白名单/管理员通过，其余默认交管理员审核。
+- **Guard Mode**：处理入群请求；黑名单拒绝、白名单/管理员通过，其余默认交管理员审核。管理员可在 Guard 详情页直接添加、移除和查看名单，也可使用 `/allow ID`、`/disallow ID`、`/block ID`、`/unblock ID`。
 - **Secretary Mode**：通过 Telegram Business/Secretary 连接处理授权聊天，并在有权限时代表账号回复。
 - **Bot-to-Bot Communication**：其他 Bot 可用 `/ask@本机器人 问题` 或直接回复本 Bot；内置去重、限速和单轮终止保护。
 
 代码部署后，还需要在 BotFather 的 Bot Settings 中为当前 Bot 开启对应平台模式。按钮详情页会根据 `getMe` 返回值显示 Inline、Guest、Guard、Secretary 的实际启用状态。访客、Inline 和 Secretary 的第三方消息不写入普通聊天记录或长期记忆。
+
+Inline Query 会在用户输入变化时不断产生 Telegram 更新。程序默认等待用户停止输入 700ms 后只处理最后一次，并为同一用户的相同问题缓存 60 秒，避免一句话重复消耗多次 AI 调用。可通过 `INLINE_QUERY_DEBOUNCE_MS` 和 `INLINE_QUERY_CACHE_TTL_MS` 调整。
 
 ## English
 
