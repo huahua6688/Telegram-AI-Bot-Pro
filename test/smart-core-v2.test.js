@@ -416,7 +416,7 @@ test('localized slash commands stay minimal and refresh per chat', async () => {
   assert.equal(chatCall.commands.find((item) => item.command === 'reset').description, '清除目前對話');
 });
 
-test('Mini App mode exposes only start and help commands', async () => {
+test('Mini App mode exposes start help and whoami commands', async () => {
   const calls = [];
   const bot = Object.create(TelegramAIBot.prototype);
   bot.config = { miniAppEnabled: true };
@@ -430,7 +430,7 @@ test('Mini App mode exposes only start and help commands', async () => {
   };
 
   await bot.setLocalizedBotCommands();
-  assert.deepEqual(calls[0].commands.map((item) => item.command), ['start', 'help']);
+  assert.deepEqual(calls[0].commands.map((item) => item.command), ['start', 'help', 'whoami']);
 });
 
 test('Mini App mode does not duplicate the BotFather Console entry', () => {
@@ -470,6 +470,35 @@ test('Mini App mode keeps only private chat in the bottom keyboard', async () =>
   assert.deepEqual(replies[0].extra.reply_markup.keyboard, [['🔒 隐私聊天']]);
   assert.deepEqual(replies[1].extra.reply_markup.keyboard, [['🔒 隐私聊天']]);
   assert.doesNotMatch(replies.map((item) => item.message).join('\n'), /工具箱|联网搜索、翻译、图片/);
+  assert.match(replies[1].message, /\/whoami/);
+  assert.match(replies[1].message, /局部引用/);
+});
+
+test('quoted reply preparation keeps the selected passage in the same conversation request', async () => {
+  const bot = Object.create(TelegramAIBot.prototype);
+  bot.config = { maxInputChars: 4000 };
+  bot.getLocale = () => 'zh';
+
+  const prepared = await bot.prepareUserMessage({
+    message: {
+      text: '这条为什么重要？',
+      message_thread_id: 123,
+      is_topic_message: false,
+      quote: { text: '新的政策将在下月生效' },
+      reply_to_message: {
+        message_id: 88,
+        text: '这是机器人此前输出的完整新闻摘要。新的政策将在下月生效。',
+        from: { is_bot: true }
+      }
+    }
+  });
+
+  assert.equal(prepared.message.role, 'user');
+  assert.match(prepared.message.content, /新的政策将在下月生效/);
+  assert.match(prepared.message.content, /这条为什么重要/);
+  assert.match(prepared.message.content, /Do not start a new topic/);
+  assert.match(TelegramAIBot.prototype.handleIncomingMessage.toString(), /isReplyToCurrentBot/);
+  assert.match(TelegramAIBot.prototype.handleIncomingMessage.toString(), /botUserId/);
 });
 
 test('search replies hide naked source URLs behind clickable titles', async () => {
