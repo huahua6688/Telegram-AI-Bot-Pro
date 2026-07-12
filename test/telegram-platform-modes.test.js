@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PlatformModesTelegramAIBot } from '../src/services/platform-modes-telegram-bot.js';
+import { PlatformModesTelegramAIBot, platformModesInternals } from '../src/services/platform-modes-telegram-bot.js';
 
 function createBot(overrides = {}) {
   const bot = Object.create(PlatformModesTelegramAIBot.prototype);
@@ -193,6 +193,35 @@ test('guard mode declines blocked users, approves allowlisted users, and queues 
   assert.equal(bot.guardDecision({ from: { id: 3 } }), 'queue');
 });
 
+test('Guard mode can be switched by an administrator and persists in database metadata', async () => {
+  let savedMode = '';
+  const bot = createBot({
+    config: { adminUserIds: new Set(['42']) },
+    db: {
+      getMeta(key) {
+        return key === 'guardDefaultAction' ? savedMode : '';
+      },
+      setMeta(key, value) {
+        assert.equal(key, 'guardDefaultAction');
+        savedMode = value;
+      }
+    }
+  });
+  const replies = [];
+  await bot.handleGuardModeCallback({
+    from: { id: 42 },
+    match: ['', 'approve'],
+    answerCbQuery: async () => undefined,
+    reply: async (text, extra) => replies.push({ text, extra })
+  });
+
+  assert.equal(savedMode, 'approve');
+  assert.equal(bot.guardDecision({ from: { id: 9002 } }), 'approve');
+  assert.match(replies[0].text, /开放模式/);
+  const modeButtons = replies[0].extra.reply_markup.inline_keyboard[0];
+  assert.match(modeButtons[1].text, /✅/);
+});
+
 test('guard mode resolves a Telegram join request query', async () => {
   const calls = [];
   const bot = createBot({
@@ -249,7 +278,11 @@ test('Guard detail gives admins persistent allowlist and blocklist controls', as
   const keyboard = bot.createPlatformModeDetailKeyboard('zh', 'guard', { from: { id: 42 } });
   assert.deepEqual(
     keyboard.reply_markup.inline_keyboard.flat().map((button) => button.callback_data).filter(Boolean),
-    ['guard_manage:allow', 'guard_manage:block', 'guard_manage:disallow', 'guard_manage:unblock', 'guard_manage:list', 'platform_mode:back']
+    [
+      'guard_mode:queue', 'guard_mode:approve', 'guard_mode:decline',
+      'guard_manage:allow', 'guard_manage:block', 'guard_manage:disallow',
+      'guard_manage:unblock', 'guard_manage:list', 'platform_mode:back'
+    ]
   );
 
   bot.setActiveMode({ from: { id: 42 } }, { type: 'guard_manage', action: 'allow' });
@@ -262,6 +295,65 @@ test('Guard detail gives admins persistent allowlist and blocklist controls', as
   await bot.handleActiveMode(ctx, bot.getActiveMode(ctx));
   assert.deepEqual(updated, [{ id: '9001', patch: { isAllowed: true, isBlocked: false } }]);
   assert.match(replies[0], /9001/);
+});
+
+test('Guard synchronizes Telegram bans and unbans without blocking ordinary leaves', async () => {
+  const users = new Map();
+  const changes = [];
+  const bot = createBot({
+    db: {
+      findUser(id) {
+        return users.get(String(id));
+      },
+      async upsertUser(user) {
+        const saved = { id: String(user.id), isAllowed: false, isBlocked: false };
+        users.set(saved.id, saved);
+        return saved;
+      },
+      async setUserSettings(id, patch) {
+        const key = String(id);
+        users.set(key, { ...users.get(key), ...patch });
+        changes.push({ id: key, patch });
+      }
+    }
+  });
+  const context = (oldStatus, newStatus) => ({
+    update: {
+      chat_member: {
+        chat: { id: -1002 },
+        from: { id: 42 },
+        old_chat_member: { status: oldStatus, user: { id: 9003, first_name: 'User' } },
+        new_chat_member: { status: newStatus, user: { id: 9003, first_name: 'User' } }
+      }
+    }
+  });
+
+  await bot.handleGuardMemberUpdate(context('member', 'left'));
+  assert.deepEqual(changes, []);
+
+  await bot.handleGuardMemberUpdate(context('member', 'kicked'));
+  assert.deepEqual(changes[0], { id: '9003', patch: { isBlocked: true, isAllowed: false } });
+
+  await bot.handleGuardMemberUpdate(context('kicked', 'left'));
+  assert.deepEqual(changes[1], { id: '9003', patch: { isBlocked: false } });
+});
+
+test('bot launch explicitly subscribes to chat member updates without dropping platform updates', async () => {
+  let launchOptions;
+  const bot = createBot({
+    bot: {
+      async launch(options) {
+        launchOptions = options;
+      },
+      telegram: { async callApi() {} }
+    }
+  });
+
+  await bot.launch();
+  assert.equal(launchOptions.allowedUpdates.includes('chat_member'), true);
+  assert.equal(launchOptions.allowedUpdates.includes('message'), true);
+  assert.equal(launchOptions.allowedUpdates.includes('guest_message'), true);
+  assert.deepEqual(launchOptions.allowedUpdates, [...platformModesInternals.TELEGRAM_ALLOWED_UPDATES]);
 });
 
 test('secretary mode replies through the business connection without writing customer text to chat history', async () => {

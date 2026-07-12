@@ -239,7 +239,7 @@ npm run verify
 
 - **Inline Mode**：在任意聊天输入 `@机器人用户名 问题`，生成一条可直接发送的 AI 答案。
 - **Guest Chat Mode**：无需把 Bot 加入聊天，@提及或回复后进行一次性回答。
-- **Guard Mode**：处理入群请求；黑名单拒绝、白名单/管理员通过，其余默认交管理员审核。管理员可在 Guard 详情页直接添加、移除和查看名单，也可使用 `/allow ID`、`/disallow ID`、`/block ID`、`/unblock ID`。
+- **Guard Mode**：处理入群请求；黑名单拒绝、白名单/管理员通过，其余按“审核 / 开放 / 严格”模式处理。管理员可在 Guard 详情页切换模式、添加、移除和查看名单，也可使用 `/allow ID`、`/disallow ID`、`/block ID`、`/unblock ID`。Bot 是群管理员时，会从 `chat_member` 更新自动同步 Telegram 明确标记的封禁和解封；普通主动退群不会加入黑名单。
 - **Secretary Mode**：通过 Telegram Business/Secretary 连接处理授权聊天，并在有权限时代表账号回复。
 - **Bot-to-Bot Communication**：其他 Bot 可用 `/ask@本机器人 问题` 或直接回复本 Bot；内置去重、限速和单轮终止保护。
 

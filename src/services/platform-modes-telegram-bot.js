@@ -11,6 +11,38 @@ const PLATFORM_MODE_NAMES = Object.freeze({
   bot_to_bot: 'Bot-to-Bot Communication'
 });
 
+const GUARD_MODES = Object.freeze(['queue', 'approve', 'decline']);
+
+// Telegram excludes chat_member from an empty/default allowed_updates list.
+// Keep Telegram's normal update set plus chat_member so Guard synchronization
+// does not disable any of the bot's existing platform features. Reaction
+// updates remain excluded because this bot does not consume them.
+const TELEGRAM_ALLOWED_UPDATES = Object.freeze([
+  'message',
+  'edited_message',
+  'channel_post',
+  'edited_channel_post',
+  'business_connection',
+  'business_message',
+  'edited_business_message',
+  'deleted_business_messages',
+  'guest_message',
+  'inline_query',
+  'chosen_inline_result',
+  'callback_query',
+  'shipping_query',
+  'pre_checkout_query',
+  'purchased_paid_media',
+  'poll',
+  'poll_answer',
+  'my_chat_member',
+  'chat_member',
+  'chat_join_request',
+  'chat_boost',
+  'removed_chat_boost',
+  'managed_bot'
+]);
+
 function isEnglishLocale(locale = '') {
   return String(locale || '').toLowerCase().startsWith('en');
 }
@@ -71,6 +103,9 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     this.bot.action(/^guard_manage:(.+)$/, (ctx) =>
       this.withCompactCallbackReply(ctx, () => this.handleGuardManageCallback(ctx))
     );
+    this.bot.action(/^guard_mode:(queue|approve|decline)$/, (ctx) =>
+      this.withCompactCallbackReply(ctx, () => this.handleGuardModeCallback(ctx))
+    );
   }
 
   async init() {
@@ -88,7 +123,13 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     this.bot.on('edited_business_message', () => undefined);
     this.bot.on('deleted_business_messages', () => undefined);
     this.bot.on('chat_join_request', (ctx, next) => this.handleGuardJoinRequest(ctx, next));
+    this.bot.on('chat_member', (ctx, next) => this.handleGuardMemberUpdate(ctx, next));
     this.bot.on('message', (ctx, next) => this.handlePossibleBotMessage(ctx, next));
+  }
+
+  async launch() {
+    await this.bot.launch({ allowedUpdates: [...TELEGRAM_ALLOWED_UPDATES] });
+    this.logger.info('Telegram bot started', { guardMemberSync: true });
   }
 
   createWhoamiKeyboard(ctx, locale = 'zh') {
@@ -121,6 +162,21 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
       ]);
     }
     if (mode === 'guard' && ctx && this.isAdmin(ctx)) {
+      const currentMode = this.getGuardMode();
+      rows.push([
+        Markup.button.callback(
+          `${currentMode === 'queue' ? '✅ ' : ''}${localText(locale, '审核', 'Review')}`,
+          'guard_mode:queue'
+        ),
+        Markup.button.callback(
+          `${currentMode === 'approve' ? '✅ ' : ''}${localText(locale, '开放', 'Open')}`,
+          'guard_mode:approve'
+        ),
+        Markup.button.callback(
+          `${currentMode === 'decline' ? '✅ ' : ''}${localText(locale, '严格', 'Strict')}`,
+          'guard_mode:decline'
+        )
+      ]);
       rows.push([
         Markup.button.callback(localText(locale, '➕ 白名单', '➕ Allowlist'), 'guard_manage:allow'),
         Markup.button.callback(localText(locale, '➕ 黑名单', '➕ Blocklist'), 'guard_manage:block')
@@ -169,8 +225,8 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
       ),
       guard: localText(
         locale,
-        '作为群组入群守卫处理加入请求：黑名单优先自动拒绝；白名单和管理员自动通过；其余请求默认进入管理员队列，避免误封。管理员可用下方按钮管理名单，也可使用 /allow、/disallow、/block、/unblock 加用户 ID。需要在 BotFather 中把本 Bot 指定为 Guard Bot。',
-        'Processes join requests as a group guard: the blocklist has highest priority; allowlisted users and admins are approved; all others are queued for administrators. Admins can manage lists below or use /allow, /disallow, /block, and /unblock with a user ID. Assign this bot as the Guard Bot in BotFather.'
+        `作为群组入群守卫处理加入请求：黑名单优先自动拒绝；白名单和管理员自动通过；其余请求按当前${this.getGuardModeLabel(locale)}处理。管理员可在下方切换模式并管理名单，也可使用 /allow、/disallow、/block、/unblock 加用户 ID。Bot 成为群管理员后，会把 Telegram 明确标记为“已封禁”的成员自动同步到黑名单；普通主动退群不会被拉黑。需要在 BotFather 中把本 Bot 指定为 Guard Bot。`,
+        `Processes join requests as a group guard: the blocklist has highest priority; allowlisted users and admins are approved; all others follow the current ${this.getGuardModeLabel(locale)}. Administrators can switch modes and manage lists below, or use /allow, /disallow, /block, and /unblock with a user ID. When the bot is a chat administrator, Telegram members explicitly marked as banned are synchronized to the blocklist; ordinary leaves are not blocked. Assign this bot as the Guard Bot in BotFather.`
       ),
       secretary: localText(
         locale,
@@ -443,9 +499,51 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     if (this.config.adminUserIds?.has(userId) || this.config.allowedUserIds?.has(userId) || user?.isAdmin || user?.isAllowed) {
       return 'approve';
     }
-    return ['approve', 'decline', 'queue'].includes(this.config.guardDefaultAction)
-      ? this.config.guardDefaultAction
-      : 'queue';
+    return this.getGuardMode();
+  }
+
+  getGuardMode() {
+    const saved = String(this.db.getMeta?.('guardDefaultAction') || '').toLowerCase();
+    if (GUARD_MODES.includes(saved)) return saved;
+    const configured = String(this.config.guardDefaultAction || '').toLowerCase();
+    return GUARD_MODES.includes(configured) ? configured : 'queue';
+  }
+
+  setGuardMode(mode = '') {
+    const normalized = String(mode || '').toLowerCase();
+    if (!GUARD_MODES.includes(normalized)) return this.getGuardMode();
+    this.db.setMeta?.('guardDefaultAction', normalized);
+    return normalized;
+  }
+
+  getGuardModeLabel(locale = 'zh', mode = this.getGuardMode()) {
+    const labels = {
+      queue: localText(locale, '审核模式', 'review mode'),
+      approve: localText(locale, '开放模式', 'open mode'),
+      decline: localText(locale, '严格模式', 'strict mode')
+    };
+    return labels[mode] || labels.queue;
+  }
+
+  async handleGuardModeCallback(ctx) {
+    const locale = this.getLocale(ctx);
+    const mode = String(ctx.match?.[1] || '').toLowerCase();
+    await ctx.answerCbQuery();
+    if (!this.isAdmin(ctx)) {
+      await ctx.reply(localText(locale, '只有管理员可以切换 Guard 模式。', 'Only administrators can change Guard mode.'));
+      return;
+    }
+    if (!GUARD_MODES.includes(mode)) return;
+
+    this.setGuardMode(mode);
+    await ctx.reply(
+      localText(
+        locale,
+        `Guard 已切换为${this.getGuardModeLabel(locale, mode)}。黑名单仍优先拒绝，白名单和管理员仍优先通过。`,
+        `Guard changed to ${this.getGuardModeLabel(locale, mode)}. The blocklist still declines first; the allowlist and administrators still approve first.`
+      ),
+      this.createPlatformModeDetailKeyboard(locale, 'guard', ctx)
+    );
   }
 
   async handleGuardManageCallback(ctx) {
@@ -560,6 +658,35 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
       this.logger?.error?.('Guard join request failed', { error: this.formatLogError(error) });
       throw error;
     }
+  }
+
+  async handleGuardMemberUpdate(ctx, next = async () => undefined) {
+    const update = ctx.update.chat_member || {};
+    const oldStatus = String(update.old_chat_member?.status || '');
+    const newStatus = String(update.new_chat_member?.status || '');
+    const user = update.new_chat_member?.user || update.old_chat_member?.user;
+    const userId = String(user?.id || '');
+    if (!userId) return next();
+
+    const configuredAdmin = this.config.adminUserIds?.has(userId);
+    if (newStatus === 'kicked' && !configuredAdmin) {
+      await this.ensurePlatformUser(user);
+      await this.db.setUserSettings?.(userId, { isBlocked: true, isAllowed: false });
+      this.logger?.info?.('Guard synchronized Telegram ban', {
+        chatId: update.chat?.id,
+        userId,
+        actorId: update.from?.id
+      });
+    } else if (oldStatus === 'kicked' && newStatus !== 'kicked') {
+      await this.ensurePlatformUser(user);
+      await this.db.setUserSettings?.(userId, { isBlocked: false });
+      this.logger?.info?.('Guard synchronized Telegram unban', {
+        chatId: update.chat?.id,
+        userId,
+        actorId: update.from?.id
+      });
+    }
+    return next();
   }
 
   async handleBusinessConnection(ctx) {
@@ -695,7 +822,9 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
 }
 
 export const platformModesInternals = {
+  GUARD_MODES,
   PLATFORM_MODE_NAMES,
+  TELEGRAM_ALLOWED_UPDATES,
   addBounded,
   inlineArticle,
   platformCapabilityState,
