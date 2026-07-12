@@ -61,10 +61,15 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     this.processedPlatformMessages = new Set();
     this.botPairCooldowns = new Map();
     this.terminalBotReplyIds = new Set();
+    this.inlineQueryStates = new Map();
+    this.inlineResultCache = new Map();
     // Register before TelegramAIBot.registerCommands installs its catch-all
     // callback handler, otherwise these buttons would look unresponsive.
     this.bot.action(/^platform_mode:(.+)$/, (ctx) =>
       this.withCompactCallbackReply(ctx, () => this.handlePlatformModeCallback(ctx))
+    );
+    this.bot.action(/^guard_manage:(.+)$/, (ctx) =>
+      this.withCompactCallbackReply(ctx, () => this.handleGuardManageCallback(ctx))
     );
   }
 
@@ -105,7 +110,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     ]);
   }
 
-  createPlatformModeDetailKeyboard(locale = 'zh', mode = '') {
+  createPlatformModeDetailKeyboard(locale = 'zh', mode = '', ctx = null) {
     const rows = [];
     if (mode === 'inline') {
       rows.push([
@@ -113,6 +118,19 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
           localText(locale, '立即在任意聊天中使用', 'Use in any chat'),
           ''
         )
+      ]);
+    }
+    if (mode === 'guard' && ctx && this.isAdmin(ctx)) {
+      rows.push([
+        Markup.button.callback(localText(locale, '➕ 白名单', '➕ Allowlist'), 'guard_manage:allow'),
+        Markup.button.callback(localText(locale, '➕ 黑名单', '➕ Blocklist'), 'guard_manage:block')
+      ]);
+      rows.push([
+        Markup.button.callback(localText(locale, '➖ 白名单', '➖ Allowlist'), 'guard_manage:disallow'),
+        Markup.button.callback(localText(locale, '➖ 黑名单', '➖ Blocklist'), 'guard_manage:unblock')
+      ]);
+      rows.push([
+        Markup.button.callback(localText(locale, '📋 查看名单', '📋 View lists'), 'guard_manage:list')
       ]);
     }
     rows.push([Markup.button.callback(localText(locale, '⬅️ 返回帮助', '⬅️ Back to help'), 'platform_mode:back')]);
@@ -151,8 +169,8 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
       ),
       guard: localText(
         locale,
-        '作为群组入群守卫处理加入请求：黑名单自动拒绝，白名单和管理员自动通过，其余请求进入管理员队列，避免误封。需要在 BotFather 中把本 Bot 指定为 Guard Bot。',
-        'Processes join requests as a group guard: blocked users are declined, allowlisted users and admins are approved, and all others are queued for administrators. Assign this bot as the Guard Bot in BotFather.'
+        '作为群组入群守卫处理加入请求：黑名单优先自动拒绝；白名单和管理员自动通过；其余请求默认进入管理员队列，避免误封。管理员可用下方按钮管理名单，也可使用 /allow、/disallow、/block、/unblock 加用户 ID。需要在 BotFather 中把本 Bot 指定为 Guard Bot。',
+        'Processes join requests as a group guard: the blocklist has highest priority; allowlisted users and admins are approved; all others are queued for administrators. Admins can manage lists below or use /allow, /disallow, /block, and /unblock with a user ID. Assign this bot as the Guard Bot in BotFather.'
       ),
       secretary: localText(
         locale,
@@ -176,7 +194,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     if (!PLATFORM_MODE_NAMES[mode]) return this.handleHelp(ctx);
     await ctx.reply(
       this.getPlatformModeDetails(this.getLocale(ctx), mode),
-      this.createPlatformModeDetailKeyboard(this.getLocale(ctx), mode)
+      this.createPlatformModeDetailKeyboard(this.getLocale(ctx), mode, ctx)
     );
   }
 
@@ -266,30 +284,124 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     });
   }
 
+  getInlineQueryState(userId = '') {
+    const key = String(userId || 'anonymous');
+    let state = this.inlineQueryStates.get(key);
+    if (!state) {
+      state = { version: 0, latestQueryId: '', running: null, updatedAt: Date.now() };
+      this.inlineQueryStates.set(key, state);
+    }
+    state.updatedAt = Date.now();
+    while (this.inlineQueryStates.size > 500) {
+      this.inlineQueryStates.delete(this.inlineQueryStates.keys().next().value);
+    }
+    return state;
+  }
+
+  getCachedInlineAnswer(userId = '', query = '') {
+    const key = `${String(userId || 'anonymous')}:${String(query || '').toLowerCase()}`;
+    const cached = this.inlineResultCache.get(key);
+    if (!cached) return '';
+    if (Date.now() - cached.createdAt > Math.max(1000, Number(this.config.inlineQueryCacheTtlMs) || 60000)) {
+      this.inlineResultCache.delete(key);
+      return '';
+    }
+    return cached.answer;
+  }
+
+  cacheInlineAnswer(userId = '', query = '', answer = '') {
+    const key = `${String(userId || 'anonymous')}:${String(query || '').toLowerCase()}`;
+    this.inlineResultCache.set(key, { answer, createdAt: Date.now() });
+    while (this.inlineResultCache.size > 300) {
+      this.inlineResultCache.delete(this.inlineResultCache.keys().next().value);
+    }
+  }
+
+  async answerStaleInlineQuery(ctx) {
+    try {
+      await ctx.answerInlineQuery([], { cache_time: 1, is_personal: true });
+    } catch {
+      // Telegram may already have discarded a superseded query.
+    }
+  }
+
   async handleInlineQuery(ctx) {
     const query = safeText(ctx.update.inline_query?.query, this.config.maxInputChars || 12000);
     const user = ctx.update.inline_query?.from || {};
+    const userId = String(user.id || 'anonymous');
+    const queryId = String(ctx.update.inline_query?.id || randomUUID());
     const locale = String(user.language_code || '').startsWith('en') ? 'en' : 'zh';
+
+    if (!query) {
+      await ctx.answerInlineQuery([
+        inlineArticle(
+          localText(locale, '输入完整问题，停止输入后我才会开始处理。', 'Type the full question; processing starts after you pause.'),
+          PLATFORM_MODE_NAMES.inline
+        )
+      ], { cache_time: 5, is_personal: true });
+      return;
+    }
+
+    const state = this.getInlineQueryState(userId);
+    state.version += 1;
+    state.latestQueryId = queryId;
+    const version = state.version;
+    await new Promise((resolve) => setTimeout(
+      resolve,
+      Math.max(100, Number(this.config.inlineQueryDebounceMs) || 700)
+    ));
+
+    if (state.version !== version || state.latestQueryId !== queryId) {
+      await this.answerStaleInlineQuery(ctx);
+      return;
+    }
+
+    if (state.running) {
+      await state.running.catch(() => undefined);
+      if (state.version !== version || state.latestQueryId !== queryId) {
+        await this.answerStaleInlineQuery(ctx);
+        return;
+      }
+    }
+
+    const cachedAnswer = this.getCachedInlineAnswer(userId, query);
+    if (cachedAnswer) {
+      await ctx.answerInlineQuery([inlineArticle(cachedAnswer, query)], {
+        cache_time: 30,
+        is_personal: true
+      });
+      return;
+    }
+
+    let releaseRunning;
+    state.running = new Promise((resolve) => { releaseRunning = resolve; });
     try {
       await this.ensurePlatformUser(user);
-      const answer = query
-        ? await this.completePlatformRequest({
-            userId: String(user.id || ''),
-            text: query,
-            locale,
-            scope: 'telegram_inline',
-            role: 'inline answer generator'
-          })
-        : localText(locale, '输入问题后选择结果，即可把 AI 答案发送到当前聊天。', 'Type a question, then select the result to send the AI answer.');
+      const answer = await this.completePlatformRequest({
+        userId,
+        text: query,
+        locale,
+        scope: 'telegram_inline',
+        role: 'inline answer generator'
+      });
+      this.cacheInlineAnswer(userId, query, answer);
+
+      if (state.version !== version || state.latestQueryId !== queryId) {
+        await this.answerStaleInlineQuery(ctx);
+        return;
+      }
       await ctx.answerInlineQuery([inlineArticle(answer, query || PLATFORM_MODE_NAMES.inline)], {
-        cache_time: 0,
+        cache_time: 30,
         is_personal: true
       });
     } catch (error) {
       this.logger?.warn?.('Inline query failed', { error: this.formatLogError(error) });
       await ctx.answerInlineQuery([
         inlineArticle(this.formatUserFacingError(error, locale), PLATFORM_MODE_NAMES.inline)
-      ], { cache_time: 0, is_personal: true });
+      ], { cache_time: 5, is_personal: true });
+    } finally {
+      releaseRunning?.();
+      if (state.running) state.running = null;
     }
   }
 
@@ -334,6 +446,100 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     return ['approve', 'decline', 'queue'].includes(this.config.guardDefaultAction)
       ? this.config.guardDefaultAction
       : 'queue';
+  }
+
+  async handleGuardManageCallback(ctx) {
+    const locale = this.getLocale(ctx);
+    const action = String(ctx.match?.[1] || '');
+    await ctx.answerCbQuery();
+    if (!this.isAdmin(ctx)) {
+      await ctx.reply(localText(locale, '只有管理员可以修改 Guard 名单。', 'Only administrators can change Guard lists.'));
+      return;
+    }
+
+    if (action === 'list') {
+      const users = this.db.listUsers?.({ limit: 500, offset: 0 }) || [];
+      const allowlist = users.filter((user) => user.isAllowed).map((user) => user.id);
+      const blocklist = users.filter((user) => user.isBlocked).map((user) => user.id);
+      const staticAllowlist = [...(this.config.allowedUserIds || [])];
+      const staticBlocklist = [...(this.config.blockedUserIds || [])];
+      const format = (items) => items.length ? items.slice(0, 50).join(', ') : localText(locale, '无', 'none');
+      await ctx.reply(
+        localText(
+          locale,
+          `Guard 名单\n\n动态白名单：${format(allowlist)}\n动态黑名单：${format(blocklist)}\n环境变量白名单：${format(staticAllowlist)}\n环境变量黑名单：${format(staticBlocklist)}\n\n黑名单优先级最高。`,
+          `Guard lists\n\nDynamic allowlist: ${format(allowlist)}\nDynamic blocklist: ${format(blocklist)}\nEnvironment allowlist: ${format(staticAllowlist)}\nEnvironment blocklist: ${format(staticBlocklist)}\n\nThe blocklist has highest priority.`
+        ),
+        this.createPlatformModeDetailKeyboard(locale, 'guard', ctx)
+      );
+      return;
+    }
+
+    if (!['allow', 'disallow', 'block', 'unblock'].includes(action)) {
+      await ctx.reply(
+        this.getPlatformModeDetails(locale, 'guard'),
+        this.createPlatformModeDetailKeyboard(locale, 'guard', ctx)
+      );
+      return;
+    }
+
+    this.setActiveMode(ctx, { type: 'guard_manage', action });
+    await ctx.reply(
+      localText(
+        locale,
+        `请输入要${action === 'allow' ? '加入白名单' : action === 'disallow' ? '移出白名单' : action === 'block' ? '加入黑名单' : '移出黑名单'}的 Telegram 用户 ID。发送“取消”可退出。`,
+        `Send the Telegram user ID to ${action}. Send “cancel” to exit.`
+      )
+    );
+  }
+
+  async handleActiveMode(ctx, mode) {
+    if (mode?.type !== 'guard_manage') return super.handleActiveMode(ctx, mode);
+    const locale = this.getLocale(ctx);
+    const input = String(ctx.message?.text || '').trim();
+    if (/^(取消|cancel|exit)$/i.test(input)) {
+      this.clearActiveMode(ctx);
+      await ctx.reply(
+        localText(locale, '已取消 Guard 名单修改。', 'Guard list change cancelled.'),
+        this.createPlatformModeDetailKeyboard(locale, 'guard', ctx)
+      );
+      return true;
+    }
+
+    if (!/^\d{4,20}$/.test(input)) {
+      await ctx.reply(localText(locale, '请输入正确的数字 Telegram 用户 ID，或发送“取消”。', 'Send a numeric Telegram user ID, or “cancel”.'));
+      return true;
+    }
+    if (!this.isAdmin(ctx)) {
+      this.clearActiveMode(ctx);
+      await ctx.reply(localText(locale, '只有管理员可以修改 Guard 名单。', 'Only administrators can change Guard lists.'));
+      return true;
+    }
+    if (mode.action === 'block' && input === String(ctx.from?.id || '')) {
+      await ctx.reply(localText(locale, '不能把当前管理员自己加入黑名单。', 'You cannot block the current administrator.'));
+      return true;
+    }
+
+    if (!this.db.findUser?.(input)) {
+      await this.ensurePlatformUser({ id: input, first_name: '', username: '' });
+    }
+    const patches = {
+      allow: { isAllowed: true, isBlocked: false },
+      disallow: { isAllowed: false },
+      block: { isBlocked: true, isAllowed: false },
+      unblock: { isBlocked: false }
+    };
+    await this.db.setUserSettings(input, patches[mode.action]);
+    this.clearActiveMode(ctx);
+    await ctx.reply(
+      localText(
+        locale,
+        `Guard 名单已更新：${input}（${mode.action}）。`,
+        `Guard list updated: ${input} (${mode.action}).`
+      ),
+      this.createPlatformModeDetailKeyboard(locale, 'guard', ctx)
+    );
+    return true;
   }
 
   async handleGuardJoinRequest(ctx, next) {
