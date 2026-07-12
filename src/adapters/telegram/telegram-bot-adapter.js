@@ -1,4 +1,4 @@
-import { HelpTelegramAIBot } from '../../services/help-telegram-bot.js';
+import { PlatformModesTelegramAIBot } from '../../services/platform-modes-telegram-bot.js';
 
 export function createTelegramBot({
   config,
@@ -10,7 +10,7 @@ export function createTelegramBot({
   logger,
   accessControl
 }) {
-  return new HelpTelegramAIBot({
+  return new PlatformModesTelegramAIBot({
     config,
     db,
     aiClient,

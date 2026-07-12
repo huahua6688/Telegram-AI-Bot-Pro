@@ -254,6 +254,11 @@ export function loadConfig() {
     adminApiEnabled: parseBoolean(process.env.ADMIN_API_ENABLED, false),
     miniAppEnabled: parseBoolean(process.env.MINI_APP_ENABLED, true),
     miniAppAuthMaxAgeSeconds: parseInteger(process.env.MINI_APP_AUTH_MAX_AGE_SECONDS, 3600),
+    enableSecretaryAutoReply: parseBoolean(process.env.ENABLE_SECRETARY_AUTO_REPLY, true),
+    guardDefaultAction: ['approve', 'decline', 'queue'].includes(String(process.env.GUARD_DEFAULT_ACTION || '').toLowerCase())
+      ? String(process.env.GUARD_DEFAULT_ACTION).toLowerCase()
+      : 'queue',
+    botCollaborationCooldownMs: parseInteger(process.env.BOT_COLLABORATION_COOLDOWN_MS, 5000),
     databaseFile,
     legacyDataFile,
     adminUserIds: new Set(parseList(process.env.ADMIN_USER_IDS).map(String)),

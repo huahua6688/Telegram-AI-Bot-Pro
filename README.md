@@ -233,6 +233,18 @@ npm run verify
 - 输入框左侧入口名称保持为你在 BotFather 设置的“控制台”；联网搜索、翻译、图片、语音、文件、链接和记忆操作由自然语言或消息类型自动识别，不在 `/start`、`/help` 或工具箱重复显示按钮。
 - 输入框下方只保留 App 没有、也不能安全自动开启的 `🔒 隐私聊天` 按钮；普通 AI 回复不重复附加功能按钮，数据库内容加密实现保持独立。
 
+## Telegram 平台扩展模式
+
+`/help` 回复下方提供 5 个真正可用的 Telegram 模式入口；`/whoami` 只显示 ID，不再附带这些功能按钮：
+
+- **Inline Mode**：在任意聊天输入 `@机器人用户名 问题`，生成一条可直接发送的 AI 答案。
+- **Guest Chat Mode**：无需把 Bot 加入聊天，@提及或回复后进行一次性回答。
+- **Guard Mode**：处理入群请求；黑名单拒绝、白名单/管理员通过，其余默认交管理员审核。
+- **Secretary Mode**：通过 Telegram Business/Secretary 连接处理授权聊天，并在有权限时代表账号回复。
+- **Bot-to-Bot Communication**：其他 Bot 可用 `/ask@本机器人 问题` 或直接回复本 Bot；内置去重、限速和单轮终止保护。
+
+代码部署后，还需要在 BotFather 的 Bot Settings 中为当前 Bot 开启对应平台模式。按钮详情页会根据 `getMe` 返回值显示 Inline、Guest、Guard、Secretary 的实际启用状态。访客、Inline 和 Secretary 的第三方消息不写入普通聊天记录或长期记忆。
+
 ## English
 
 ## One-Copy Zeabur Environment Variables
