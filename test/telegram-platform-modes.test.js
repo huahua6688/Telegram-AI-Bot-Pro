@@ -120,6 +120,42 @@ test('inline mode coalesces rapid typing and only calls AI for the last query', 
     answers.find((item) => item.id === 'q2').results[0].input_message_content.message_text,
     'answer:解释人工智能'
   );
+});
+
+test('empty inline query cancels pending work and never invokes AI or search', async () => {
+  let aiCalls = 0;
+  let searchCalls = 0;
+  const answers = [];
+  const bot = createBot({
+    methods: {
+      async completePlatformRequest() {
+        aiCalls += 1;
+        return 'must not run';
+      }
+    }
+  });
+  bot.toolRegistry = {
+    async execute() {
+      searchCalls += 1;
+      return '{}';
+    }
+  };
+  const makeContext = (id, query) => ({
+    update: { inline_query: { id, query, from: { id: 79, language_code: 'zh-CN' } } },
+    answerInlineQuery: async (results, extra) => answers.push({ id, results, extra })
+  });
+
+  const pending = bot.handleInlineQuery(makeContext('pending', '今日新闻'));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const empty = bot.handleInlineQuery(makeContext('empty', ''));
+  await Promise.all([pending, empty]);
+
+  assert.equal(aiCalls, 0);
+  assert.equal(searchCalls, 0);
+  assert.deepEqual(answers.find((item) => item.id === 'empty').results, []);
+  assert.deepEqual(answers.find((item) => item.id === 'empty').extra, { cache_time: 30, is_personal: true });
+});
+
 test('inline current-information query prefetches web results and forces provider fallback', async () => {
   const calls = [];
   const bot = createBot({
