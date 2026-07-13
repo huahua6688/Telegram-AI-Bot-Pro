@@ -417,7 +417,8 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       margin-bottom: 10px;
     }
 
-    input[type="search"] {
+    input[type="search"],
+    input[type="number"] {
       min-width: 0;
       min-height: 44px;
       padding: 0 12px;
@@ -429,7 +430,8 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       outline: none;
     }
 
-    input[type="search"]:focus {
+    input[type="search"]:focus,
+    input[type="number"]:focus {
       border-color: var(--tg-theme-button-color, #2481cc);
     }
 
@@ -459,8 +461,42 @@ const MINI_APP_HTML = String.raw`<!doctype html>
 
     .user-actions {
       display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
       justify-content: flex-end;
       margin-top: 11px;
+    }
+
+    .quota-editor {
+      display: grid;
+      grid-template-columns: minmax(120px, 1fr) auto auto;
+      gap: 8px;
+      align-items: end;
+      margin-top: 11px;
+      padding-top: 11px;
+      border-top: 1px solid rgba(127, 127, 127, .16);
+    }
+
+    .quota-field {
+      display: grid;
+      gap: 5px;
+      color: var(--tg-theme-hint-color, #6b7280);
+      font-size: 12px;
+    }
+
+    .quota-field input {
+      width: 100%;
+      min-height: 40px;
+    }
+
+    @media (max-width: 520px) {
+      .quota-editor {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .quota-field {
+        grid-column: 1 / -1;
+      }
     }
 
     .history-toolbar {
@@ -706,7 +742,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
           <strong id="adminTotalUsers">—</strong>
         </div>
         <div class="stat-box">
-          <span>每日配额</span>
+          <span>全局默认额度</span>
           <strong id="adminDailyQuota">—</strong>
         </div>
         <div class="stat-box">
@@ -726,6 +762,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
 
       <div class="subsection">
         <h3 class="subsection-title">用户管理</h3>
+        <p class="small">全局额度是账号的默认值；可以在下方为每个账号单独覆盖，0 表示不限。</p>
         <div class="admin-toolbar">
           <input id="adminUserSearch" type="search" placeholder="搜索 ID、用户名或姓名" />
           <button class="secondary compact-button" id="adminSearchButton" type="button">搜索</button>
@@ -1306,6 +1343,10 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       return '用户 ' + user.id;
     }
 
+    function quotaDisplayValue(value) {
+      return Number(value || 0) > 0 ? String(Number(value)) : '不限';
+    }
+
     function renderAdminUsers(users) {
       state.adminUsers = users || [];
       elements.adminUserList.innerHTML = '';
@@ -1329,8 +1370,11 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         const parts = [
           'ID ' + user.id,
           user.username ? '@' + user.username : '',
-          '今日 ' + Number(user.dailyUsageCount || 0),
-          '总消息 ' + Number(user.totalMessages || 0)
+          '今日使用 ' + Number(user.dailyUsageCount || 0) + ' / ' + quotaDisplayValue(user.dailyQuota),
+          user.usesGlobalQuota
+            ? '使用全局默认额度'
+            : '个人额度 ' + quotaDisplayValue(user.dailyQuotaOverride),
+          '累计请求 ' + Number(user.totalMessages || 0)
         ].filter(Boolean);
         meta.textContent = parts.join(' · ');
 
@@ -1362,6 +1406,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         button.textContent = user.isBlocked ? '解除封禁' : '封禁用户';
         button.dataset.userId = String(user.id);
         button.dataset.blocked = user.isBlocked ? 'true' : 'false';
+        button.dataset.userAction = 'toggle-block';
 
         const isSelf = state.profile && String(state.profile.id) === String(user.id);
         button.disabled = Boolean(user.isAdmin || isSelf);
@@ -1370,6 +1415,44 @@ const MINI_APP_HTML = String.raw`<!doctype html>
 
         actions.appendChild(button);
         item.appendChild(actions);
+
+        const quotaEditor = document.createElement('div');
+        quotaEditor.className = 'quota-editor';
+
+        const quotaField = document.createElement('label');
+        quotaField.className = 'quota-field';
+        quotaField.textContent = '个人每日额度（0 表示不限）';
+
+        const quotaInput = document.createElement('input');
+        quotaInput.type = 'number';
+        quotaInput.min = '0';
+        quotaInput.max = '1000000';
+        quotaInput.step = '1';
+        quotaInput.inputMode = 'numeric';
+        quotaInput.dataset.userQuotaInput = String(user.id);
+        quotaInput.value = user.usesGlobalQuota ? '' : String(Number(user.dailyQuotaOverride || 0));
+        quotaInput.placeholder = '全局默认：' + quotaDisplayValue(user.dailyQuota);
+        quotaField.appendChild(quotaInput);
+
+        const saveQuota = document.createElement('button');
+        saveQuota.type = 'button';
+        saveQuota.className = 'primary compact-button';
+        saveQuota.textContent = '保存个人额度';
+        saveQuota.dataset.userId = String(user.id);
+        saveQuota.dataset.userAction = 'save-quota';
+
+        const resetQuota = document.createElement('button');
+        resetQuota.type = 'button';
+        resetQuota.className = 'secondary compact-button';
+        resetQuota.textContent = '恢复全局默认';
+        resetQuota.dataset.userId = String(user.id);
+        resetQuota.dataset.userAction = 'reset-quota';
+        resetQuota.disabled = Boolean(user.usesGlobalQuota);
+
+        quotaEditor.appendChild(quotaField);
+        quotaEditor.appendChild(saveQuota);
+        quotaEditor.appendChild(resetQuota);
+        item.appendChild(quotaEditor);
         elements.adminUserList.appendChild(item);
       });
 
@@ -1419,7 +1502,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
 
         const stats = data.stats || {};
         elements.adminTotalUsers.textContent = String(data.totalUsers ?? 0);
-        elements.adminDailyQuota.textContent = String(data.dailyQuota ?? 0);
+        elements.adminDailyQuota.textContent = quotaDisplayValue(data.dailyQuota);
         elements.adminMessages.textContent = String(stats.messagesHandled ?? 0);
         elements.adminAiCalls.textContent = String(stats.aiCalls ?? 0);
         renderProviderStatus(data.providers || []);
@@ -1477,6 +1560,58 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         }
       } catch (error) {
         showAdminNotice(error.message || '操作失败。', 'failure');
+        if (tg && tg.HapticFeedback) {
+          tg.HapticFeedback.notificationOccurred('error');
+        }
+      }
+    }
+
+    async function updateUserQuota(userId, resetToGlobal) {
+      let dailyQuota = null;
+
+      if (!resetToGlobal) {
+        const input = Array.from(
+          elements.adminUserList.querySelectorAll('input[data-user-quota-input]')
+        ).find(function (candidate) {
+          return candidate.dataset.userQuotaInput === String(userId);
+        });
+        const rawValue = input ? input.value.trim() : '';
+        dailyQuota = Number(rawValue);
+
+        if (!rawValue || !Number.isInteger(dailyQuota) || dailyQuota < 0 || dailyQuota > 1000000) {
+          showAdminNotice('个人每日额度必须是 0 到 1000000 之间的整数。', 'failure');
+          return;
+        }
+      }
+
+      showAdminNotice(resetToGlobal ? '正在恢复全局默认额度…' : '正在保存个人额度…', '');
+
+      try {
+        const response = await fetch(
+          '/api/miniapp/admin/users/' + encodeURIComponent(userId),
+          {
+            method: 'PATCH',
+            headers: authHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ dailyQuota: resetToGlobal ? null : dailyQuota })
+          }
+        );
+
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.message || data.error || '额度保存失败');
+        }
+
+        await fetchAdminUsers(elements.adminUserSearch.value.trim());
+        showAdminNotice(
+          resetToGlobal ? '已恢复使用全局默认额度。' : '个人每日额度已保存。',
+          'success'
+        );
+
+        if (tg && tg.HapticFeedback) {
+          tg.HapticFeedback.notificationOccurred('success');
+        }
+      } catch (error) {
+        showAdminNotice(error.message || '额度保存失败。', 'failure');
         if (tg && tg.HapticFeedback) {
           tg.HapticFeedback.notificationOccurred('error');
         }
@@ -1641,7 +1776,16 @@ const MINI_APP_HTML = String.raw`<!doctype html>
     elements.adminUserList.addEventListener('click', function (event) {
       const button = event.target.closest('button[data-user-id]');
       if (!button || button.disabled) return;
-      updateUserBlock(button.dataset.userId, button.dataset.blocked === 'true');
+      const action = button.dataset.userAction;
+      if (action === 'toggle-block') {
+        updateUserBlock(button.dataset.userId, button.dataset.blocked === 'true');
+      }
+      if (action === 'save-quota') {
+        updateUserQuota(button.dataset.userId, false);
+      }
+      if (action === 'reset-quota') {
+        updateUserQuota(button.dataset.userId, true);
+      }
     });
 
     elements.adminSessionSearchButton.addEventListener('click', function () {
@@ -2031,8 +2175,35 @@ function buildAdminProviderStatus(config) {
     }));
 }
 
-function serializeAdminUser(db, user) {
+function resolveAdminUserQuota(db, userId, defaultQuota) {
+  const safeDefaultQuota = Math.max(0, Math.trunc(Number(defaultQuota) || 0));
+
+  if (typeof db.getUserDailyQuota !== 'function') {
+    return {
+      dailyQuota: safeDefaultQuota,
+      dailyQuotaOverride: null,
+      usesGlobalQuota: true
+    };
+  }
+
+  const resolved = db.getUserDailyQuota(userId, safeDefaultQuota) || {};
+  const override = resolved.dailyQuotaOverride == null
+    ? null
+    : Math.max(0, Math.trunc(Number(resolved.dailyQuotaOverride) || 0));
+
+  return {
+    dailyQuota: Math.max(
+      0,
+      Math.trunc(Number(resolved.dailyQuota ?? override ?? safeDefaultQuota) || 0)
+    ),
+    dailyQuotaOverride: override,
+    usesGlobalQuota: resolved.usesGlobalQuota !== false && override == null
+  };
+}
+
+function serializeAdminUser(db, user, defaultQuota = 0) {
   const aiSettings = db.getUserAISettings(user.id);
+  const quota = resolveAdminUserQuota(db, user.id, defaultQuota);
 
   return {
     id: String(user.id),
@@ -2046,6 +2217,9 @@ function serializeAdminUser(db, user) {
     persona: user.persona || 'default',
     dailyUsageDate: user.dailyUsageDate || '',
     dailyUsageCount: Number(user.dailyUsageCount || 0),
+    dailyQuota: quota.dailyQuota,
+    dailyQuotaOverride: quota.dailyQuotaOverride,
+    usesGlobalQuota: quota.usesGlobalQuota,
     totalMessages: Number(user.totalMessages || 0),
     lastSeenAt: user.lastSeenAt || '',
     aiProvider: aiSettings.providerId || 'auto',
@@ -2306,7 +2480,7 @@ async function handleMiniAppAdminApi(req, res, context, url) {
     const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
     const items = context.db
       .listUsers({ q, limit, offset })
-      .map((user) => serializeAdminUser(context.db, user));
+      .map((user) => serializeAdminUser(context.db, user, context.config.dailyQuota));
 
     sendJson(res, 200, {
       ok: true,
@@ -2385,11 +2559,32 @@ async function handleMiniAppAdminApi(req, res, context, url) {
       }
 
       const payload = await readJsonBody(req);
-      if (typeof payload.isBlocked !== 'boolean') {
+      const hasBlockState = Object.prototype.hasOwnProperty.call(payload, 'isBlocked');
+      const hasDailyQuota = Object.prototype.hasOwnProperty.call(payload, 'dailyQuota');
+
+      if (!hasBlockState && !hasDailyQuota) {
+        throw new Error('NO_USER_CHANGES');
+      }
+
+      if (hasBlockState && typeof payload.isBlocked !== 'boolean') {
         throw new Error('INVALID_BLOCK_STATE');
       }
 
       if (
+        hasDailyQuota &&
+        payload.dailyQuota !== null &&
+        (
+          typeof payload.dailyQuota !== 'number' ||
+          !Number.isInteger(payload.dailyQuota) ||
+          payload.dailyQuota < 0 ||
+          payload.dailyQuota > 1000000
+        )
+      ) {
+        throw new Error('INVALID_DAILY_QUOTA');
+      }
+
+      if (
+        hasBlockState &&
         payload.isBlocked &&
         String(targetUserId) === String(auth.telegramUser.id)
       ) {
@@ -2401,7 +2596,7 @@ async function handleMiniAppAdminApi(req, res, context, url) {
         return;
       }
 
-      if (payload.isBlocked && targetUser.isAdmin) {
+      if (hasBlockState && payload.isBlocked && targetUser.isAdmin) {
         sendJson(res, 409, {
           ok: false,
           error: 'CANNOT_BLOCK_ADMIN',
@@ -2410,28 +2605,68 @@ async function handleMiniAppAdminApi(req, res, context, url) {
         return;
       }
 
-      const updated = await context.db.setUserSettings(targetUserId, {
-        isBlocked: payload.isBlocked
-      });
+      let updated = targetUser;
+
+      if (hasBlockState) {
+        updated = await context.db.setUserSettings(targetUserId, {
+          isBlocked: payload.isBlocked
+        });
+      }
+
+      if (hasDailyQuota) {
+        if (
+          typeof context.db.setUserDailyQuota !== 'function' ||
+          typeof context.db.clearUserDailyQuota !== 'function'
+        ) {
+          throw new Error('DAILY_QUOTA_NOT_SUPPORTED');
+        }
+
+        if (payload.dailyQuota === null) {
+          await context.db.clearUserDailyQuota(targetUserId, context.config.dailyQuota);
+        } else {
+          await context.db.setUserDailyQuota(
+            targetUserId,
+            payload.dailyQuota,
+            context.config.dailyQuota
+          );
+        }
+
+        updated = context.db.findUser(targetUserId) || updated;
+      }
+
+      const action = hasBlockState && hasDailyQuota
+        ? 'users.update'
+        : hasDailyQuota
+          ? payload.dailyQuota === null
+            ? 'users.quota.reset'
+            : 'users.quota.set'
+          : payload.isBlocked
+            ? 'users.block'
+            : 'users.unblock';
 
       logMiniAppAdminAction(context, {
         actorId: auth.telegramUser.id,
-        action: payload.isBlocked ? 'users.block' : 'users.unblock',
+        action,
         targetId: targetUserId,
-        details: { isBlocked: payload.isBlocked },
+        details: {
+          ...(hasBlockState ? { isBlocked: payload.isBlocked } : {}),
+          ...(hasDailyQuota ? { dailyQuota: payload.dailyQuota } : {})
+        },
         req
       });
 
       sendJson(res, 200, {
         ok: true,
-        user: serializeAdminUser(context.db, updated)
+        user: serializeAdminUser(context.db, updated, context.config.dailyQuota)
       });
     } catch (error) {
       const code = String(error?.message || 'ADMIN_USER_UPDATE_FAILED');
       sendJson(res, 400, {
         ok: false,
         error: code,
-        message: '用户状态更新失败。'
+        message: code === 'INVALID_DAILY_QUOTA'
+          ? '个人每日额度必须是 0 到 1000000 之间的整数，null 表示恢复全局默认。'
+          : '用户设置更新失败。'
       });
     }
     return;

@@ -65,6 +65,13 @@ test("assistant model action opens the real AI provider settings", () => {
   assert.match(body, /this\.createAIProviderKeyboard\(settings, state\.locale\)/);
 });
 
+test("main chat refunds only when the assistant reply was not delivered", () => {
+  const body = methodBody("handleIncomingMessage");
+  assert.match(body, /let assistantDelivered = false/);
+  assert.match(body, /assistantDelivered = true/);
+  assert.match(body, /if \(!assistantDelivered\) await this\.refundQuotaForContext\(ctx\)/);
+});
+
 test("translation mode is persistent until exit", () => {
   assert.match(source, /this\.activeModes = new Map\(\)/);
   assert.match(source, /async handleActiveMode\(ctx, mode\)/);

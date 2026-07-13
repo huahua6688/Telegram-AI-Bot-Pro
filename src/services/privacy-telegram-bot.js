@@ -358,16 +358,6 @@ export class PrivacyTelegramAIBot extends TelegramAIBot {
       return true;
     }
 
-    if (!this.isAllowed(ctx)) {
-      await ctx.reply(this.t(locale, 'noAccess'));
-      return true;
-    }
-
-    if (!this.checkRateLimit(ctx.from.id)) {
-      await ctx.reply(this.t(locale, 'rateLimited'));
-      return true;
-    }
-
     if (Number(mode.messageCount || 0) >= this.privacyConfig.maxSessionMessages) {
       this.clearActiveMode(ctx);
       await ctx.reply(
@@ -376,6 +366,8 @@ export class PrivacyTelegramAIBot extends TelegramAIBot {
       );
       return true;
     }
+
+    if (!(await this.consumeQuotaForContext(ctx))) return true;
 
     const user = this.db.findUser(ctx.from?.id);
     const aiSettings = this.getEffectiveAISettings(ctx.from?.id);
@@ -406,7 +398,12 @@ export class PrivacyTelegramAIBot extends TelegramAIBot {
         }
       });
       const result = this.normalizeAiResult(completion.result, messages);
-      const assistantText = result.text || this.t(locale, 'noReply');
+      const assistantText = result.text;
+      if (!assistantText) {
+        await this.refundQuotaForContext(ctx);
+        await ctx.reply(this.t(locale, 'noReply'), this.createPrivacyModeKeyboard(locale, mode.contextMode));
+        return true;
+      }
 
       if (mode.contextMode === 'temporary') {
         mode.messages = trimEphemeralHistory(
@@ -424,6 +421,7 @@ export class PrivacyTelegramAIBot extends TelegramAIBot {
 
       await this.sendAssistantReply(ctx, assistantText, this.createPrivacyModeKeyboard(locale, mode.contextMode));
     } catch (error) {
+      await this.refundQuotaForContext(ctx);
       this.logger?.warn?.('Privacy chat request failed', safeErrorMeta(error));
       await ctx.reply(this.formatUserFacingError(error, locale), this.createPrivacyModeKeyboard(locale, mode.contextMode));
     }

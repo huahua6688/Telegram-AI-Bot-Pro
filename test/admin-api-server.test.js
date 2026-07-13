@@ -70,4 +70,92 @@ test('Admin API authenticates token and enforces RBAC', async (t) => {
   assert.equal(success.status, 200);
   const body = await success.json();
   assert.equal(Array.isArray(body.items), true);
+
+  const initialQuota = await fetch(`http://127.0.0.1:${port}/admin/api/v1/quota?userId=9002`, {
+    headers: {
+      Authorization: ['Bearer', 'test-token'].join(' '),
+      'x-admin-user-id': '9001'
+    }
+  });
+  assert.equal(initialQuota.status, 200);
+  assert.deepEqual(await initialQuota.json(), {
+    userId: '9002',
+    dailyUsageDate: '',
+    dailyUsageCount: 0,
+    globalDailyQuota: 200,
+    dailyQuota: 200,
+    dailyQuotaOverride: null,
+    usesGlobalQuota: true
+  });
+
+  const setQuota = await fetch(`http://127.0.0.1:${port}/admin/api/v1/quota`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: ['Bearer', 'test-token'].join(' '),
+      'x-admin-user-id': '9001',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ userId: '9002', dailyQuota: 7 })
+  });
+  assert.equal(setQuota.status, 200);
+  const setQuotaBody = await setQuota.json();
+  assert.deepEqual(setQuotaBody.quota, {
+    userId: '9002',
+    dailyQuota: 7,
+    dailyQuotaOverride: 7,
+    usesGlobalQuota: false
+  });
+  assert.equal(db.consumeDailyQuota('9002', config.dailyQuota).quota, 7);
+
+  const malformedQuota = await fetch(`http://127.0.0.1:${port}/admin/api/v1/quota`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: ['Bearer', 'test-token'].join(' '),
+      'x-admin-user-id': '9001',
+      'Content-Type': 'application/json'
+    },
+    body: '{'
+  });
+  assert.equal(malformedQuota.status, 400);
+  assert.equal((await malformedQuota.json()).error, 'INVALID_JSON');
+  assert.equal(db.findUser('9002').dailyUsageCount, 1);
+
+  const resetQuota = await fetch(`http://127.0.0.1:${port}/admin/api/v1/quota`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: ['Bearer', 'test-token'].join(' '),
+      'x-admin-user-id': '9001',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ userId: '9002', dailyQuota: null })
+  });
+  assert.equal(resetQuota.status, 200);
+  const resetQuotaBody = await resetQuota.json();
+  assert.equal(resetQuotaBody.quota.dailyQuota, 200);
+  assert.equal(resetQuotaBody.quota.usesGlobalQuota, true);
+
+  const accidentalReset = await fetch(`http://127.0.0.1:${port}/admin/api/v1/quota`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: ['Bearer', 'test-token'].join(' '),
+      'x-admin-user-id': '9001',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({})
+  });
+  assert.equal(accidentalReset.status, 400);
+  assert.equal((await accidentalReset.json()).error, 'EXPLICIT_RESET_REQUIRED');
+  assert.equal(db.findUser('9002').dailyUsageCount, 1);
+
+  const explicitReset = await fetch(`http://127.0.0.1:${port}/admin/api/v1/quota`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: ['Bearer', 'test-token'].join(' '),
+      'x-admin-user-id': '9001',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ resetAll: true })
+  });
+  assert.equal(explicitReset.status, 200);
+  assert.equal(db.findUser('9002').dailyUsageCount, 0);
 });

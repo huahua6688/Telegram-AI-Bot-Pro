@@ -323,7 +323,7 @@ function rawFallbackText(raw = '', title = '结果') {
 
 function decodeXml(value = '') {
   return String(value || '')
-    .replace(/<!$begin:math:display$CDATA\\\[\(\[\\s\\S\]\*\?\)$end:math:display$\]>/g, '$1')
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
@@ -513,6 +513,9 @@ async function runSearch(bot, ctx, query, originalText = query) {
   const keyword = String(query || '').trim();
 
   if (!keyword) return false;
+  if (typeof bot.consumeQuotaForContext === 'function' && !(await bot.consumeQuotaForContext(ctx))) {
+    return true;
+  }
   if (typeof bot.runWebSearch === 'function') {
     await bot.runWebSearch(ctx, keyword);
     return true;
@@ -526,6 +529,7 @@ async function runSearch(bot, ctx, query, originalText = query) {
     try {
       const parsed = JSON.parse(raw);
       if (parsed?.error) {
+        await bot.refundQuotaForContext?.(ctx);
         await ctx.reply(bot.formatUserFacingError(parsed.message || parsed.error, locale));
         return true;
       }
@@ -533,7 +537,7 @@ async function runSearch(bot, ctx, query, originalText = query) {
 
     await bot.db.incrementStats('toolCalls');
 
-    if (!hasUsefulToolResult(raw) && /新闻|新聞|今日|今天|最新|news/i.test(keyword)) {
+    if (!hasUsefulToolResult(raw) && looksLikeNewsSearch(keyword)) {
       const fallbackRaw = await fetchNewsFallback(keyword, {
         timeoutMs: bot.config?.requestTimeoutMs
       });
@@ -541,6 +545,7 @@ async function runSearch(bot, ctx, query, originalText = query) {
     }
 
     if (!hasUsefulToolResult(raw)) {
+      await bot.refundQuotaForContext?.(ctx);
       await ctx.reply(
         locale === 'en'
           ? 'No useful search results were returned. For stable web search, configure BRAVE_SEARCH_API_KEY.'
@@ -561,6 +566,7 @@ async function runSearch(bot, ctx, query, originalText = query) {
     await rememberHandledInteraction(bot, ctx, originalText, answer, modelName(bot, ctx));
     return true;
   } catch (error) {
+    await bot.refundQuotaForContext?.(ctx);
     await ctx.reply(bot.formatUserFacingError(error, locale));
     return true;
   }
@@ -571,6 +577,9 @@ async function runUrl(bot, ctx, url, originalText = url) {
   const targetUrl = String(url || '').trim();
 
   if (!/^https?:\/\//i.test(targetUrl)) return false;
+  if (typeof bot.consumeQuotaForContext === 'function' && !(await bot.consumeQuotaForContext(ctx))) {
+    return true;
+  }
 
   try {
     await ctx.sendChatAction('typing');
@@ -580,10 +589,21 @@ async function runUrl(bot, ctx, url, originalText = url) {
     try {
       const parsed = JSON.parse(raw);
       if (parsed?.error) {
+        await bot.refundQuotaForContext?.(ctx);
         await ctx.reply(locale === 'en' ? 'This page cannot be fetched right now.' : '这个网页暂时抓不到，可能是网站禁止机器人访问。');
         return true;
       }
     } catch {}
+
+    if (!String(raw || '').trim()) {
+      await bot.refundQuotaForContext?.(ctx);
+      await ctx.reply(
+        locale === 'en'
+          ? 'This page returned no readable content.'
+          : '这个网页没有返回可读取的内容。'
+      );
+      return true;
+    }
 
     await bot.db.incrementStats('toolCalls');
 
@@ -599,6 +619,7 @@ async function runUrl(bot, ctx, url, originalText = url) {
     await rememberHandledInteraction(bot, ctx, originalText, answer, modelName(bot, ctx));
     return true;
   } catch {
+    await bot.refundQuotaForContext?.(ctx);
     await ctx.reply(locale === 'en' ? 'This page cannot be fetched right now.' : '这个网页暂时抓不到，可能是网站禁止机器人访问。');
     return true;
   }
@@ -609,9 +630,21 @@ async function runWeather(bot, ctx, location, originalText = location) {
   const place = String(location || '').trim();
 
   if (!place) return false;
+  if (typeof bot.consumeQuotaForContext === 'function' && !(await bot.consumeQuotaForContext(ctx))) {
+    return true;
+  }
 
   try {
     const raw = await executeTool(bot, ctx, 'get_weather', { location: place }, 'natural_agent_weather');
+    if (!hasUsefulToolResult(raw)) {
+      await bot.refundQuotaForContext?.(ctx);
+      await ctx.reply(
+        locale === 'en'
+          ? 'Weather is not available yet.'
+          : '天气服务暂时不可用，请稍后再试。'
+      );
+      return true;
+    }
     await bot.db.incrementStats('toolCalls');
 
     const answer = await composeHumanAnswer(bot, ctx, {
@@ -626,6 +659,7 @@ async function runWeather(bot, ctx, location, originalText = location) {
     await rememberHandledInteraction(bot, ctx, originalText, answer, modelName(bot, ctx));
     return true;
   } catch {
+    await bot.refundQuotaForContext?.(ctx);
     if (typeof bot.runWeather === 'function') {
       await bot.runWeather(ctx, place);
       return true;
@@ -670,6 +704,14 @@ function extractWeatherLocation(text = '') {
   return location;
 }
 
+function looksLikeNewsSearch(text = '') {
+  const content = String(text || '').trim();
+  if (!content) return false;
+  return /新闻|新聞|头条|頭條|热点|熱點|时事|時事|资讯|資訊/i.test(content) ||
+    /\bnews\b/i.test(content) ||
+    /(?:今天|今日|最近).{0,8}(?:发生|發生)(?:了)?(?:什么|什麼|哪些)?/i.test(content);
+}
+
 function looksLikeCurrentSearch(text = '') {
   const content = String(text || '').trim();
   if (!content) return false;
@@ -691,6 +733,9 @@ async function continueFromContext(bot, ctx, text = '') {
   const recentContext = getRecentContext(bot, ctx);
 
   if (!recentContext) return false;
+  if (typeof bot.consumeQuotaForContext === 'function' && !(await bot.consumeQuotaForContext(ctx))) {
+    return true;
+  }
 
   const model = modelName(bot, ctx);
   const followupPersonaInstruction = getPersonaInstruction(bot, ctx);
@@ -741,6 +786,7 @@ async function continueFromContext(bot, ctx, text = '') {
     await rememberHandledInteraction(bot, ctx, text, answer, model);
     return true;
   } catch (error) {
+    await bot.refundQuotaForContext?.(ctx);
     bot.logger?.warn?.('Follow-up continuation failed', {
       error: bot.formatLogError ? bot.formatLogError(error) : String(error?.message || error)
     });
@@ -895,6 +941,7 @@ export const naturalAgentInternals = {
   rememberHandledInteraction,
   isFollowUpOnly,
   extractWeatherLocation,
+  looksLikeNewsSearch,
   looksLikeCurrentSearch,
   normalizeSearchQuery,
   cleanPlainText,

@@ -71,7 +71,7 @@ test('BotDatabase imports legacy JSON data into SQLite', async (t) => {
   assert.equal(db.findChat('200')?.triggerMode, 'mention');
   assert.deepEqual(db.getConversation('200:100:main'), [{ role: 'user', content: 'hello' }]);
   assert.equal(db.getStats().aiCalls, 4);
-  assert.equal(db.getMeta('schemaVersion'), '5');
+  assert.equal(db.getMeta('schemaVersion'), '6');
 });
 
 test('BotDatabase provides RBAC, feature flags, policy rules and audit logs', async (t) => {
@@ -162,6 +162,128 @@ test('BotDatabase persists updates, quota counters, and favorites', async (t) =>
   assert.equal(db.findUser(1)?.dailyUsageCount, 1);
   assert.equal(favorite?.text, 'assistant text');
   assert.equal(db.listFavorites({ userId: 1 }).length, 1);
+});
+
+test('BotDatabase applies persistent per-user daily quota overrides', async (t) => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-ai-bot-pro-db-'));
+  const databaseFile = path.join(tempDir, 'bot-data.db');
+
+  const db = new BotDatabase(databaseFile);
+  let reopened = null;
+  t.after(() => {
+    db.close();
+    reopened?.close();
+    return fs.rm(tempDir, { recursive: true, force: true });
+  });
+  await db.init();
+  await db.upsertUser({ id: 10, username: 'limited', first_name: 'Limited', language_code: 'zh-CN' });
+
+  assert.deepEqual(db.getUserDailyQuota(10, 3), {
+    userId: '10',
+    dailyQuota: 3,
+    dailyQuotaOverride: null,
+    usesGlobalQuota: true
+  });
+
+  assert.deepEqual(db.setUserDailyQuota(10, 1), {
+    userId: '10',
+    dailyQuota: 1,
+    dailyQuotaOverride: 1,
+    usesGlobalQuota: false
+  });
+  assert.equal(db.findUser(10)?.dailyQuotaOverride, 1);
+
+  const first = db.consumeDailyQuota(10, 3);
+  assert.deepEqual(first, { allowed: true, remaining: 0, quota: 1, dailyQuotaOverride: 1 });
+  assert.deepEqual(db.consumeDailyQuota(10, 3), {
+    allowed: false,
+    remaining: 0,
+    quota: 1,
+    dailyQuotaOverride: 1
+  });
+  db.refundDailyQuota(10);
+  assert.equal(db.findUser(10)?.dailyUsageCount, 0);
+  assert.equal(db.findUser(10)?.totalMessages, 0);
+  assert.deepEqual(db.consumeDailyQuota(10, 3), {
+    allowed: true,
+    remaining: 0,
+    quota: 1,
+    dailyQuotaOverride: 1
+  });
+  assert.equal(db.findUser(10)?.totalMessages, 1);
+
+  db.close();
+  reopened = new BotDatabase(databaseFile);
+  await reopened.init();
+  assert.equal(reopened.getUserDailyQuota(10, 3)?.dailyQuotaOverride, 1);
+
+  assert.deepEqual(reopened.clearUserDailyQuota(10, 3), {
+    userId: '10',
+    dailyQuota: 3,
+    dailyQuotaOverride: null,
+    usesGlobalQuota: true
+  });
+  assert.equal(reopened.getUserDailyQuota(10, 3)?.dailyQuota, 3);
+  assert.deepEqual(reopened.consumeDailyQuota(10, 3), {
+    allowed: true,
+    remaining: 1,
+    quota: 3,
+    dailyQuotaOverride: null
+  });
+});
+
+test('BotDatabase treats a zero user quota override as unlimited and validates input', async (t) => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-ai-bot-pro-db-'));
+  const db = new BotDatabase(path.join(tempDir, 'bot-data.db'));
+  t.after(() => {
+    db.close();
+    return fs.rm(tempDir, { recursive: true, force: true });
+  });
+  await db.init();
+  await db.upsertUser({ id: 11, username: 'unlimited', first_name: 'Unlimited', language_code: 'en' });
+
+  db.setUserDailyQuota(11, 0);
+  assert.deepEqual(db.consumeDailyQuota(11, 1), {
+    allowed: true,
+    remaining: Infinity,
+    quota: 0,
+    dailyQuotaOverride: 0
+  });
+  assert.deepEqual(db.consumeDailyQuota(11, 1), {
+    allowed: true,
+    remaining: Infinity,
+    quota: 0,
+    dailyQuotaOverride: 0
+  });
+  db.setUserDailyUsage(11, 8, '2000-01-01');
+  assert.equal(db.getOperationsMetrics().quotaConsumedToday, 0);
+  assert.throws(() => db.setUserDailyQuota(11, -1), /non-negative safe integer/);
+  assert.throws(() => db.setUserDailyQuota(11, 1.5), /non-negative safe integer/);
+  assert.equal(db.setUserDailyQuota(999, 5), null);
+});
+
+test('BotDatabase upgrades a v5 database with per-user quota storage', async (t) => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-ai-bot-pro-db-'));
+  const databaseFile = path.join(tempDir, 'bot-data.db');
+  const db = new BotDatabase(databaseFile);
+  let upgraded = null;
+  t.after(() => {
+    db.close();
+    upgraded?.close();
+    return fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  await db.init();
+  await db.upsertUser({ id: 12, username: 'upgrade', first_name: 'Upgrade', language_code: 'en' });
+  db.db.exec('DROP TABLE user_quota_settings');
+  db.setMeta('schemaVersion', '5');
+  db.close();
+
+  upgraded = new BotDatabase(databaseFile);
+  await upgraded.init();
+  assert.equal(upgraded.getMeta('schemaVersion'), '6');
+  assert.equal(upgraded.setUserDailyQuota(12, 9, 3)?.dailyQuota, 9);
+  assert.equal(upgraded.findUser(12)?.dailyQuotaOverride, 9);
 });
 
 test('BotDatabase persists per-user AI provider settings', async (t) => {
