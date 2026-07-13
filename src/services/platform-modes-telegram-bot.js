@@ -88,6 +88,54 @@ function inlineSearchQuery(text = '') {
   return naturalAgentInternals.normalizeSearchQuery(prompt) || prompt;
 }
 
+function isExpiredInlineQueryError(error) {
+  const code = Number(error?.response?.error_code || error?.error_code || error?.code || 0);
+  const detail = [
+    error?.message,
+    error?.description,
+    error?.response?.description
+  ].filter(Boolean).join(' ');
+  return (!code || code === 400) &&
+    /query is too old|response timeout expired|query id is invalid/i.test(detail);
+}
+
+function inlineWorkError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function formatInlineSearchFallback(raw = '', locale = 'zh') {
+  const heading = localText(locale, '联网搜索结果：', 'Live search results:');
+
+  try {
+    const data = JSON.parse(String(raw || '').trim());
+    const summary = safeText(data.answer || data.abstract || '', 700);
+    const sourceItems = Array.isArray(data.results) && data.results.length > 0
+      ? data.results
+      : Array.isArray(data.topics)
+        ? data.topics
+        : [];
+    const items = sourceItems.slice(0, 4).map((item, index) => {
+      const title = safeText(item.title || item.text || item.heading || '', 180);
+      const description = safeText(item.snippet || item.description || '', 300);
+      const url = safeText(item.url || item.link || item.firstUrl || '', 600);
+      return [
+        `${index + 1}. ${title || localText(locale, '搜索结果', 'Search result')}`,
+        description,
+        url
+      ].filter(Boolean).join('\n');
+    }).filter(Boolean);
+    const formatted = [heading, summary, ...items].filter(Boolean).join('\n\n');
+    if (items.length > 0 || summary) return safeText(formatted, 3900);
+  } catch {
+    // A tool may return useful plain text instead of JSON.
+  }
+
+  const plain = safeText(raw, 3600);
+  return plain ? `${heading}\n\n${plain}` : '';
+}
+
 function platformCapabilityState(botInfo = {}, mode = '') {
   if (mode === 'inline') return Boolean(botInfo.supports_inline_queries);
   if (mode === 'guest') return Boolean(botInfo.supports_guest_queries);
@@ -106,6 +154,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     this.terminalBotReplyIds = new Set();
     this.inlineQueryStates = new Map();
     this.inlineResultCache = new Map();
+    this.answeredInlineQueryIds = new Set();
     // Register before TelegramAIBot.registerCommands installs its catch-all
     // callback handler, otherwise these buttons would look unresponsive.
     this.bot.action(/^platform_mode:(.+)$/, (ctx) =>
@@ -273,7 +322,9 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     scope = 'platform_mode',
     role = '',
     fallbackEnabled,
-    retrievedContext = ''
+    retrievedContext = '',
+    requestTimeoutMs,
+    signal
   }) {
     const prompt = safeText(text, this.config.maxInputChars || 12000);
     if (!prompt) return localText(locale, '请先输入要处理的内容。', 'Please enter something to process.');
@@ -345,6 +396,9 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
       model,
       locale,
       request: {
+        requestTimeoutMs,
+        signal,
+        suppressTimeoutCooldown: Boolean(signal && Number(requestTimeoutMs) > 0),
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userContent }
@@ -356,7 +410,9 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
             userId: normalizedUserId,
             chatId: normalizedChatId,
             isAdmin: this.config.adminUserIds?.has(normalizedUserId) || false,
-            toolUsage
+            toolUsage,
+            signal,
+            requestTimeoutMs
           });
           await this.db.incrementStats?.('toolCalls');
           return output;
@@ -380,7 +436,13 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     const key = String(userId || 'anonymous');
     let state = this.inlineQueryStates.get(key);
     if (!state) {
-      state = { version: 0, latestQueryId: '', running: null, updatedAt: Date.now() };
+      state = {
+        version: 0,
+        latestQueryId: '',
+        running: null,
+        abortController: null,
+        updatedAt: Date.now()
+      };
       this.inlineQueryStates.set(key, state);
     }
     state.updatedAt = Date.now();
@@ -409,15 +471,73 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     }
   }
 
-  async answerStaleInlineQuery(ctx) {
+  async answerInlineQuerySafely(ctx, queryId, results, extra, retryOnTransient = true) {
+    this.answeredInlineQueryIds ||= new Set();
+    const normalizedQueryId = String(queryId || ctx.update?.inline_query?.id || '');
+    if (normalizedQueryId && this.answeredInlineQueryIds.has(normalizedQueryId)) return false;
+    if (normalizedQueryId) addBounded(this.answeredInlineQueryIds, normalizedQueryId, 1000);
+
     try {
-      await ctx.answerInlineQuery([], { cache_time: 1, is_personal: true });
-    } catch {
-      // Telegram may already have discarded a superseded query.
+      await ctx.answerInlineQuery(results, extra);
+      return true;
+    } catch (error) {
+      if (!isExpiredInlineQueryError(error)) {
+        if (normalizedQueryId) this.answeredInlineQueryIds.delete(normalizedQueryId);
+        if (retryOnTransient) {
+          return this.answerInlineQuerySafely(ctx, queryId, results, extra, false);
+        }
+        throw error;
+      }
+      this.logger?.info?.('Discarded expired inline query', { queryId: normalizedQueryId });
+      return false;
     }
   }
 
-  async getInlineSearchContext({ userId = '', query = '' } = {}) {
+  async answerStaleInlineQuery(ctx, queryId = '') {
+    return this.answerInlineQuerySafely(
+      ctx,
+      queryId,
+      [],
+      { cache_time: 1, is_personal: true }
+    );
+  }
+
+  async runInlineWork(task, { deadlineAt, signal } = {}) {
+    if (signal?.aborted) {
+      throw inlineWorkError('INLINE_QUERY_SUPERSEDED', 'Inline query was superseded.');
+    }
+
+    const remainingMs = Number(deadlineAt || 0) - Date.now();
+    if (remainingMs <= 0) {
+      throw inlineWorkError('INLINE_QUERY_DEADLINE', 'Inline query response deadline exceeded.');
+    }
+
+    let timeout;
+    let onAbort;
+    const deadline = new Promise((_, reject) => {
+      timeout = setTimeout(() => {
+        reject(inlineWorkError('INLINE_QUERY_DEADLINE', 'Inline query response deadline exceeded.'));
+      }, remainingMs);
+    });
+    const superseded = new Promise((_, reject) => {
+      if (!signal) return;
+      onAbort = () => reject(inlineWorkError('INLINE_QUERY_SUPERSEDED', 'Inline query was superseded.'));
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+
+    try {
+      return await Promise.race([
+        Promise.resolve().then(task),
+        deadline,
+        superseded
+      ]);
+    } finally {
+      clearTimeout(timeout);
+      if (signal && onAbort) signal.removeEventListener('abort', onAbort);
+    }
+  }
+
+  async getInlineSearchContext({ userId = '', query = '', signal, timeoutMs } = {}) {
     const searchQuery = inlineSearchQuery(query);
     if (
       !searchQuery ||
@@ -428,6 +548,15 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
       return '';
     }
 
+    const searchBudgetMs = Math.max(
+      100,
+      Math.min(
+        Number(timeoutMs) || Number(this.config.inlineQuerySearchTimeoutMs) || 3500,
+        Number(this.config.inlineQuerySearchTimeoutMs) || 3500
+      )
+    );
+    const searchDeadlineAt = Date.now() + searchBudgetMs;
+    const searchRemainingMs = () => Math.max(0, searchDeadlineAt - Date.now());
     const toolUsage = { count: 0 };
     let raw = await this.toolRegistry.execute({
       function: {
@@ -439,12 +568,20 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
       userId: String(userId || ''),
       chatId: '',
       isAdmin: this.config.adminUserIds?.has(String(userId || '')) || false,
-      toolUsage
+      toolUsage,
+      signal,
+      requestTimeoutMs: searchBudgetMs
     });
 
     if (!naturalAgentInternals.hasUsefulToolResult(raw) && /新闻|新聞|今日|今天|最新|news/i.test(searchQuery)) {
       try {
-        raw = await naturalAgentInternals.fetchNewsFallback(searchQuery) || raw;
+        const remaining = searchRemainingMs();
+        if (remaining >= 50) {
+          raw = await naturalAgentInternals.fetchNewsFallback(searchQuery, {
+            signal,
+            timeoutMs: remaining
+          }) || raw;
+        }
       } catch (error) {
         this.logger?.warn?.('Inline news fallback failed', { error: this.formatLogError(error) });
       }
@@ -465,95 +602,161 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     const queryId = String(ctx.update.inline_query?.id || randomUUID());
     const locale = String(user.language_code || '').startsWith('en') ? 'en' : 'zh';
     const state = this.getInlineQueryState(userId);
+    state.abortController?.abort();
+    const abortController = new AbortController();
+    state.abortController = abortController;
     state.version += 1;
     state.latestQueryId = queryId;
     const version = state.version;
+    const deadlineAt = Date.now() + Math.max(
+      250,
+      Number(this.config.inlineQueryResponseTimeoutMs) || 7000
+    );
+    const remainingMs = () => Math.max(1, deadlineAt - Date.now());
+    const runToken = { version, queryId };
+    const isLatest = () => state.version === version && state.latestQueryId === queryId;
 
     if (!query) {
       // Telegram always sends one empty inline_query as soon as @bot is opened.
       // Answer it without invoking AI/tools, and invalidate any pending typed query.
-      await ctx.answerInlineQuery([], { cache_time: 30, is_personal: true });
-      return;
+      if (state.abortController === abortController) state.abortController = null;
+      return this.answerInlineQuerySafely(
+        ctx,
+        queryId,
+        [],
+        { cache_time: 30, is_personal: true }
+      );
     }
 
-    await new Promise((resolve) => setTimeout(
-      resolve,
-      Math.max(100, Number(this.config.inlineQueryDebounceMs) || 1200)
-    ));
-
-    if (state.version !== version || state.latestQueryId !== queryId) {
-      await this.answerStaleInlineQuery(ctx);
-      return;
-    }
-
-    if (state.running) {
-      await state.running.catch(() => undefined);
-      if (state.version !== version || state.latestQueryId !== queryId) {
-        await this.answerStaleInlineQuery(ctx);
-        return;
-      }
-    }
-
-    const cachedAnswer = this.getCachedInlineAnswer(userId, query);
-    if (cachedAnswer) {
-      await ctx.answerInlineQuery([inlineArticle(cachedAnswer, query)], {
-        cache_time: 30,
-        is_personal: true
-      });
-      return;
-    }
-
-    let releaseRunning;
-    state.running = new Promise((resolve) => { releaseRunning = resolve; });
+    state.running = runToken;
+    let response;
     try {
-      await this.ensurePlatformUser(user);
+      await this.runInlineWork(
+        () => new Promise((resolve) => setTimeout(
+          resolve,
+          Math.max(100, Number(this.config.inlineQueryDebounceMs) || 1200)
+        )),
+        { deadlineAt, signal: abortController.signal }
+      );
+
+      if (!isLatest()) {
+        throw inlineWorkError('INLINE_QUERY_SUPERSEDED', 'Inline query was superseded.');
+      }
+
+      const cachedAnswer = this.getCachedInlineAnswer(userId, query);
+      if (cachedAnswer) {
+        response = {
+          results: [inlineArticle(cachedAnswer, query)],
+          extra: { cache_time: 30, is_personal: true }
+        };
+        return await this.answerInlineQuerySafely(ctx, queryId, response.results, response.extra);
+      }
+
+      await this.runInlineWork(
+        () => this.ensurePlatformUser(user),
+        { deadlineAt, signal: abortController.signal }
+      );
       const searchQuery = inlineSearchQuery(query);
-      const retrievedContext = await this.getInlineSearchContext({ userId, query });
-      if (state.version !== version || state.latestQueryId !== queryId) {
-        await this.answerStaleInlineQuery(ctx);
-        return;
+      const retrievedContext = await this.runInlineWork(
+        () => this.getInlineSearchContext({
+          userId,
+          query,
+          signal: abortController.signal,
+          timeoutMs: Math.min(
+            remainingMs(),
+            Number(this.config.inlineQuerySearchTimeoutMs) || 3500
+          )
+        }),
+        { deadlineAt, signal: abortController.signal }
+      );
+      if (!isLatest()) {
+        throw inlineWorkError('INLINE_QUERY_SUPERSEDED', 'Inline query was superseded.');
       }
       if (searchQuery && !retrievedContext) {
-        await ctx.answerInlineQuery([
-          inlineArticle(
-            localText(
+        response = {
+          results: [
+            inlineArticle(
+              localText(
+                locale,
+                '实时搜索暂时没有返回有效结果，请稍后再试。',
+                'Live search returned no useful result. Please try again shortly.'
+              ),
+              query
+            )
+          ],
+          extra: { cache_time: 5, is_personal: true }
+        };
+      } else {
+        try {
+          const answer = await this.runInlineWork(
+            () => this.completePlatformRequest({
+              userId,
+              text: query,
               locale,
-              '实时搜索暂时没有返回有效结果，请稍后再试。',
-              'Live search returned no useful result. Please try again shortly.'
-            ),
-            query
-          )
-        ], { cache_time: 5, is_personal: true });
-        return;
+              scope: 'telegram_inline',
+              role: retrievedContext ? 'inline live-search answer generator' : 'inline answer generator',
+              fallbackEnabled: true,
+              retrievedContext,
+              requestTimeoutMs: remainingMs(),
+              signal: abortController.signal
+            }),
+            { deadlineAt, signal: abortController.signal }
+          );
+          this.cacheInlineAnswer(userId, query, answer);
+          response = {
+            results: [inlineArticle(answer, query || PLATFORM_MODE_NAMES.inline)],
+            extra: { cache_time: 30, is_personal: true }
+          };
+        } catch (error) {
+          if (error?.code === 'INLINE_QUERY_SUPERSEDED') throw error;
+          const searchFallback = retrievedContext
+            ? formatInlineSearchFallback(retrievedContext, locale)
+            : '';
+          if (!searchFallback) throw error;
+          this.logger?.warn?.('Inline AI generation failed, using retrieved search results', {
+            error: this.formatLogError(error)
+          });
+          this.cacheInlineAnswer(userId, query, searchFallback);
+          response = {
+            results: [inlineArticle(searchFallback, query)],
+            extra: { cache_time: 10, is_personal: true }
+          };
+        }
       }
-      const answer = await this.completePlatformRequest({
-        userId,
-        text: query,
-        locale,
-        scope: 'telegram_inline',
-        role: retrievedContext ? 'inline live-search answer generator' : 'inline answer generator',
-        fallbackEnabled: true,
-        retrievedContext
-      });
-      this.cacheInlineAnswer(userId, query, answer);
-
-      if (state.version !== version || state.latestQueryId !== queryId) {
-        await this.answerStaleInlineQuery(ctx);
-        return;
-      }
-      await ctx.answerInlineQuery([inlineArticle(answer, query || PLATFORM_MODE_NAMES.inline)], {
-        cache_time: 30,
-        is_personal: true
-      });
     } catch (error) {
-      this.logger?.warn?.('Inline query failed', { error: this.formatLogError(error) });
-      await ctx.answerInlineQuery([
-        inlineArticle(this.formatUserFacingError(error, locale), PLATFORM_MODE_NAMES.inline)
-      ], { cache_time: 5, is_personal: true });
+      if (error?.code === 'INLINE_QUERY_SUPERSEDED') {
+        response = { results: [], extra: { cache_time: 1, is_personal: true } };
+      } else if (error?.code === 'INLINE_QUERY_DEADLINE') {
+        this.logger?.warn?.('Inline query exceeded response deadline', { userId, queryId });
+        response = {
+          results: [
+            inlineArticle(
+              localText(
+                locale,
+                '这次处理时间较长，请稍后重试；较长的问题也可以直接私聊机器人。',
+                'This request took too long. Please retry, or send longer questions directly to the bot.'
+              ),
+              query
+            )
+          ],
+          extra: { cache_time: 1, is_personal: true }
+        };
+      } else {
+        this.logger?.warn?.('Inline query failed', { error: this.formatLogError(error) });
+        response = {
+          results: [inlineArticle(this.formatUserFacingError(error, locale), PLATFORM_MODE_NAMES.inline)],
+          extra: { cache_time: 5, is_personal: true }
+        };
+      }
     } finally {
-      releaseRunning?.();
-      if (state.running) state.running = null;
+      if (state.running === runToken) state.running = null;
+      if (state.abortController === abortController) {
+        abortController.abort();
+        state.abortController = null;
+      }
     }
+
+    return this.answerInlineQuerySafely(ctx, queryId, response.results, response.extra);
   }
 
   async handleGuestMessage(ctx) {

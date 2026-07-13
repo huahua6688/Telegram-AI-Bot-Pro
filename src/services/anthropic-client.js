@@ -1,4 +1,5 @@
 import { truncateText } from '../utils/text.js';
+import { createRequestAbort } from '../utils/request-abort.js';
 import { UnsupportedClientFeatureError } from './unsupported-client-feature-error.js';
 
 function flattenContent(content) {
@@ -69,19 +70,23 @@ export class AnthropicClient {
   }
 
   async request(path, options = {}) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.config.requestTimeoutMs);
+    const { signal: externalSignal, requestTimeoutMs, ...fetchOptions } = options;
+    const requestAbort = createRequestAbort({
+      signal: externalSignal,
+      timeoutMs: requestTimeoutMs,
+      fallbackTimeoutMs: this.config.requestTimeoutMs
+    });
 
     try {
       const response = await fetch(`${this.config.anthropicBaseUrl}${path}`, {
-        ...options,
+        ...fetchOptions,
         headers: {
           'x-api-key': this.config.anthropicApiKey,
           'anthropic-version': this.config.anthropicApiVersion,
           'Content-Type': 'application/json',
-          ...(options.headers || {})
+          ...(fetchOptions.headers || {})
         },
-        signal: controller.signal
+        signal: requestAbort.signal
       });
 
       if (!response.ok) {
@@ -91,7 +96,7 @@ export class AnthropicClient {
 
       return response.json();
     } finally {
-      clearTimeout(timeout);
+      requestAbort.dispose();
     }
   }
 
@@ -152,7 +157,14 @@ export class AnthropicClient {
     return { system: systemParts.join('\n\n'), messages: payloadMessages };
   }
 
-  async chatCompletion({ model, messages, tools = [], temperature = this.config.temperature }) {
+  async chatCompletion({
+    model,
+    messages,
+    tools = [],
+    temperature = this.config.temperature,
+    signal,
+    requestTimeoutMs
+  }) {
     const { system, messages: payloadMessages } = this.toAnthropicPayloadMessages(messages);
     const payload = {
       model,
@@ -168,15 +180,24 @@ export class AnthropicClient {
 
     return this.request('/v1/messages', {
       method: 'POST',
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal,
+      requestTimeoutMs
     });
   }
 
-  async completeWithTools({ model, messages, tools = [], toolRunner, temperature }) {
+  async completeWithTools({ model, messages, tools = [], toolRunner, temperature, signal, requestTimeoutMs }) {
     const workingMessages = [...messages];
 
     for (let step = 0; step < Math.max(1, this.config.aiMaxToolSteps); step += 1) {
-      const response = await this.chatCompletion({ model, messages: workingMessages, tools, temperature });
+      const response = await this.chatCompletion({
+        model,
+        messages: workingMessages,
+        tools,
+        temperature,
+        signal,
+        requestTimeoutMs
+      });
       const content = response.content || [];
       const text = content
         .filter((item) => item.type === 'text')
@@ -219,7 +240,13 @@ export class AnthropicClient {
       }
     }
 
-    const finalResponse = await this.chatCompletion({ model, messages: workingMessages, temperature });
+    const finalResponse = await this.chatCompletion({
+      model,
+      messages: workingMessages,
+      temperature,
+      signal,
+      requestTimeoutMs
+    });
     const finalText = (finalResponse.content || [])
       .filter((item) => item.type === 'text')
       .map((item) => item.text || '')

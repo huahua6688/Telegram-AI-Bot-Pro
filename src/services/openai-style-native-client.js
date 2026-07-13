@@ -1,6 +1,7 @@
 import { OpenAICompatibleClient } from './openai-compatible-client.js';
 import { UnsupportedClientFeatureError } from './unsupported-client-feature-error.js';
 import { truncateText } from '../utils/text.js';
+import { createRequestAbort } from '../utils/request-abort.js';
 
 export class OpenAIStyleNativeClient extends OpenAICompatibleClient {
   constructor(config, logger, options) {
@@ -28,19 +29,23 @@ export class OpenAIStyleNativeClient extends OpenAICompatibleClient {
   }
 
   async request(endpoint, options = {}) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.config.requestTimeoutMs);
+    const { signal: externalSignal, requestTimeoutMs, ...fetchOptions } = options;
+    const requestAbort = createRequestAbort({
+      signal: externalSignal,
+      timeoutMs: requestTimeoutMs,
+      fallbackTimeoutMs: this.config.requestTimeoutMs
+    });
 
     try {
       const response = await fetch(`${this.nativeBaseUrl}${endpoint}`, {
-        ...options,
+        ...fetchOptions,
         headers: {
           Authorization: 'Bearer ' + this.nativeApiKey,
-          ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+          ...(fetchOptions.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
           ...this.nativeHeaders,
-          ...(options.headers || {})
+          ...(fetchOptions.headers || {})
         },
-        signal: controller.signal
+        signal: requestAbort.signal
       });
 
       if (!response.ok) {
@@ -54,7 +59,7 @@ export class OpenAIStyleNativeClient extends OpenAICompatibleClient {
       }
       return response.arrayBuffer();
     } finally {
-      clearTimeout(timeout);
+      requestAbort.dispose();
     }
   }
 

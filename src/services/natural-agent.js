@@ -338,15 +338,21 @@ function extractXmlTag(block = '', tag = '') {
   return match ? decodeXml(match[1]) : '';
 }
 
-async function fetchNewsFallback(query = '今日新闻') {
+async function fetchNewsFallback(query = '今日新闻', { signal, timeoutMs } = {}) {
   const q = String(query || '今日新闻').trim();
+  const parsedTimeout = Number(timeoutMs);
+  const boundedTimeout = Math.max(50, Math.min(
+    8000,
+    Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? Math.floor(parsedTimeout) : 4000
+  ));
   const url =
     'https://news.google.com/rss/search?q=' +
     encodeURIComponent(q) +
     '&hl=zh-CN&gl=MY&ceid=MY:zh-Hans';
 
   const response = await fetch(url, {
-    headers: { 'User-Agent': 'Telegram-AI-Bot-Pro' }
+    headers: { 'User-Agent': 'Telegram-AI-Bot-Pro' },
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(boundedTimeout)]) : AbortSignal.timeout(boundedTimeout)
   });
 
   if (!response.ok) return '';
@@ -528,7 +534,9 @@ async function runSearch(bot, ctx, query, originalText = query) {
     await bot.db.incrementStats('toolCalls');
 
     if (!hasUsefulToolResult(raw) && /新闻|新聞|今日|今天|最新|news/i.test(keyword)) {
-      const fallbackRaw = await fetchNewsFallback(keyword);
+      const fallbackRaw = await fetchNewsFallback(keyword, {
+        timeoutMs: bot.config?.requestTimeoutMs
+      });
       if (fallbackRaw) raw = fallbackRaw;
     }
 

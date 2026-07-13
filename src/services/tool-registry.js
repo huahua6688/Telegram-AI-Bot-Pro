@@ -2,6 +2,29 @@ import { stripHtml, truncateText } from '../utils/text.js';
 import { ToolAccessPolicy } from './tool-access-policy.js';
 
 const USER_AGENT = 'Mozilla/5.0 (compatible; Telegram-AI-Bot-Pro/1.0; +https://github.com/huahua6688/Telegram-AI-Bot-Pro)';
+const DEFAULT_SEARCH_TIMEOUT_MS = 4000;
+const MAX_SEARCH_TIMEOUT_MS = 8000;
+
+function boundedTimeoutMs(value, fallback = DEFAULT_SEARCH_TIMEOUT_MS, maximum = MAX_SEARCH_TIMEOUT_MS) {
+  const parsed = Number(value);
+  const timeoutMs = Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  return Math.max(50, Math.min(maximum, Math.floor(timeoutMs)));
+}
+
+function combineSignals(signals = []) {
+  const active = signals.filter((signal) => signal && typeof signal === 'object');
+  if (active.length === 0) return undefined;
+  if (active.length === 1) return active[0];
+  return AbortSignal.any(active);
+}
+
+async function fetchWithTimeout(url, options = {}, { signal, timeoutMs } = {}) {
+  const timeoutSignal = AbortSignal.timeout(boundedTimeoutMs(timeoutMs));
+  return fetch(url, {
+    ...options,
+    signal: combineSignals([options.signal, signal, timeoutSignal])
+  });
+}
 
 function toolError(code, message, { retryable = false } = {}) {
   return JSON.stringify({
@@ -57,17 +80,17 @@ function normalizeSearchResultUrl(value = '') {
   }
 }
 
-async function searchDuckDuckGoHtml(query) {
+async function searchDuckDuckGoHtml(query, options = {}) {
   const url = new URL('https://html.duckduckgo.com/html/');
   url.searchParams.set('q', query);
 
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     headers: {
       'User-Agent': USER_AGENT,
       Accept: 'text/html,application/xhtml+xml',
       'Accept-Language': 'en-US,en;q=0.8'
     }
-  });
+  }, options);
   if (!response.ok) {
     throw new Error(`HTML search request failed (${response.status})`);
   }
@@ -100,18 +123,18 @@ async function searchDuckDuckGoHtml(query) {
   return results;
 }
 
-async function searchDuckDuckGoInstant(query) {
+async function searchDuckDuckGoInstant(query, options = {}) {
   const url = new URL('https://api.duckduckgo.com/');
   url.searchParams.set('q', query);
   url.searchParams.set('format', 'json');
   url.searchParams.set('no_html', '1');
   url.searchParams.set('skip_disambig', '1');
 
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     headers: {
       'User-Agent': USER_AGENT
     }
-  });
+  }, options);
   if (!response.ok) {
     throw new Error(`Search request failed (${response.status})`);
   }
@@ -130,28 +153,47 @@ async function searchDuckDuckGoInstant(query) {
   };
 }
 
-async function searchWeb(query) {
-  let htmlSearchError = null;
+async function searchWeb(query, { signal, timeoutMs } = {}) {
+  const cancelPending = new AbortController();
+  const searchSignal = combineSignals([signal, cancelPending.signal]);
+  const requestOptions = {
+    signal: searchSignal,
+    timeoutMs: boundedTimeoutMs(timeoutMs)
+  };
+  const htmlAttempt = searchDuckDuckGoHtml(query, requestOptions).then((results) => {
+    if (results.length === 0) throw new Error('HTML search returned no useful results.');
+    return truncateText(JSON.stringify({ provider: 'duckduckgo', query, results }, null, 2), 5000);
+  });
+  const instantAttempt = searchDuckDuckGoInstant(query, requestOptions).then((instant) => {
+    if (!instant.heading && !instant.abstract && !instant.answer && instant.topics.length === 0) {
+      throw new Error('Instant search returned no useful results.');
+    }
+    return truncateText(JSON.stringify({ provider: 'duckduckgo', query, ...instant }, null, 2), 5000);
+  });
+  // Both requests may still settle after the preferred branch returns. Attach
+  // rejection observers now so cancellation never becomes an unhandled promise.
+  htmlAttempt.catch(() => undefined);
+  instantAttempt.catch(() => undefined);
 
   try {
-    const results = await searchDuckDuckGoHtml(query);
-    if (results.length > 0) {
-      return truncateText(JSON.stringify({ provider: 'duckduckgo', query, results }, null, 2), 5000);
-    }
+    // Instant Answer is fast but often generic or stale. Give the HTML result
+    // page a short head start so current links win without making a blocked
+    // HTML endpoint consume the whole search budget.
+    const htmlPreferred = await Promise.race([
+      htmlAttempt.then((value) => ({ status: 'fulfilled', value }), (error) => ({ status: 'rejected', error })),
+      new Promise((resolve) => setTimeout(() => resolve({ status: 'pending' }), 200))
+    ]);
+    if (htmlPreferred.status === 'fulfilled') return htmlPreferred.value;
+    if (htmlPreferred.status === 'rejected') return await instantAttempt;
+    return await Promise.any([htmlAttempt, instantAttempt]);
   } catch (error) {
-    htmlSearchError = error;
+    const causes = error instanceof AggregateError ? error.errors : [error];
+    const meaningful = causes.find((cause) => cause?.name === 'AbortError' || cause?.name === 'TimeoutError')
+      || causes.find((cause) => cause instanceof Error);
+    throw meaningful || new Error('Search returned no useful results.');
+  } finally {
+    cancelPending.abort();
   }
-
-  try {
-    const instant = await searchDuckDuckGoInstant(query);
-    if (instant.heading || instant.abstract || instant.answer || instant.topics.length > 0) {
-      return truncateText(JSON.stringify({ provider: 'duckduckgo', query, ...instant }, null, 2), 5000);
-    }
-  } catch (error) {
-    if (!htmlSearchError) htmlSearchError = error;
-  }
-
-  throw htmlSearchError || new Error('Search returned no useful results.');
 }
 
 function weatherDescription(code) {
@@ -393,7 +435,10 @@ export class ToolRegistry {
           return await fetchUrlText(args.url);
         case 'web_search':
           usage.count += 1;
-          return await searchWeb(args.query);
+          return await searchWeb(args.query, {
+            signal: context.signal,
+            timeoutMs: boundedTimeoutMs(context.requestTimeoutMs ?? this.config.requestTimeoutMs)
+          });
         case 'get_weather':
           usage.count += 1;
           return await getWeather(args.location);
@@ -414,3 +459,11 @@ export class ToolRegistry {
     }
   }
 }
+
+export const toolRegistryInternals = {
+  boundedTimeoutMs,
+  fetchWithTimeout,
+  searchDuckDuckGoHtml,
+  searchDuckDuckGoInstant,
+  searchWeb
+};

@@ -1,5 +1,6 @@
 import { truncateText } from '../utils/text.js';
 import { UnsupportedClientFeatureError } from './unsupported-client-feature-error.js';
+import { createRequestAbort } from '../utils/request-abort.js';
 
 function flattenContent(content) {
   if (typeof content === 'string') return content;
@@ -138,9 +139,12 @@ export class GeminiClient {
     this.logger = logger;
   }
 
-  async request(model, payload) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.config.requestTimeoutMs);
+  async request(model, payload, { signal, requestTimeoutMs } = {}) {
+    const requestAbort = createRequestAbort({
+      signal,
+      timeoutMs: requestTimeoutMs,
+      fallbackTimeoutMs: this.config.requestTimeoutMs
+    });
 
     try {
       const endpoint = `${this.config.geminiBaseUrl}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(this.config.geminiApiKey)}`;
@@ -148,7 +152,7 @@ export class GeminiClient {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
-        signal: controller.signal
+        signal: requestAbort.signal
       });
 
       if (!response.ok) {
@@ -158,7 +162,7 @@ export class GeminiClient {
 
       return response.json();
     } finally {
-      clearTimeout(timeout);
+      requestAbort.dispose();
     }
   }
 
@@ -247,16 +251,30 @@ export class GeminiClient {
     };
   }
 
-  async chatCompletion({ model, messages, tools = [], temperature = this.config.temperature }) {
+  async chatCompletion({
+    model,
+    messages,
+    tools = [],
+    temperature = this.config.temperature,
+    signal,
+    requestTimeoutMs
+  }) {
     const payload = this.toGeminiPayload(messages, tools, temperature, model);
-    return this.request(model, payload);
+    return this.request(model, payload, { signal, requestTimeoutMs });
   }
 
-  async completeWithTools({ model, messages, tools = [], toolRunner, temperature }) {
+  async completeWithTools({ model, messages, tools = [], toolRunner, temperature, signal, requestTimeoutMs }) {
     const workingMessages = [...messages];
 
     for (let step = 0; step < Math.max(1, this.config.aiMaxToolSteps); step += 1) {
-      const response = await this.chatCompletion({ model, messages: workingMessages, tools, temperature });
+      const response = await this.chatCompletion({
+        model,
+        messages: workingMessages,
+        tools,
+        temperature,
+        signal,
+        requestTimeoutMs
+      });
       const candidate = response.candidates?.[0];
       if (!candidate?.content?.parts) {
         throw new Error('AI provider returned an empty response.');
@@ -300,7 +318,13 @@ export class GeminiClient {
       }
     }
 
-    const finalResponse = await this.chatCompletion({ model, messages: workingMessages, temperature });
+    const finalResponse = await this.chatCompletion({
+      model,
+      messages: workingMessages,
+      temperature,
+      signal,
+      requestTimeoutMs
+    });
     const finalCandidate = finalResponse.candidates?.[0] || {};
     const finalText = appendGroundingSources(
       candidateText(finalCandidate),
