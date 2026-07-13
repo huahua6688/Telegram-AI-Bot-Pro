@@ -127,7 +127,7 @@ function formatToolResult(raw = '', title = '结果') {
 
 function decodeXml(value = '') {
   return String(value || '')
-    .replace(/<!$begin:math:display$CDATA\\\[\(\[\\s\\S\]\*\?\)$end:math:display$\]>/g, '$1')
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')

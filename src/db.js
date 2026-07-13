@@ -10,7 +10,8 @@ import { normalizeLanguageCode } from './utils/telegram.js';
 // v3: RBAC, feature flags, policy rules, provider/model configs, admin audit logs
 // v4: Long-term memory, topic states, active context
 // v5: Per-user AI provider/model settings and provider fallback preference
-const CURRENT_SCHEMA_VERSION = 5;
+// v6: Per-user daily quota overrides
+const CURRENT_SCHEMA_VERSION = 6;
 
 const defaultData = {
   meta: {
@@ -76,6 +77,8 @@ function toIntegerBoolean(value) {
 
 function rowToUser(row) {
   if (!row) return undefined;
+  const dailyUsageDate = row.daily_usage_date || '';
+  const currentUsageDate = new Date().toISOString().slice(0, 10);
   return {
     id: row.id,
     username: row.username || '',
@@ -88,8 +91,9 @@ function rowToUser(row) {
     preferredLanguage: row.preferred_language || 'zh',
     persona: row.persona || 'default',
     customSystemPrompt: row.custom_system_prompt || '',
-    dailyUsageDate: row.daily_usage_date || '',
-    dailyUsageCount: row.daily_usage_count || 0,
+    dailyUsageDate,
+    dailyUsageCount: dailyUsageDate === currentUsageDate ? row.daily_usage_count || 0 : 0,
+    dailyQuotaOverride: row.daily_quota_override == null ? null : Number(row.daily_quota_override),
     totalMessages: row.total_messages || 0,
     lastSeenAt: row.last_seen_at || '',
     createdAt: row.created_at || '',
@@ -249,6 +253,9 @@ export class BotDatabase {
       }
       if (version === 5) {
         this.applySchemaV5();
+      }
+      if (version === 6) {
+        this.applySchemaV6();
       }
       this.setMeta('schemaVersion', String(version));
     }
@@ -551,6 +558,18 @@ export class BotDatabase {
     `);
   }
 
+  applySchemaV6() {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS user_quota_settings (
+        user_id TEXT PRIMARY KEY,
+        daily_quota INTEGER NOT NULL CHECK(daily_quota >= 0),
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_user_quota_settings_updated ON user_quota_settings(updated_at DESC);
+    `);
+  }
+
   ensureFavoritesV2Columns() {
     const columns = this.db.prepare('PRAGMA table_info(favorites)').all();
     const existing = new Set(columns.map((column) => column.name));
@@ -744,7 +763,16 @@ export class BotDatabase {
   }
 
   findUser(userId) {
-    return rowToUser(this.db.prepare('SELECT * FROM users WHERE id = ?').get(String(userId)));
+    return rowToUser(
+      this.db
+        .prepare(
+          `SELECT users.*,
+                  (SELECT daily_quota FROM user_quota_settings WHERE user_id = users.id) AS daily_quota_override
+           FROM users
+           WHERE users.id = ?`
+        )
+        .get(String(userId))
+    );
   }
 
   findChat(chatId) {
@@ -1602,10 +1630,11 @@ export class BotDatabase {
     const hasKeyword = Boolean(keyword);
     const rows = this.db
       .prepare(
-        `SELECT *
+        `SELECT users.*,
+                (SELECT daily_quota FROM user_quota_settings WHERE user_id = users.id) AS daily_quota_override
          FROM users
-         ${hasKeyword ? 'WHERE id LIKE ? OR username LIKE ? OR first_name LIKE ? OR last_name LIKE ?' : ''}
-         ORDER BY last_seen_at DESC, updated_at DESC
+         ${hasKeyword ? 'WHERE users.id LIKE ? OR users.username LIKE ? OR users.first_name LIKE ? OR users.last_name LIKE ?' : ''}
+         ORDER BY users.last_seen_at DESC, users.updated_at DESC
          LIMIT ? OFFSET ?`
       )
       .all(
@@ -2092,7 +2121,12 @@ export class BotDatabase {
 
   consumeDailyQuota(userId, quota) {
     const user = this.findUser(userId);
-    if (!user) return { allowed: false, remaining: 0 };
+    if (!user) return { allowed: false, remaining: 0, quota: 0, dailyQuotaOverride: null };
+
+    const configuredQuota = Number(quota);
+    const globalQuota = Number.isSafeInteger(configuredQuota) && configuredQuota >= 0 ? configuredQuota : 0;
+    const dailyQuotaOverride = user.dailyQuotaOverride;
+    const effectiveQuota = dailyQuotaOverride == null ? globalQuota : dailyQuotaOverride;
 
     const today = new Date().toISOString().slice(0, 10);
     let dailyUsageCount = user.dailyUsageCount;
@@ -2103,8 +2137,8 @@ export class BotDatabase {
         .run(today, now(), String(userId));
     }
 
-    if (quota > 0 && dailyUsageCount >= quota) {
-      return { allowed: false, remaining: 0 };
+    if (effectiveQuota > 0 && dailyUsageCount >= effectiveQuota) {
+      return { allowed: false, remaining: 0, quota: effectiveQuota, dailyQuotaOverride };
     }
 
     this.db
@@ -2116,8 +2150,76 @@ export class BotDatabase {
       .run(today, now(), String(userId));
     return {
       allowed: true,
-      remaining: quota > 0 ? Math.max(0, quota - dailyUsageCount - 1) : Infinity
+      remaining: effectiveQuota > 0 ? Math.max(0, effectiveQuota - dailyUsageCount - 1) : Infinity,
+      quota: effectiveQuota,
+      dailyQuotaOverride
     };
+  }
+
+  getUserDailyQuota(userId, defaultQuota = 0) {
+    const user = this.findUser(userId);
+    if (!user) return null;
+
+    const configuredQuota = Number(defaultQuota);
+    const globalQuota = Number.isSafeInteger(configuredQuota) && configuredQuota >= 0 ? configuredQuota : 0;
+    const dailyQuotaOverride = user.dailyQuotaOverride;
+    return {
+      userId: String(user.id),
+      dailyQuota: dailyQuotaOverride == null ? globalQuota : dailyQuotaOverride,
+      dailyQuotaOverride,
+      usesGlobalQuota: dailyQuotaOverride == null
+    };
+  }
+
+  setUserDailyQuota(userId, quota = null, defaultQuota = 0) {
+    const user = this.findUser(userId);
+    if (!user) return null;
+
+    if (quota == null) {
+      return this.clearUserDailyQuota(userId, defaultQuota);
+    }
+
+    const normalizedQuota = Number(quota);
+    if (!Number.isSafeInteger(normalizedQuota) || normalizedQuota < 0) {
+      throw new RangeError('Daily quota must be a non-negative safe integer.');
+    }
+
+    const timestamp = now();
+    this.db
+      .prepare(
+        `INSERT INTO user_quota_settings(user_id, daily_quota, updated_at)
+         VALUES (?, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET
+           daily_quota = excluded.daily_quota,
+           updated_at = excluded.updated_at`
+      )
+      .run(String(userId), normalizedQuota, timestamp);
+    this.setMeta('updatedAt', timestamp);
+    return this.getUserDailyQuota(userId, defaultQuota);
+  }
+
+  clearUserDailyQuota(userId, defaultQuota = 0) {
+    const user = this.findUser(userId);
+    if (!user) return null;
+
+    this.db.prepare('DELETE FROM user_quota_settings WHERE user_id = ?').run(String(userId));
+    this.setMeta('updatedAt', now());
+    return this.getUserDailyQuota(userId, defaultQuota);
+  }
+
+  refundDailyQuota(userId, count = 1) {
+    const normalizedCount = Math.max(1, Math.trunc(Number(count) || 1));
+    const today = new Date().toISOString().slice(0, 10);
+    this.db
+      .prepare(
+        `UPDATE users
+         SET daily_usage_count = MAX(0, daily_usage_count - ?),
+             total_messages = MAX(0, total_messages - ?),
+             updated_at = ?
+         WHERE id = ? AND daily_usage_date = ?`
+      )
+      .run(normalizedCount, normalizedCount, now(), String(userId), today);
+    return this.findUser(userId);
   }
 
   setUserDailyUsage(userId, count = 0, date = new Date().toISOString().slice(0, 10)) {
@@ -2141,8 +2243,8 @@ export class BotDatabase {
       .prepare("SELECT COUNT(*) AS count FROM users WHERE last_seen_at >= datetime('now', '-7 day')")
       .get();
     const quotaRow = this.db
-      .prepare('SELECT COALESCE(SUM(daily_usage_count), 0) AS total FROM users')
-      .get();
+      .prepare('SELECT COALESCE(SUM(daily_usage_count), 0) AS total FROM users WHERE daily_usage_date = ?')
+      .get(new Date().toISOString().slice(0, 10));
     const modelRows = this.db
       .prepare(
         `SELECT model, COUNT(*) AS count

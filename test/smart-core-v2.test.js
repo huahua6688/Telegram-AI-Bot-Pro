@@ -9,6 +9,7 @@ import {
 import { ToolRegistry } from '../src/services/tool-registry.js';
 import { TelegramAIBot } from '../src/services/telegram-bot.js';
 import { PrivacyTelegramAIBot } from '../src/services/privacy-telegram-bot.js';
+import { tryHandleNaturalAgent } from '../src/services/natural-agent.js';
 
 function logger() {
   return {
@@ -472,6 +473,305 @@ test('Mini App mode keeps only private chat in the bottom keyboard', async () =>
   assert.doesNotMatch(replies.map((item) => item.message).join('\n'), /工具箱|联网搜索、翻译、图片/);
   assert.match(replies[1].message, /\/whoami/);
   assert.match(replies[1].message, /局部引用/);
+});
+
+test('privacy chat checks the shared account quota before calling AI', async () => {
+  const bot = Object.create(PrivacyTelegramAIBot.prototype);
+  bot.config = { maxInputChars: 4000 };
+  bot.privacyConfig = { maxSessionMessages: 10 };
+  bot.getLocale = () => 'zh';
+  bot.isAllowed = () => true;
+  bot.checkRateLimit = () => true;
+  let quotaChecks = 0;
+  let aiCalls = 0;
+  bot.consumeQuotaForContext = async () => {
+    quotaChecks += 1;
+    return false;
+  };
+  bot.completeWithAiFallback = async () => {
+    aiCalls += 1;
+    return { result: { text: 'must not run' } };
+  };
+
+  const handled = await bot.handleActiveMode({
+    from: { id: 1 },
+    chat: { id: 1, type: 'private' },
+    message: { text: 'private question' },
+    reply: async () => undefined
+  }, {
+    type: 'privacy',
+    contextMode: 'temporary',
+    messages: [],
+    messageCount: 0,
+    expiresAt: Date.now() + 60000
+  });
+
+  assert.equal(handled, true);
+  assert.equal(quotaChecks, 1);
+  assert.equal(aiCalls, 0);
+});
+
+test('privacy chat refunds a reserved quota when AI fails', async () => {
+  const bot = Object.create(PrivacyTelegramAIBot.prototype);
+  bot.config = { maxInputChars: 4000, defaultModel: 'test-model' };
+  bot.privacyConfig = {
+    maxSessionMessages: 10,
+    maxContextMessages: 6,
+    maxContextChars: 12000,
+    ttlMs: 60000
+  };
+  bot.logger = logger();
+  bot.getLocale = () => 'zh';
+  bot.consumeQuotaForContext = async () => true;
+  let refunds = 0;
+  bot.refundQuotaForContext = async () => {
+    refunds += 1;
+    return true;
+  };
+  bot.db = { findUser: () => ({}) };
+  bot.getEffectiveAISettings = () => ({ providerId: 'gemini', modelId: 'test-model' });
+  bot.completeWithAiFallback = async () => {
+    throw new Error('provider failed');
+  };
+  bot.formatUserFacingError = () => 'failed';
+  bot.createPrivacyModeKeyboard = () => undefined;
+
+  const replies = [];
+  const handled = await bot.handleActiveMode({
+    from: { id: 1 },
+    chat: { id: 1, type: 'private' },
+    message: { text: 'private question' },
+    sendChatAction: async () => undefined,
+    reply: async (message) => replies.push(message)
+  }, {
+    type: 'privacy',
+    contextMode: 'temporary',
+    messages: [],
+    messageCount: 0,
+    expiresAt: Date.now() + 60000
+  });
+
+  assert.equal(handled, true);
+  assert.equal(refunds, 1);
+  assert.deepEqual(replies, ['failed']);
+});
+
+test('assistant translate and regenerate actions refund empty AI results', async (t) => {
+  for (const action of ['translate_pick', 'regen']) {
+    await t.test(action, async () => {
+      const bot = Object.create(TelegramAIBot.prototype);
+      bot.config = { defaultModel: 'test-model', translationModel: 'translation-model' };
+      bot.getLocale = () => 'zh';
+      bot.getAssistantActionStateByToken = () => ({
+        userId: 1,
+        locale: 'zh',
+        model: 'test-model',
+        replyText: 'original'
+      });
+      bot.getAiCooldown = () => null;
+      bot.consumeQuotaForContext = async () => true;
+      let refunds = 0;
+      bot.refundQuotaForContext = async () => {
+        refunds += 1;
+        return true;
+      };
+      bot.translateAssistantReply = async () => '';
+      bot.regenerateAssistantReply = async () => ({ text: '' });
+      bot.t = (_locale, key) => key;
+      bot.db = { findUser: () => ({ preferredModel: 'test-model' }) };
+
+      const answers = [];
+      const replies = [];
+      await bot.handleAssistantActionCallback({
+        callbackQuery: {
+          data: action === 'translate_pick'
+            ? 'act:translate_pick:token:en'
+            : 'act:regen:token'
+        },
+        from: { id: 1 },
+        answerCbQuery: async (message) => answers.push(message),
+        reply: async (message) => replies.push(message)
+      });
+
+      assert.deepEqual(answers, ['actionWorking']);
+      assert.deepEqual(replies, ['noReply']);
+      assert.equal(refunds, 1);
+    });
+  }
+});
+
+test('natural weather tool failures are visible and do not consume quota', async () => {
+  let refunds = 0;
+  let toolStats = 0;
+  const replies = [];
+  const bot = {
+    config: { maxOutputChars: 3500 },
+    db: {
+      async incrementStats() { toolStats += 1; }
+    },
+    toolRegistry: {
+      async execute() {
+        return JSON.stringify({ error: 'fetch failed', message: 'fetch failed' });
+      }
+    },
+    getLocale: () => 'en',
+    isAdmin: () => false,
+    consumeQuotaForContext: async () => true,
+    refundQuotaForContext: async () => { refunds += 1; }
+  };
+
+  const handled = await tryHandleNaturalAgent(bot, {
+    from: { id: 1 },
+    chat: { id: 1 },
+    message: { text: 'weather Paris' },
+    reply: async (message) => replies.push(message)
+  });
+
+  assert.equal(handled, true);
+  assert.equal(refunds, 1);
+  assert.equal(toolStats, 0);
+  assert.deepEqual(replies, ['Weather is not available yet.']);
+});
+
+test('empty URL fetch results are visible and do not consume quota', async (t) => {
+  await t.test('direct URL action', async () => {
+    const bot = Object.create(TelegramAIBot.prototype);
+    bot.config = { maxOutputChars: 3500 };
+    bot.getLocale = () => 'en';
+    bot.isAdmin = () => false;
+    bot.consumeQuotaForContext = async () => true;
+    let refunds = 0;
+    let toolStats = 0;
+    bot.refundQuotaForContext = async () => { refunds += 1; };
+    bot.toolRegistry = { execute: async () => '' };
+    bot.db = { incrementStats: async () => { toolStats += 1; } };
+    const replies = [];
+
+    await bot.runUrlFetch({
+      from: { id: 1 },
+      chat: { id: 1 },
+      sendChatAction: async () => undefined,
+      reply: async (message) => replies.push(message)
+    }, 'https://example.com/empty');
+
+    assert.equal(refunds, 1);
+    assert.equal(toolStats, 0);
+    assert.deepEqual(replies, ['This page returned no readable content.']);
+  });
+
+  await t.test('natural URL action', async () => {
+    let refunds = 0;
+    let toolStats = 0;
+    const replies = [];
+    const bot = {
+      config: { maxOutputChars: 3500 },
+      db: { incrementStats: async () => { toolStats += 1; } },
+      toolRegistry: { execute: async () => '' },
+      getLocale: () => 'en',
+      isAdmin: () => false,
+      consumeQuotaForContext: async () => true,
+      refundQuotaForContext: async () => { refunds += 1; }
+    };
+
+    const handled = await tryHandleNaturalAgent(bot, {
+      from: { id: 1 },
+      chat: { id: 1 },
+      message: { text: 'https://example.com/empty' },
+      sendChatAction: async () => undefined,
+      reply: async (message) => replies.push(message)
+    });
+
+    assert.equal(handled, true);
+    assert.equal(refunds, 1);
+    assert.equal(toolStats, 0);
+    assert.deepEqual(replies, ['This page returned no readable content.']);
+  });
+});
+
+test('nonempty generic JSON URL results continue through composition', async (t) => {
+  await t.test('direct URL action', async () => {
+    const bot = Object.create(TelegramAIBot.prototype);
+    bot.config = { maxOutputChars: 3500 };
+    bot.getLocale = () => 'en';
+    bot.isAdmin = () => false;
+    bot.consumeQuotaForContext = async () => true;
+    let refunds = 0;
+    let toolStats = 0;
+    bot.refundQuotaForContext = async () => { refunds += 1; };
+    bot.toolRegistry = { execute: async () => JSON.stringify({ foo: 'bar' }) };
+    bot.db = { incrementStats: async () => { toolStats += 1; } };
+    bot.composeToolReply = async () => ({ text: 'JSON summary', html: false });
+    const replies = [];
+
+    await bot.runUrlFetch({
+      from: { id: 1 },
+      chat: { id: 1 },
+      sendChatAction: async () => undefined,
+      reply: async (message) => replies.push(message)
+    }, 'https://example.com/json');
+
+    assert.equal(refunds, 0);
+    assert.equal(toolStats, 1);
+    assert.deepEqual(replies, ['JSON summary']);
+  });
+
+  await t.test('natural URL action', async () => {
+    let refunds = 0;
+    let toolStats = 0;
+    const replies = [];
+    const bot = {
+      config: { maxOutputChars: 3500 },
+      db: {
+        findUser: () => ({}),
+        incrementStats: async () => { toolStats += 1; }
+      },
+      toolRegistry: { execute: async () => JSON.stringify({ foo: 'bar' }) },
+      getLocale: () => 'en',
+      isAdmin: () => false,
+      consumeQuotaForContext: async () => true,
+      refundQuotaForContext: async () => { refunds += 1; },
+      completeWithAiFallback: async () => ({ result: { text: 'JSON summary' } })
+    };
+
+    const handled = await tryHandleNaturalAgent(bot, {
+      from: { id: 1 },
+      chat: { id: 1 },
+      message: { text: 'https://example.com/json' },
+      sendChatAction: async () => undefined,
+      reply: async (message) => replies.push(message)
+    });
+
+    assert.equal(handled, true);
+    assert.equal(refunds, 0);
+    assert.equal(toolStats, 1);
+    assert.deepEqual(replies, ['JSON summary']);
+  });
+});
+
+test('admin provider test refunds when the result cannot be delivered', async () => {
+  const bot = Object.create(TelegramAIBot.prototype);
+  bot.config = { defaultModel: 'test-model' };
+  bot.getLocale = () => 'en';
+  bot.isAdmin = () => true;
+  bot.consumeQuotaForContext = async () => true;
+  let refunds = 0;
+  bot.refundQuotaForContext = async () => { refunds += 1; };
+  bot.providerManager = {
+    listProviders: () => [{
+      id: 'gemini',
+      name: 'Gemini',
+      configured: true,
+      enabled: true,
+      models: ['test-model']
+    }]
+  };
+  bot.completeWithAiFallback = async () => ({ model: 'test-model', result: { text: 'AI_OK' } });
+  bot.createAdminActionKeyboard = () => undefined;
+
+  await assert.rejects(() => bot.handleAdminProviderTestAll({
+    reply: async () => { throw new Error('delivery failed'); }
+  }), /delivery failed/);
+  assert.equal(refunds, 1);
 });
 
 test('quoted reply preparation keeps the selected passage in the same conversation request', async () => {

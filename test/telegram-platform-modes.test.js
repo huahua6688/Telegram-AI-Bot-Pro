@@ -37,6 +37,8 @@ function createBot(overrides = {}) {
   bot.inlineResultCache = new Map();
   bot.bot = overrides.bot || { telegram: { async callApi() {} } };
   bot.getLocale = () => 'zh';
+  bot.isAllowed = () => true;
+  bot.checkRateLimit = () => true;
   bot.formatLogError = (error) => ({ detail: String(error?.message || error) });
   bot.formatUserFacingError = () => '暂时无法处理。';
   return Object.assign(bot, overrides.methods || {});
@@ -229,33 +231,312 @@ test('a transient Telegram send failure retries the same answer once', async () 
   assert.equal(responses[0].results[0].input_message_content.message_text, 'ready');
 });
 
-test('inline search and news fallback share one cumulative search budget', async () => {
+test('inline Telegram delivery is bounded and aborts a stuck API request', async () => {
+  const bot = createBot({ config: { inlineQueryResponseTimeoutMs: 250 } });
+  let calls = 0;
+  let signalSeen = false;
+  const startedAt = Date.now();
+
+  const delivered = await bot.answerInlineQuerySafely({
+    update: { inline_query: { id: 'stuck-delivery' } },
+    telegram: {
+      async callApi(_method, _payload, options) {
+        calls += 1;
+        signalSeen = Boolean(options?.signal);
+        return new Promise((resolve, reject) => {
+          options.signal.addEventListener('abort', () => {
+            const error = new Error('aborted');
+            error.name = 'AbortError';
+            reject(error);
+          }, { once: true });
+        });
+      }
+    }
+  }, 'stuck-delivery', [], { cache_time: 1, is_personal: true });
+
+  assert.equal(delivered, false);
+  assert.equal(calls, 1);
+  assert.equal(signalSeen, true);
+  assert.ok(Date.now() - startedAt < 1000);
+});
+
+test('inline delivery does not retry non-transient Telegram errors', async () => {
+  const bot = createBot();
+  let calls = 0;
+  const error = new Error('429: Too Many Requests');
+  error.response = { error_code: 429, description: 'Too Many Requests' };
+
+  await assert.rejects(() => bot.answerInlineQuerySafely({
+    update: { inline_query: { id: 'rate-limited-delivery' } },
+    async answerInlineQuery() {
+      calls += 1;
+      throw error;
+    }
+  }, 'rate-limited-delivery', [], { cache_time: 1, is_personal: true }), /429/);
+
+  assert.equal(calls, 1);
+});
+
+test('inline news search races RSS within one budget and cancels the slower web request', async () => {
   let toolTimeoutMs = 0;
   let newsTimeoutMs = 0;
+  let toolStartedAt = 0;
+  let newsStartedAt = 0;
+  let toolAborted = false;
   const originalNewsFallback = naturalAgentInternals.fetchNewsFallback;
   const bot = createBot({ config: { inlineQuerySearchTimeoutMs: 120 } });
   bot.toolRegistry = {
     async execute(_toolCall, context) {
       toolTimeoutMs = context.requestTimeoutMs;
-      await new Promise((resolve) => setTimeout(resolve, 80));
-      return JSON.stringify({ ok: false, error: 'TOOL_EXECUTION_FAILED' });
+      toolStartedAt = Date.now();
+      return new Promise((resolve) => {
+        context.signal.addEventListener('abort', () => {
+          toolAborted = true;
+          resolve(JSON.stringify({ ok: false, error: 'TOOL_EXECUTION_FAILED' }));
+        }, { once: true });
+      });
     }
   };
   naturalAgentInternals.fetchNewsFallback = async (_query, options) => {
     newsTimeoutMs = options.timeoutMs;
-    return '';
+    newsStartedAt = Date.now();
+    await new Promise((resolve) => setTimeout(resolve, 15));
+    return JSON.stringify({
+      results: [{ title: 'Fresh headline', url: 'https://example.com/news' }]
+    });
   };
 
-  const startedAt = Date.now();
+  let raw;
   try {
-    await bot.getInlineSearchContext({ userId: '775', query: '今日新闻', timeoutMs: 120 });
+    raw = await bot.getInlineSearchContext({ userId: '775', query: '今日新闻', timeoutMs: 120 });
   } finally {
     naturalAgentInternals.fetchNewsFallback = originalNewsFallback;
   }
 
   assert.equal(toolTimeoutMs, 120);
-  assert.ok(newsTimeoutMs === 0 || newsTimeoutMs < 80);
-  assert.ok(Date.now() - startedAt < 180);
+  assert.equal(newsTimeoutMs, 120);
+  assert.ok(toolStartedAt > 0);
+  assert.ok(newsStartedAt > 0);
+  assert.equal(toolAborted, true);
+  assert.match(raw, /Fresh headline/);
+});
+
+test('inline RSS fallback only races explicit news intent', async () => {
+  let newsCalls = 0;
+  const originalNewsFallback = naturalAgentInternals.fetchNewsFallback;
+  const bot = createBot();
+  bot.toolRegistry = {
+    async execute() {
+      return JSON.stringify({
+        results: [{ title: 'Exchange rate', url: 'https://example.com/rates' }]
+      });
+    }
+  };
+  naturalAgentInternals.fetchNewsFallback = async () => {
+    newsCalls += 1;
+    return JSON.stringify({ results: [{ title: 'Unrelated news' }] });
+  };
+
+  try {
+    const raw = await bot.getInlineSearchContext({ userId: '775', query: '最新汇率' });
+    assert.match(raw, /Exchange rate/);
+  } finally {
+    naturalAgentInternals.fetchNewsFallback = originalNewsFallback;
+  }
+
+  assert.equal(newsCalls, 0);
+  assert.equal(platformModesInternals.isInlineNewsQuery('今日新闻'), true);
+  assert.equal(platformModesInternals.isInlineNewsQuery('latest news'), true);
+  assert.notEqual(platformModesInternals.inlineSearchQuery('最近发生了什么'), '');
+  assert.notEqual(platformModesInternals.inlineSearchQuery('今日头条'), '');
+  assert.notEqual(platformModesInternals.inlineSearchQuery('热点时事资讯'), '');
+  assert.equal(platformModesInternals.isInlineNewsQuery('最新汇率'), false);
+  assert.equal(platformModesInternals.isInlineNewsQuery('今天新加坡天气'), false);
+});
+
+test('quota guard only charges one expensive action per Telegram update', async () => {
+  let consumeCalls = 0;
+  let accessChecks = 0;
+  let rateChecks = 0;
+  const bot = createBot({
+    config: { dailyQuota: 5 },
+    db: {
+      consumeDailyQuota() {
+        consumeCalls += 1;
+        return { allowed: true, remaining: 4, quota: 5 };
+      },
+      async write() {}
+    },
+    methods: {
+      isAllowed() {
+        accessChecks += 1;
+        return true;
+      },
+      checkRateLimit() {
+        rateChecks += 1;
+        return true;
+      }
+    }
+  });
+  const ctx = { from: { id: 776 }, state: {}, reply: async () => undefined };
+
+  assert.equal(await bot.consumeQuotaForContext(ctx), true);
+  assert.equal(await bot.consumeQuotaForContext(ctx), true);
+  assert.equal(consumeCalls, 1);
+  assert.equal(accessChecks, 1);
+  assert.equal(rateChecks, 1);
+  assert.equal(bot.formatDailyQuotaValue(0, 'zh'), '不限');
+  assert.equal(bot.formatDailyQuotaValue(0, 'en'), 'unlimited');
+});
+
+test('shared costly-action guard rejects blocked users before quota or providers', async () => {
+  let consumeCalls = 0;
+  let providerCalls = 0;
+  const replies = [];
+  const bot = createBot({
+    db: {
+      consumeDailyQuota() {
+        consumeCalls += 1;
+        return { allowed: true };
+      }
+    },
+    methods: {
+      isAllowed() { return false; },
+      t(_locale, key) { return key === 'noAccess' ? 'no access' : key; }
+    }
+  });
+  const ctx = {
+    from: { id: 778 },
+    state: {},
+    reply: async (message) => replies.push(message)
+  };
+
+  if (await bot.consumeQuotaForContext(ctx)) providerCalls += 1;
+
+  assert.equal(providerCalls, 0);
+  assert.equal(consumeCalls, 0);
+  assert.deepEqual(replies, ['no access']);
+});
+
+test('exhausted inline quota stops before web search or AI', async () => {
+  let searchCalls = 0;
+  let aiCalls = 0;
+  const answers = [];
+  const bot = createBot({
+    config: { dailyQuota: 1 },
+    db: {
+      findUser() { return { id: '779' }; },
+      consumeDailyQuota() {
+        return { allowed: false, remaining: 0, quota: 1 };
+      },
+      async write() {}
+    },
+    methods: {
+      async completePlatformRequest() {
+        aiCalls += 1;
+        return 'must not run';
+      }
+    }
+  });
+  bot.toolRegistry = {
+    async execute() {
+      searchCalls += 1;
+      return JSON.stringify({ results: [{ title: 'must not run' }] });
+    }
+  };
+
+  await bot.handleInlineQuery({
+    update: {
+      inline_query: {
+        id: 'quota-empty',
+        query: '今日新闻',
+        from: { id: 779, language_code: 'zh-CN' }
+      }
+    },
+    answerInlineQuery: async (results) => answers.push(results)
+  });
+
+  assert.equal(searchCalls, 0);
+  assert.equal(aiCalls, 0);
+  assert.match(answers[0][0].input_message_content.message_text, /额度/);
+});
+
+test('superseded inline work refunds immediately even when provider ignores abort', async () => {
+  let usage = 0;
+  const answers = [];
+  const bot = createBot({
+    config: { dailyQuota: 1, enableWebSearch: false },
+    db: {
+      findUser() { return { id: '780' }; },
+      consumeDailyQuota() {
+        if (usage >= 1) return { allowed: false, remaining: 0, quota: 1 };
+        usage += 1;
+        return { allowed: true, remaining: 0, quota: 1 };
+      },
+      refundDailyQuota() { usage = Math.max(0, usage - 1); },
+      async write() {}
+    },
+    methods: {
+      async completePlatformRequest({ text }) {
+        if (text === 'first question') {
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+        return `answer:${text}`;
+      }
+    }
+  });
+  const context = (id, query) => ({
+    update: { inline_query: { id, query, from: { id: 780, language_code: 'zh-CN' } } },
+    answerInlineQuery: async (results) => answers.push({ id, results })
+  });
+
+  const first = bot.handleInlineQuery(context('quota-first', 'first question'));
+  await new Promise((resolve) => setTimeout(resolve, 130));
+  const second = bot.handleInlineQuery(context('quota-second', 'second question'));
+  await Promise.all([first, second]);
+
+  assert.equal(usage, 1);
+  assert.equal(answers.find((item) => item.id === 'quota-first').results.length, 0);
+  assert.match(
+    answers.find((item) => item.id === 'quota-second').results[0].input_message_content.message_text,
+    /answer:second question/
+  );
+});
+
+test('failed platform AI work refunds its reserved quota', async () => {
+  let usage = 0;
+  let refunds = 0;
+  const bot = createBot({
+    config: { dailyQuota: 1 },
+    db: {
+      findUser() { return { id: '777' }; },
+      consumeDailyQuota() {
+        usage += 1;
+        return { allowed: true, remaining: 0, quota: 1 };
+      },
+      refundDailyQuota() {
+        refunds += 1;
+        usage = Math.max(0, usage - 1);
+      },
+      async write() {},
+      async incrementStats() {}
+    },
+    methods: {
+      getEffectiveAISettings() {
+        return { providerId: 'gemini', modelId: 'test-model', fallbackEnabled: true };
+      },
+      async completeWithAiFallback() {
+        throw Object.assign(new Error('superseded'), { code: 'INLINE_QUERY_SUPERSEDED' });
+      }
+    }
+  });
+
+  await assert.rejects(
+    bot.completePlatformRequest({ userId: '777', text: 'question' }),
+    (error) => error?.code === 'INLINE_QUERY_SUPERSEDED'
+  );
+  assert.equal(refunds, 1);
+  assert.equal(usage, 0);
 });
 
 test('empty inline query cancels pending work and never invokes AI or search', async () => {
@@ -505,6 +786,108 @@ test('guest mode answers once through answerGuestQuery without saving a conversa
   assert.equal(calls[0].method, 'answerGuestQuery');
   assert.equal(calls[0].payload.guest_query_id, 'guest-1');
   assert.equal(calls[0].payload.result.input_message_content.message_text, '这是一次访客回答。');
+});
+
+test('platform modes refund reserved quota when Telegram delivery fails', async (t) => {
+  await t.test('guest', async () => {
+    let refunds = 0;
+    const bot = createBot({
+      bot: { telegram: { async callApi() { throw new Error('delivery failed'); } } },
+      db: {
+        refundDailyQuota() { refunds += 1; },
+        async write() {}
+      },
+      methods: {
+        async ensurePlatformUser() {},
+        async completePlatformRequest({ quotaReservation }) {
+          Object.assign(quotaReservation, { userId: '12', reserved: true });
+          return 'answer';
+        }
+      }
+    });
+
+    await assert.rejects(() => bot.handleGuestMessage({
+      update: {
+        guest_message: {
+          guest_query_id: 'guest-fail',
+          text: 'question',
+          chat: { id: -1001 },
+          guest_bot_caller_user: { id: 12, language_code: 'en' }
+        }
+      }
+    }), /delivery failed/);
+    assert.equal(refunds, 1);
+  });
+
+  await t.test('secretary', async () => {
+    let refunds = 0;
+    const bot = createBot({
+      bot: {
+        telegram: {
+          async callApi(method) {
+            if (method === 'sendMessage') throw new Error('delivery failed');
+          }
+        }
+      },
+      db: {
+        refundDailyQuota() { refunds += 1; },
+        async write() {}
+      },
+      methods: {
+        async ensurePlatformUser() {},
+        async completePlatformRequest({ quotaReservation }) {
+          Object.assign(quotaReservation, { userId: '42', reserved: true });
+          return 'answer';
+        }
+      }
+    });
+    bot.businessConnections.set('biz-fail', {
+      id: 'biz-fail',
+      is_enabled: true,
+      rights: { can_reply: true },
+      user: { id: 42, language_code: 'en' }
+    });
+
+    await bot.handleBusinessMessage({
+      update: {
+        business_message: {
+          business_connection_id: 'biz-fail',
+          message_id: 8,
+          text: 'question',
+          from: { id: 88 },
+          chat: { id: 88 }
+        }
+      }
+    });
+    assert.equal(refunds, 1);
+  });
+
+  await t.test('bot-to-bot', async () => {
+    let upserts = 0;
+    let refunds = 0;
+    const bot = createBot({
+      db: {
+        async upsertUser() { upserts += 1; },
+        refundDailyQuota() { refunds += 1; },
+        async write() {}
+      },
+      methods: {
+        async completePlatformRequest({ quotaReservation }) {
+          Object.assign(quotaReservation, { userId: '600', reserved: true });
+          return 'answer';
+        }
+      }
+    });
+
+    await assert.rejects(() => bot.answerBotMessage({
+      from: { id: 600, is_bot: true },
+      chat: { id: -1003 },
+      message: { message_id: 12 },
+      reply: async () => { throw new Error('delivery failed'); }
+    }, 'question'), /delivery failed/);
+    assert.equal(upserts, 1);
+    assert.equal(refunds, 1);
+  });
 });
 
 test('guard mode declines blocked users, approves allowlisted users, and queues unknown users', () => {

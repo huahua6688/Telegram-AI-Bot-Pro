@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ToolRegistry, toolRegistryInternals } from '../src/services/tool-registry.js';
 import { naturalAgentInternals } from '../src/services/natural-agent.js';
+import { productAgentInternals } from '../src/services/product-agent.js';
 
 const originalFetch = globalThis.fetch;
 
@@ -9,7 +10,7 @@ test.afterEach(() => {
   globalThis.fetch = originalFetch;
 });
 
-function createRegistry(overrides = {}) {
+function createRegistry(overrides = {}, logger = { info() {}, warn() {}, debug() {} }) {
   const config = {
     enableToolCalls: true,
     toolAllowedNames: new Set(['web_search']),
@@ -26,7 +27,6 @@ function createRegistry(overrides = {}) {
     requestTimeoutMs: 120000,
     ...overrides
   };
-  const logger = { info() {}, warn() {} };
   return new ToolRegistry(config, logger);
 }
 
@@ -119,6 +119,32 @@ test('web search honors an external cancellation signal', async () => {
   await assert.rejects(pending, (error) => error?.name === 'AbortError');
 });
 
+test('cancelled tool execution does not emit a failure warning', async () => {
+  const warnings = [];
+  globalThis.fetch = async (url, options = {}) => rejectWhenAborted(options.signal);
+  const registry = createRegistry({}, {
+    info() {},
+    debug() {},
+    warn(message) { warnings.push(message); }
+  });
+  const controller = new AbortController();
+  const pending = registry.execute({
+    function: { name: 'web_search', arguments: JSON.stringify({ query: 'superseded topic' }) }
+  }, {
+    source: 'telegram_inline_prefetch',
+    userId: '1',
+    signal: controller.signal,
+    requestTimeoutMs: 1000,
+    toolUsage: { count: 0 }
+  });
+
+  controller.abort(new DOMException('Superseded', 'AbortError'));
+  const raw = JSON.parse(await pending);
+
+  assert.equal(raw.error, 'TOOL_CANCELLED');
+  assert.deepEqual(warnings, []);
+});
+
 test('Google News RSS fallback is bounded and externally cancellable', async () => {
   globalThis.fetch = async (url, options = {}) => rejectWhenAborted(options.signal);
   const controller = new AbortController();
@@ -140,4 +166,22 @@ test('Google News RSS fallback stops at its own timeout', async () => {
     (error) => error?.name === 'TimeoutError'
   );
   assert.ok(Date.now() - startedAt < 500, 'news fallback should be bounded');
+});
+
+test('Google News RSS fallbacks unwrap CDATA titles and dates', async () => {
+  globalThis.fetch = async () => new Response(`
+    <rss><channel><item>
+      <title><![CDATA[Fresh &amp; verified headline]]></title>
+      <link>https://example.com/fresh</link>
+      <pubDate><![CDATA[Mon, 13 Jul 2026 03:00:00 GMT]]></pubDate>
+    </item></channel></rss>
+  `, { status: 200, headers: { 'content-type': 'application/rss+xml' } });
+
+  const naturalResult = JSON.parse(await naturalAgentInternals.fetchNewsFallback('today news'));
+  const productResult = await productAgentInternals.fetchNewsFallback('today news');
+
+  assert.equal(naturalResult.results[0].title, 'Fresh & verified headline');
+  assert.equal(naturalResult.results[0].description, 'Mon, 13 Jul 2026 03:00:00 GMT');
+  assert.match(productResult, /标题：Fresh & verified headline/);
+  assert.doesNotMatch(productResult, /CDATA/);
 });

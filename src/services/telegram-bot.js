@@ -319,7 +319,7 @@ const UI_TEXT = {
     ttsUsage: '用法：/tts 你想转换成语音的文本',
     ttsUnsupported: '当前提供商 {provider} 不支持文字转语音。请切换到支持语音能力的平台。',
     ttsFailed: 'TTS 失败：{error}',
-    personalStats: '你的今日额度已用：{used}/{quota}\n累计消息：{total}',
+    personalStats: '你的今日额度已用：{used}/{quota}\n累计请求：{total}',
     globalStats: '全局统计：',
     privateOnlyCommand: '该命令仅用于群聊。',
     chatmodeUsage: '用法：/chatmode {modes}',
@@ -442,7 +442,7 @@ const UI_TEXT = {
     ttsUsage: 'Usage: /tts the text you want to speak',
     ttsUnsupported: 'The current provider {provider} does not support text-to-speech. Please switch to a provider that does.',
     ttsFailed: 'TTS failed: {error}',
-    personalStats: 'Today used: {used}/{quota}\nTotal messages: {total}',
+    personalStats: 'Today used: {used}/{quota}\nTotal requests: {total}',
     globalStats: 'Global stats:',
     privateOnlyCommand: 'This command is only for group chats.',
     chatmodeUsage: 'Usage: /chatmode {modes}',
@@ -1402,6 +1402,74 @@ export class TelegramAIBot {
     };
   }
 
+  getEffectiveDailyQuota(userId) {
+    const quota = this.db.getUserDailyQuota?.(userId, this.config.dailyQuota);
+    return quota?.dailyQuota ?? this.config.dailyQuota;
+  }
+
+  formatDailyQuotaValue(quota, locale = 'zh') {
+    return Number(quota) > 0 ? String(Number(quota)) : localText(locale, '不限', 'unlimited');
+  }
+
+  async consumeQuotaForContext(ctx) {
+    const userId = ctx?.from?.id;
+    if (!userId || typeof this.db.consumeDailyQuota !== 'function') return true;
+
+    ctx.state ||= {};
+    if (ctx.state.costlyActionAllowed === false) return false;
+    const locale = this.getLocale(ctx);
+    const notifyDenied = async (message) => {
+      if (ctx.callbackQuery && typeof ctx.answerCbQuery === 'function') {
+        try {
+          await ctx.answerCbQuery(message.slice(0, 180), { show_alert: true });
+          return;
+        } catch {
+          // Some parent callback handlers acknowledge first; keep a visible fallback.
+        }
+      }
+      if (typeof ctx.reply === 'function') await ctx.reply(message);
+    };
+
+    if (ctx.state.costlyActionAuthorized !== true) {
+      if (typeof this.isAllowed === 'function' && !this.isAllowed(ctx)) {
+        ctx.state.costlyActionAllowed = false;
+        await notifyDenied(this.t(locale, 'noAccess'));
+        return false;
+      }
+      if (typeof this.checkRateLimit === 'function' && !this.checkRateLimit(userId)) {
+        ctx.state.costlyActionAllowed = false;
+        await notifyDenied(this.t(locale, 'rateLimited'));
+        return false;
+      }
+      ctx.state.costlyActionAuthorized = true;
+    }
+
+    if (ctx.state.dailyQuotaResult) return Boolean(ctx.state.dailyQuotaResult.allowed);
+
+    const quota = this.db.consumeDailyQuota(userId, this.config.dailyQuota);
+    ctx.state.dailyQuotaResult = quota;
+    ctx.state.costlyActionAllowed = Boolean(quota.allowed);
+    await this.db.write?.();
+
+    if (quota.allowed) return true;
+
+    await notifyDenied(this.t(locale, 'quotaExceeded'));
+    return false;
+  }
+
+  async refundQuotaForContext(ctx) {
+    const state = ctx?.state;
+    const userId = ctx?.from?.id;
+    if (!state?.dailyQuotaResult?.allowed || !userId) return false;
+    if (typeof this.db.refundDailyQuota !== 'function') return false;
+
+    delete state.dailyQuotaResult;
+    delete state.costlyActionAllowed;
+    this.db.refundDailyQuota(userId);
+    await this.db.write?.();
+    return true;
+  }
+
   getProviderModelsForMenu(providerId = '') {
     const models = this.providerManager?.getProviderModels?.(providerId) || [];
     return models.length > 0 ? models : this.config.availableModels || [];
@@ -2023,6 +2091,8 @@ export class TelegramAIBot {
       return;
     }
 
+    if (!(await this.consumeQuotaForContext(ctx))) return;
+
     const targetInstruction =
       targetLanguage === 'auto'
         ? 'Detect the source language. If the source text is Chinese, translate it into natural English. Otherwise translate it into natural Simplified Chinese.'
@@ -2067,8 +2137,14 @@ export class TelegramAIBot {
       });
 
       const result = this.normalizeAiResult(completion.result);
-      await sendTextReply(ctx, result.text || this.t(locale, 'noReply'), this.config.maxOutputChars);
+      if (!result.text) {
+        await this.refundQuotaForContext(ctx);
+        await ctx.reply(this.t(locale, 'noReply'));
+        return;
+      }
+      await sendTextReply(ctx, result.text, this.config.maxOutputChars);
     } catch (error) {
+      await this.refundQuotaForContext(ctx);
       if (this.isAiQuotaError(error)) {
         this.setAiCooldown('translation', model, error);
       }
@@ -3637,6 +3713,8 @@ export class TelegramAIBot {
       return;
     }
 
+    if (!(await this.consumeQuotaForContext(ctx))) return;
+
     try {
       await ctx.sendChatAction('typing');
 
@@ -3654,6 +3732,7 @@ export class TelegramAIBot {
       });
 
       if (!parsed.ok) {
+        await this.refundQuotaForContext(ctx);
         const key =
           parsed.error?.code === 'DOCUMENT_TOO_LARGE'
             ? 'documentTooLarge'
@@ -3672,6 +3751,7 @@ export class TelegramAIBot {
 
       const extracted = truncateText(parsed.text || '', this.config.maxInputChars);
       if (!extracted) {
+        await this.refundQuotaForContext(ctx);
         await ctx.reply(localText(locale, '文件里没有提取到可处理的文字内容。', 'No readable text could be extracted from the file.'));
         return;
       }
@@ -3727,13 +3807,21 @@ export class TelegramAIBot {
             ? '🌍 文件翻译'
             : '📄 文件总结';
 
+      const documentAnswer = this.normalizeAiResult(completion.result).text;
+      if (!documentAnswer) {
+        await this.refundQuotaForContext(ctx);
+        await ctx.reply(this.t(locale, 'noReply'));
+        return;
+      }
+
       await sendTextReply(
         ctx,
-        `${title}\n\n${this.normalizeAiResult(completion.result).text || this.t(locale, 'noReply')}`,
+        `${title}\n\n${documentAnswer}`,
         this.config.maxOutputChars,
         this.createMenuKeyboard(locale)
       );
     } catch (error) {
+      await this.refundQuotaForContext(ctx);
       if (this.isAiQuotaError(error)) {
         this.setAiCooldown(mode === 'translate' ? 'translation' : 'chat', this.config.defaultModel, error);
       }
@@ -3834,6 +3922,8 @@ export class TelegramAIBot {
       return;
     }
 
+    if (!(await this.consumeQuotaForContext(ctx))) return;
+
     try {
       await ctx.sendChatAction('typing');
 
@@ -3853,11 +3943,18 @@ export class TelegramAIBot {
       try {
         const parsed = JSON.parse(raw);
         if (parsed?.error) {
+          await this.refundQuotaForContext(ctx);
           await ctx.reply(localText(locale, '这个网页暂时抓不到，可能是网站禁止机器人访问。', 'This page cannot be fetched right now.'));
           return;
         }
       } catch {
         // not json
+      }
+
+      if (!String(raw || '').trim()) {
+        await this.refundQuotaForContext(ctx);
+        await ctx.reply(localText(locale, '这个网页没有返回可读取的内容。', 'This page returned no readable content.'));
+        return;
       }
 
       await this.db.incrementStats('toolCalls');
@@ -3873,6 +3970,7 @@ export class TelegramAIBot {
         await sendTextReply(ctx, composed.text, this.config.maxOutputChars);
       }
     } catch {
+      await this.refundQuotaForContext(ctx);
       await ctx.reply(localText(locale, '这个网页暂时抓不到，可能是网站禁止机器人访问。', 'This page cannot be fetched right now.'));
     }
   }
@@ -3883,6 +3981,8 @@ export class TelegramAIBot {
       await ctx.reply(this.t(locale, 'webUsage'));
       return;
     }
+
+    if (!(await this.consumeQuotaForContext(ctx))) return;
 
     try {
       await ctx.sendChatAction('typing');
@@ -3950,6 +4050,7 @@ export class TelegramAIBot {
       try {
         const parsed = JSON.parse(raw);
         if (parsed?.error) {
+          await this.refundQuotaForContext(ctx);
           await ctx.reply(this.formatUserFacingError(parsed.message || parsed.error, locale));
           return;
         }
@@ -3958,6 +4059,7 @@ export class TelegramAIBot {
       }
       await this.db.incrementStats('toolCalls');
       if (!naturalAgentInternals.hasUsefulToolResult(raw)) {
+        await this.refundQuotaForContext(ctx);
         await ctx.reply(
           localText(
             locale,
@@ -3980,6 +4082,7 @@ export class TelegramAIBot {
         await sendTextReply(ctx, composed.text, this.config.maxOutputChars);
       }
     } catch (error) {
+      await this.refundQuotaForContext(ctx);
       const hint = localText(
         locale,
         '实时搜索需要 ENABLE_WEB_SEARCH=true、ENABLE_TOOL_CALLS=true，并且 Zeabur 能访问外网；Gemini 原生搜索还需要可用的 Gemini Key 和支持搜索的模型。',
@@ -3996,10 +4099,21 @@ export class TelegramAIBot {
       return;
     }
 
+    const capability = mode === 'edit' ? 'imageEditing' : 'imageGeneration';
+    const supportsImage = this.providerManager
+      ? this.providerManager.hasAvailableProvider(capability, this.config.imageProvider)
+      : Boolean(this.getProviderCapabilities()[capability]);
+    if (!supportsImage) {
+      const textKey = mode === 'edit' ? 'imageEditUnsupported' : 'imageUnsupported';
+      await ctx.reply(this.t(locale, textKey, { provider: this.getProviderName() }));
+      return;
+    }
+    if (!(await this.consumeQuotaForContext(ctx))) return;
+
     try {
       await ctx.sendChatAction('upload_photo');
       const result = await this.withProviderForCapability(
-        mode === 'edit' ? 'imageEditing' : 'imageGeneration',
+        capability,
         this.config.imageProvider,
         () => this.multimodalActions.runImageAction({
           mode,
@@ -4007,6 +4121,7 @@ export class TelegramAIBot {
         })
       );
       if (!result.ok) {
+        await this.refundQuotaForContext(ctx);
         const textKey = mode === 'edit' ? 'imageEditUnsupported' : 'imageUnsupported';
         await ctx.reply(this.t(locale, textKey, { provider: this.getProviderName() }));
         return;
@@ -4020,8 +4135,10 @@ export class TelegramAIBot {
         await ctx.replyWithPhoto({ source: Buffer.from(item.value, 'base64') }, { caption: prompt });
         return;
       }
+      await this.refundQuotaForContext(ctx);
       await ctx.reply(this.t(locale, 'imageEmpty'));
     } catch (error) {
+      await this.refundQuotaForContext(ctx);
       await ctx.reply(this.formatUserFacingError(error, locale));
     }
   }
@@ -4034,8 +4151,17 @@ export class TelegramAIBot {
       return;
     }
 
-    const file = await readTelegramFile(ctx, photo.file_id, 'image.jpg', 'image/jpeg');
+    const supportsImageEditing = this.providerManager
+      ? this.providerManager.hasAvailableProvider('imageEditing', this.config.imageProvider)
+      : Boolean(this.getProviderCapabilities().imageEditing);
+    if (!supportsImageEditing) {
+      await ctx.reply(this.t(locale, 'imageEditUnsupported', { provider: this.getProviderName() }));
+      return;
+    }
+    if (!(await this.consumeQuotaForContext(ctx))) return;
+
     try {
+      const file = await readTelegramFile(ctx, photo.file_id, 'image.jpg', 'image/jpeg');
       await ctx.sendChatAction('upload_photo');
       const result = await this.withProviderForCapability(
         'imageEditing',
@@ -4048,6 +4174,7 @@ export class TelegramAIBot {
         })
       );
       if (!result.ok) {
+        await this.refundQuotaForContext(ctx);
         await ctx.reply(this.t(locale, 'imageEditUnsupported', { provider: this.getProviderName() }));
         return;
       }
@@ -4060,8 +4187,10 @@ export class TelegramAIBot {
         await ctx.replyWithPhoto({ source: Buffer.from(item.value, 'base64') }, { caption: prompt });
         return;
       }
+      await this.refundQuotaForContext(ctx);
       await ctx.reply(this.t(locale, 'imageEmpty'));
     } catch (error) {
+      await this.refundQuotaForContext(ctx);
       await ctx.reply(this.formatUserFacingError(error, locale));
     }
   }
@@ -4078,6 +4207,15 @@ export class TelegramAIBot {
       );
       return;
     }
+
+    const supportsTranscription = this.providerManager
+      ? this.providerManager.hasAvailableProvider('speechTranscription', this.config.transcriptionProvider)
+      : Boolean(this.getProviderCapabilities().speechTranscription);
+    if (!supportsTranscription) {
+      await ctx.reply(this.formatUserFacingError('voice transcription is not supported', locale));
+      return;
+    }
+    if (!(await this.consumeQuotaForContext(ctx))) return;
 
     try {
       await ctx.sendChatAction('typing');
@@ -4101,6 +4239,7 @@ export class TelegramAIBot {
       );
 
       if (!result.ok) {
+        await this.refundQuotaForContext(ctx);
         await ctx.reply(this.formatUserFacingError(result.error || 'voice transcription failed', locale));
         return;
       }
@@ -4108,8 +4247,14 @@ export class TelegramAIBot {
       await this.db.incrementStats('voiceTranscriptions');
 
       const title = localText(locale, '🎙 语音转文字结果：', '🎙 Transcription:');
-      await sendTextReply(ctx, `${title}\n\n${result.text || this.t(locale, 'noReply')}`, this.config.maxOutputChars, this.createMenuKeyboard(locale));
+      if (!result.text) {
+        await this.refundQuotaForContext(ctx);
+        await ctx.reply(this.t(locale, 'noReply'));
+        return;
+      }
+      await sendTextReply(ctx, `${title}\n\n${result.text}`, this.config.maxOutputChars, this.createMenuKeyboard(locale));
     } catch (error) {
+      await this.refundQuotaForContext(ctx);
       this.logger.warn('Voice transcription failed', {
         chatId: ctx.chat?.id,
         error: this.formatLogError(error)
@@ -4133,6 +4278,8 @@ export class TelegramAIBot {
       return;
     }
 
+    if (!(await this.consumeQuotaForContext(ctx))) return;
+
     try {
       await ctx.sendChatAction('record_voice');
       const result = await this.withProviderForCapability(
@@ -4141,12 +4288,14 @@ export class TelegramAIBot {
         () => this.audioOrchestrator.textToSpeech({ input: text })
       );
       if (!result.ok) {
+        await this.refundQuotaForContext(ctx);
         await ctx.reply(this.formatUserFacingError(result.error || 'unknown error', locale));
         return;
       }
       await this.db.incrementStats('aiCalls');
       await ctx.replyWithAudio({ source: result.audio, filename: 'speech.mp3' });
     } catch (error) {
+      await this.refundQuotaForContext(ctx);
       await ctx.reply(this.formatUserFacingError(error, locale));
     }
   }
@@ -4193,6 +4342,8 @@ export class TelegramAIBot {
       : String(this.config.defaultModel || '');
 
     const userDaily = user?.dailyUsageCount || 0;
+    const userDailyQuota = this.getEffectiveDailyQuota(ctx.from.id);
+    const userDailyQuotaLabel = this.formatDailyQuotaValue(userDailyQuota, locale);
     const userTotal = user?.totalMessages || 0;
 
     const lines =
@@ -4208,8 +4359,8 @@ export class TelegramAIBot {
             `- Available models: ${models || '-'}`,
             '',
             'Current user quota:',
-            `- Today: ${userDaily}/${this.config.dailyQuota}`,
-            `- User total messages: ${userTotal}`,
+            `- Today: ${userDaily}/${userDailyQuotaLabel}`,
+            `- User total requests: ${userTotal}`,
             '',
             'Global runtime stats:',
             `- Handled chat messages: ${stats.messagesHandled || 0}`,
@@ -4241,8 +4392,8 @@ export class TelegramAIBot {
             `- 可用模型：${models || '-'}`,
             '',
             '当前用户额度：',
-            `- 今日额度：${userDaily}/${this.config.dailyQuota}`,
-            `- 个人累计消息：${userTotal}`,
+            `- 今日额度：${userDaily}/${userDailyQuotaLabel}`,
+            `- 个人累计请求：${userTotal}`,
             '',
             '全局运行统计：',
             `- 已处理聊天消息：${stats.messagesHandled || 0}`,
@@ -4447,6 +4598,8 @@ export class TelegramAIBot {
       return;
     }
 
+    if (!(await this.consumeQuotaForContext(ctx))) return;
+
     try {
       await ctx.sendChatAction("typing");
 
@@ -4494,6 +4647,7 @@ export class TelegramAIBot {
 
       await ctx.reply(lines.join("\n"), this.createAdminActionKeyboard(locale));
     } catch (error) {
+      await this.refundQuotaForContext(ctx);
       if (this.isAiQuotaError(error)) {
         this.setAiCooldown("chat", model, error);
       }
@@ -4557,7 +4711,10 @@ export class TelegramAIBot {
       return;
     }
 
+    if (!(await this.consumeQuotaForContext(ctx))) return;
+
     const lines = [localText(locale, 'AI 平台测试', 'AI provider tests'), ''];
+    let successfulProviders = 0;
     for (const provider of providers) {
       try {
         const completion = await this.completeWithAiFallback({
@@ -4577,18 +4734,28 @@ export class TelegramAIBot {
             temperature: 0
           }
         });
+        successfulProviders += 1;
         lines.push(`${provider.name}: OK (${completion.model || provider.models[0]})`);
       } catch (error) {
         lines.push(`${provider.name}: FAIL (${this.formatUserFacingError(error, locale).split('\n')[0]})`);
       }
     }
 
-    await ctx.reply(lines.join('\n'), this.createAdminActionKeyboard(locale));
+    if (successfulProviders === 0) await this.refundQuotaForContext(ctx);
+
+    try {
+      await ctx.reply(lines.join('\n'), this.createAdminActionKeyboard(locale));
+    } catch (error) {
+      await this.refundQuotaForContext(ctx);
+      throw error;
+    }
   }
 
   async handleAdminQuota(ctx) {
     const locale = this.getLocale(ctx);
     const user = this.db.findUser(ctx.from.id);
+    const userDailyQuota = this.getEffectiveDailyQuota(ctx.from.id);
+    const userDailyQuotaLabel = this.formatDailyQuotaValue(userDailyQuota, locale);
     const stats = this.db.getStats?.() || {};
     const cooldowns = Array.from(this.aiCooldowns.entries()).map(([key, expiresAt]) => ({
       key,
@@ -4599,8 +4766,8 @@ export class TelegramAIBot {
       const lines = [
         '📊 Quota status',
         '',
-        `Today used: ${user?.dailyUsageCount || 0}/${this.config.dailyQuota}`,
-        `Total messages: ${user?.totalMessages || 0}`,
+        `Today used: ${user?.dailyUsageCount || 0}/${userDailyQuotaLabel}`,
+        `Total requests: ${user?.totalMessages || 0}`,
         '',
         'AI cooldown:',
         cooldowns.length
@@ -4623,8 +4790,8 @@ export class TelegramAIBot {
     const lines = [
       '📊 额度状态',
       '',
-      `今日用量：${user?.dailyUsageCount || 0}/${this.config.dailyQuota}`,
-      `总消息数：${user?.totalMessages || 0}`,
+      `今日用量：${user?.dailyUsageCount || 0}/${userDailyQuotaLabel}`,
+      `累计请求数：${user?.totalMessages || 0}`,
       '',
       'AI 冷却：',
       cooldowns.length
@@ -4647,11 +4814,13 @@ export class TelegramAIBot {
     const stats = this.db.getStats();
     const user = this.db.findUser(ctx.from.id);
     const locale = this.getLocale(ctx, user);
+    const userDailyQuota = this.getEffectiveDailyQuota(ctx.from.id);
+    const userDailyQuotaLabel = this.formatDailyQuotaValue(userDailyQuota, locale);
     if (!this.isAdmin(ctx)) {
       await ctx.reply(
         this.t(locale, 'personalStats', {
           used: user?.dailyUsageCount || 0,
-          quota: this.config.dailyQuota,
+          quota: userDailyQuotaLabel,
           total: user?.totalMessages || 0
         })
       );
@@ -4778,6 +4947,8 @@ export class TelegramAIBot {
     const currentProvider = this.getAIProviderLabel(aiSettings.providerId || this.config.aiProvider);
     const persona = user?.persona || 'default';
     const dailyUsed = user?.dailyUsageCount || 0;
+    const dailyQuota = this.getEffectiveDailyQuota(ctx.from?.id);
+    const dailyQuotaLabel = this.formatDailyQuotaValue(dailyQuota, locale);
     const totalMessages = user?.totalMessages || 0;
     const isAdmin = this.isAdmin(ctx);
 
@@ -4790,8 +4961,8 @@ export class TelegramAIBot {
             `Model: ${currentModel}`,
             `Persona: ${persona}`,
             `Language: ${languageName}`,
-            `Daily usage: ${dailyUsed}/${this.config.dailyQuota}`,
-            `Total messages: ${totalMessages}`,
+            `Daily usage: ${dailyUsed}/${dailyQuotaLabel}`,
+            `Total requests: ${totalMessages}`,
             `Admin: ${isAdmin ? 'yes' : 'no'}`,
             '',
             'Use the buttons below to change settings quickly.'
@@ -4803,8 +4974,8 @@ export class TelegramAIBot {
             `模型：${currentModel}`,
             `人格：${persona}`,
             `语言：${languageName}`,
-            `今日用量：${dailyUsed}/${this.config.dailyQuota}`,
-            `总消息数：${totalMessages}`,
+            `今日用量：${dailyUsed}/${dailyQuotaLabel}`,
+            `累计请求数：${totalMessages}`,
             `管理员：${isAdmin ? '是' : '否'}`,
             '',
             '用下面按钮快速切换设置。'
@@ -5280,9 +5451,15 @@ export class TelegramAIBot {
           return;
         }
 
+        if (!(await this.consumeQuotaForContext(ctx))) return;
+
         await ctx.answerCbQuery(this.t(state.locale, 'actionWorking'));
         const translated = await this.translateAssistantReply(state, targetLanguage);
-        if (!translated) return;
+        if (!translated) {
+          await this.refundQuotaForContext(ctx);
+          await ctx.reply(this.t(state.locale, 'noReply'));
+          return;
+        }
         state.replyText = translated;
         await this.editAssistantMessageText(ctx, translated, this.createAssistantActionKeyboard(state.locale, token));
         return;
@@ -5296,9 +5473,15 @@ export class TelegramAIBot {
           return;
         }
 
+        if (!(await this.consumeQuotaForContext(ctx))) return;
+
         await ctx.answerCbQuery(this.t(state.locale, 'actionWorking'));
         const regenerated = await this.regenerateAssistantReply(state);
-        if (!regenerated?.text) return;
+        if (!regenerated?.text) {
+          await this.refundQuotaForContext(ctx);
+          await ctx.reply(this.t(state.locale, 'noReply'));
+          return;
+        }
         state.replyText = regenerated.text;
         state.assistantMessageId = regenerated.assistantRef?.messageId || state.assistantMessageId || '';
         state.assistantMessageVersionId = regenerated.assistantRef?.messageVersionId || state.assistantMessageVersionId || '';
@@ -5307,6 +5490,7 @@ export class TelegramAIBot {
       }
       await ctx.answerCbQuery();
     } catch (error) {
+      await this.refundQuotaForContext(ctx);
       if (this.isAiQuotaError(error)) {
         const scope = action === 'translate_pick' || action === 'translate' ? 'translation' : 'chat';
         const model = scope === 'translation'
@@ -5320,7 +5504,12 @@ export class TelegramAIBot {
         action,
         error: this.formatLogError(error)
       });
-      await ctx.answerCbQuery(this.formatUserFacingError(error, state?.locale || locale).slice(0, 180));
+      const message = this.formatUserFacingError(error, state?.locale || locale);
+      try {
+        await ctx.answerCbQuery(message.slice(0, 180));
+      } catch {
+        await ctx.reply(message);
+      }
     }
   }
 
@@ -5522,6 +5711,7 @@ export class TelegramAIBot {
     }
 
     if (action === 'test') {
+      if (!(await this.consumeQuotaForContext(ctx))) return;
       try {
         await ctx.sendChatAction?.('typing');
         const completion = await this.completeWithAiFallback({
@@ -5550,6 +5740,7 @@ export class TelegramAIBot {
         ];
         await this.editAssistantMessageText(ctx, lines.join('\n'), this.createAIProviderKeyboard(settings, locale));
       } catch (error) {
+        await this.refundQuotaForContext(ctx);
         const lines = [
           localText(locale, 'AI 测试失败', 'AI test failed'),
           '',
@@ -5880,22 +6071,7 @@ export class TelegramAIBot {
 
     if (!shouldRespond) return;
 
-    if (!this.isAllowed(ctx)) {
-      await ctx.reply(this.t(locale, 'noAccess'));
-      return;
-    }
-
-    if (!this.checkRateLimit(ctx.from.id)) {
-      await ctx.reply(this.t(locale, 'rateLimited'));
-      return;
-    }
-
-    const quota = this.db.consumeDailyQuota(ctx.from.id, this.config.dailyQuota);
-    await this.db.write();
-    if (!quota.allowed) {
-      await ctx.reply(this.t(locale, 'quotaExceeded'));
-      return;
-    }
+    if (!(await this.consumeQuotaForContext(ctx))) return;
 
     const telegramReplyContext = getTelegramReplyContext(ctx.message, this.config.maxInputChars);
     const memoryQueryText = [text || caption, telegramReplyContext?.text || ''].filter(Boolean).join('\n');
@@ -5924,11 +6100,13 @@ export class TelegramAIBot {
 
     const aiSettings = this.getEffectiveAISettings(ctx.from.id);
     let activeAiModel = aiSettings.modelId || user?.preferredModel || chat?.defaultModel || this.config.defaultModel;
+    let assistantDelivered = false;
 
     try {
       const model = activeAiModel;
       const chatCooldown = this.getAiCooldown('chat', model);
       if (chatCooldown) {
+        await this.refundQuotaForContext(ctx);
         await ctx.reply(this.formatQuotaCooldownMessage(chatCooldown, locale));
         return;
       }
@@ -5985,6 +6163,12 @@ export class TelegramAIBot {
       const result = this.normalizeAiResult(completion.result, messages);
       activeAiModel = completion.model || model;
 
+      if (!result.text) {
+        await this.refundQuotaForContext(ctx);
+        await ctx.reply(this.t(locale, 'noReply'));
+        return;
+      }
+
       await this.db.incrementStats('messagesHandled');
       await this.db.incrementStats('aiCalls');
       await this.db.setConversation(
@@ -5997,7 +6181,7 @@ export class TelegramAIBot {
       );
       const assistantRef = this.db.getLatestAssistantMessageReference(sessionId);
 
-      const assistantText = result.text || this.t(locale, 'noReply');
+      const assistantText = result.text;
       const visibleAssistantText = completion.switched
         ? [
             isEnglishLocale(locale)
@@ -6021,6 +6205,7 @@ export class TelegramAIBot {
       }
 
       const reply = await this.sendAssistantReply(ctx, visibleAssistantText);
+      assistantDelivered = true;
       if (reply?.lastMessageId && this.config?.miniAppEnabled === false) {
         const state = this.createAssistantActionState({
           chatId: ctx.chat.id,
@@ -6047,6 +6232,7 @@ export class TelegramAIBot {
         );
       }
     } catch (error) {
+      if (!assistantDelivered) await this.refundQuotaForContext(ctx);
       if (this.isAiQuotaError(error)) {
         this.setAiCooldown('chat', activeAiModel, error);
       }

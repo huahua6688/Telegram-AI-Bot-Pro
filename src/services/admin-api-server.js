@@ -19,7 +19,10 @@ async function readJson(req) {
   try {
     return JSON.parse(body);
   } catch {
-    return {};
+    const error = new SyntaxError('Request body must contain valid JSON.');
+    error.code = 'INVALID_JSON';
+    error.statusCode = 400;
+    throw error;
   }
 }
 
@@ -203,11 +206,17 @@ export function startAdminApiServer({ config, db, logger, accessControl, port = 
           if (userId) {
             const user = db.findUser(userId);
             if (!user) return json(res, 404, { error: 'USER_NOT_FOUND' });
+            const quota = db.getUserDailyQuota?.(user.id, config.dailyQuota) || {
+              dailyQuota: config.dailyQuota,
+              dailyQuotaOverride: null,
+              usesGlobalQuota: true
+            };
             return json(res, 200, {
               userId: user.id,
               dailyUsageDate: user.dailyUsageDate,
               dailyUsageCount: user.dailyUsageCount,
-              dailyQuota: config.dailyQuota
+              globalDailyQuota: config.dailyQuota,
+              ...quota
             });
           }
           return json(res, 200, {
@@ -220,7 +229,38 @@ export function startAdminApiServer({ config, db, logger, accessControl, port = 
           if (permissionDenied('quota:write')) return denyForbidden('quota:write');
           const payload = await readJson(req);
           if (payload.userId) {
-            const user = db.setUserDailyUsage(payload.userId, payload.dailyUsageCount || 0, payload.date);
+            if (!db.findUser(payload.userId)) {
+              return json(res, 404, { error: 'USER_NOT_FOUND' });
+            }
+
+            const hasDailyQuota = Object.prototype.hasOwnProperty.call(payload, 'dailyQuota');
+            const hasDailyUsageCount = Object.prototype.hasOwnProperty.call(payload, 'dailyUsageCount');
+            if (
+              hasDailyQuota &&
+              payload.dailyQuota !== null &&
+              (!Number.isSafeInteger(payload.dailyQuota) || payload.dailyQuota < 0 || payload.dailyQuota > 1000000)
+            ) {
+              return json(res, 400, { error: 'INVALID_DAILY_QUOTA' });
+            }
+            if (
+              hasDailyUsageCount &&
+              (!Number.isSafeInteger(payload.dailyUsageCount) || payload.dailyUsageCount < 0)
+            ) {
+              return json(res, 400, { error: 'INVALID_DAILY_USAGE_COUNT' });
+            }
+
+            if (hasDailyQuota) {
+              db.setUserDailyQuota(payload.userId, payload.dailyQuota, config.dailyQuota);
+            }
+            if (hasDailyUsageCount || !hasDailyQuota) {
+              db.setUserDailyUsage(payload.userId, hasDailyUsageCount ? payload.dailyUsageCount : 0, payload.date);
+            }
+            const user = db.findUser(payload.userId);
+            const quota = db.getUserDailyQuota?.(payload.userId, config.dailyQuota) || {
+              dailyQuota: config.dailyQuota,
+              dailyQuotaOverride: null,
+              usesGlobalQuota: true
+            };
             db.logAudit({
               actorId,
               actorType: 'admin_api',
@@ -232,7 +272,13 @@ export function startAdminApiServer({ config, db, logger, accessControl, port = 
               userAgent: req.headers['user-agent'] || '',
               details: payload
             });
-            return json(res, 200, { user });
+            return json(res, 200, { user, quota });
+          }
+          if (payload.resetAll !== true) {
+            return json(res, 400, {
+              error: 'EXPLICIT_RESET_REQUIRED',
+              message: 'Set resetAll=true to reset daily usage for every user.'
+            });
           }
           db.resetDailyUsageForAll(payload.date);
           db.logAudit({
@@ -455,7 +501,11 @@ export function startAdminApiServer({ config, db, logger, accessControl, port = 
           userAgent: req.headers['user-agent'] || '',
           details: { message: error.message }
         });
-        return json(res, 500, { error: 'INTERNAL_ERROR', message: error.message });
+        const statusCode = Number(error?.statusCode) === 400 ? 400 : 500;
+        return json(res, statusCode, {
+          error: statusCode === 400 ? String(error.code || 'BAD_REQUEST') : 'INTERNAL_ERROR',
+          message: error.message
+        });
       }
     });
   }

@@ -446,6 +446,17 @@ export class ToolRegistry {
           return toolError('TOOL_NOT_FOUND', `The requested tool "${name}" is not available.`);
       }
     } catch (error) {
+      if (context.signal?.aborted) {
+        this.logger?.debug?.('Tool execution cancelled', {
+          tool: name,
+          source: context.source || ''
+        });
+        return toolError(
+          'TOOL_CANCELLED',
+          'The tool request was cancelled because a newer request replaced it.',
+          { retryable: false }
+        );
+      }
       this.logger?.warn?.('Tool execution failed', {
         tool: name,
         source: context.source || '',
