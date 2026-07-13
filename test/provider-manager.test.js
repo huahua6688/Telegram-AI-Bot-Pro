@@ -60,13 +60,25 @@ function fakeFactory(script, calls = []) {
   };
 }
 
-test('AIProviderManager falls back from Gemini 429 to Groq', async () => {
+test('AIProviderManager skips remaining models for provider-wide quota failures', async () => {
   const calls = [];
   const manager = new AIProviderManager({
-    config: baseConfig(),
+    config: baseConfig({
+      aiProviderMaxRetries: 3,
+      providerModels: {
+        gemini: ['gemini-model', 'gemini-second-model'],
+        groq: ['groq-model'],
+        openrouter: ['openrouter-model'],
+        huggingface: ['hf-model']
+      }
+    }),
     logger,
     clientFactory: fakeFactory({
-      gemini: [new Error('AI request failed (429): quota')],
+      gemini: [
+        new Error('AI request failed (429): project quota exhausted'),
+        { text: 'must not retry Gemini', messages: [] },
+        { text: 'must not try another Gemini model', messages: [] }
+      ],
       groq: [{ text: 'groq ok', messages: [{ role: 'assistant', content: 'groq ok' }] }]
     }, calls)
   });
@@ -82,8 +94,155 @@ test('AIProviderManager falls back from Gemini 429 to Groq', async () => {
   assert.equal(result.providerId, 'groq');
   assert.equal(result.model, 'groq-model');
   assert.equal(result.switched, true);
-  assert.deepEqual(calls.map((item) => item.providerId), ['gemini', 'groq']);
+  assert.deepEqual(calls.map((item) => `${item.providerId}/${item.model}`), [
+    'gemini/gemini-model',
+    'groq/groq-model'
+  ]);
 });
+
+test('AIProviderManager still switches Gemini models for model-scoped quota failures', async () => {
+  const calls = [];
+  const manager = new AIProviderManager({
+    config: baseConfig({
+      providerModels: {
+        gemini: ['gemini-model', 'gemini-second-model'],
+        groq: ['groq-model'],
+        openrouter: ['openrouter-model'],
+        huggingface: ['hf-model']
+      }
+    }),
+    logger,
+    clientFactory: fakeFactory({
+      gemini: [
+        new Error('AI request failed (429): free_tier_input_token_count limit: 0, model: gemini-model'),
+        { text: 'gemini fallback ok', messages: [{ role: 'assistant', content: 'gemini fallback ok' }] }
+      ]
+    }, calls)
+  });
+
+  const result = await manager.execute({
+    capability: 'chat',
+    preferredProvider: 'gemini',
+    preferredModel: 'gemini-model',
+    fallbackEnabled: true,
+    request: { messages: [{ role: 'user', content: 'hello' }], tools: [] }
+  });
+
+  assert.equal(result.providerId, 'gemini');
+  assert.equal(result.model, 'gemini-second-model');
+  assert.deepEqual(calls.map((item) => `${item.providerId}/${item.model}`), [
+    'gemini/gemini-model',
+    'gemini/gemini-second-model'
+  ]);
+});
+
+test('AIProviderManager does not cool down providers after external cancellation', async () => {
+  const calls = [];
+  const cancelled = new Error('This operation was aborted');
+  cancelled.name = 'AbortError';
+  const manager = new AIProviderManager({
+    config: baseConfig(),
+    logger,
+    clientFactory: fakeFactory({
+      gemini: [cancelled],
+      groq: [{ text: 'must not run', messages: [] }]
+    }, calls)
+  });
+  const controller = new AbortController();
+  controller.abort();
+
+  await assert.rejects(
+    manager.execute({
+      capability: 'chat',
+      preferredProvider: 'gemini',
+      preferredModel: 'gemini-model',
+      fallbackEnabled: true,
+      request: {
+        signal: controller.signal,
+        messages: [{ role: 'user', content: 'hello' }],
+        tools: []
+      }
+    }),
+    (error) => error?.name === 'AbortError'
+  );
+
+  assert.deepEqual(calls.map((item) => item.providerId), ['gemini']);
+  assert.equal(manager.getCooldown('gemini', 'chat'), null);
+  assert.equal(manager.getCooldown('groq', 'chat'), null);
+});
+
+test('AIProviderManager falls back without cooldown after an inline deadline timeout', async () => {
+  const timedOut = new Error('This operation was aborted');
+  timedOut.name = 'AbortError';
+  const manager = new AIProviderManager({
+    config: baseConfig(),
+    logger,
+    clientFactory: fakeFactory({
+      gemini: [timedOut],
+      groq: [{ text: 'groq ok', messages: [{ role: 'assistant', content: 'groq ok' }] }]
+    })
+  });
+  const controller = new AbortController();
+
+  const result = await manager.execute({
+    capability: 'chat',
+    preferredProvider: 'gemini',
+    preferredModel: 'gemini-model',
+    fallbackEnabled: true,
+    request: {
+      signal: controller.signal,
+      requestTimeoutMs: 50,
+      suppressTimeoutCooldown: true,
+      messages: [{ role: 'user', content: 'hello' }],
+      tools: []
+    }
+  });
+
+  assert.equal(result.providerId, 'groq');
+  assert.equal(controller.signal.aborted, false);
+  assert.equal(manager.getCooldown('gemini', 'chat'), null);
+});
+
+for (const [failureType, failure] of [
+  ['authentication', new Error('AI request failed (401): invalid API key')],
+  ['permission', new Error('AI request failed (403): forbidden')]
+]) {
+  test(`AIProviderManager skips remaining provider models after ${failureType} failure`, async () => {
+    const calls = [];
+    const manager = new AIProviderManager({
+      config: baseConfig({
+        providerModels: {
+          gemini: ['gemini-model', 'gemini-second-model'],
+          groq: ['groq-model'],
+          openrouter: ['openrouter-model'],
+          huggingface: ['hf-model']
+        }
+      }),
+      logger,
+      clientFactory: fakeFactory({
+        gemini: [
+          failure,
+          { text: 'must not try another Gemini model', messages: [] }
+        ],
+        groq: [{ text: 'groq ok', messages: [{ role: 'assistant', content: 'groq ok' }] }]
+      }, calls)
+    });
+
+    const result = await manager.execute({
+      capability: 'chat',
+      preferredProvider: 'gemini',
+      preferredModel: 'gemini-model',
+      fallbackEnabled: true,
+      request: { messages: [{ role: 'user', content: 'hello' }], tools: [] }
+    });
+
+    assert.equal(result.providerId, 'groq');
+    assert.deepEqual(calls.map((item) => `${item.providerId}/${item.model}`), [
+      'gemini/gemini-model',
+      'groq/groq-model'
+    ]);
+  });
+}
 
 test('AIProviderManager does not cross providers when fallback is disabled', async () => {
   const manager = new AIProviderManager({

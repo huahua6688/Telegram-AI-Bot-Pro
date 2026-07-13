@@ -104,6 +104,26 @@ export function classifyProviderError(error) {
   return 'unknown';
 }
 
+function isProviderWideFailure(errorType, error) {
+  if (errorType === 'auth' || errorType === 'permission') return true;
+  if (errorType !== 'quota') return false;
+
+  const detail = String(error?.message || error || '').toLowerCase();
+  if (
+    detail.includes('insufficient credits') ||
+    detail.includes('insufficient balance') ||
+    detail.includes('billing') ||
+    /(?:account|project)[^\n]{0,80}(?:quota|limit|exhausted)/i.test(detail)
+  ) {
+    return true;
+  }
+
+  // Most Gemini rate-limit metrics are scoped to a specific model. Trying the
+  // next configured model is useful unless the response explicitly says the
+  // whole account/project is exhausted.
+  return false;
+}
+
 export class AIProviderManager {
   constructor({ config, logger, db = null, clientFactory = createAIClient } = {}) {
     this.config = config;
@@ -365,6 +385,7 @@ export class AIProviderManager {
       }
       const maxAttempts = Math.max(1, Number(this.config.aiProviderMaxRetries || 1));
 
+      modelLoop:
       for (const model of modelCandidates) {
         for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
           try {
@@ -389,10 +410,16 @@ export class AIProviderManager {
               attempted
             };
           } catch (error) {
+            if (request.signal?.aborted) {
+              throw error;
+            }
             lastError = error;
             const errorType = classifyProviderError(error);
             attempted.push({ providerId, model, attempt, status: errorType, message: error.message });
-            const retryable = ['timeout', 'quota', 'transient', 'empty', 'unknown'].includes(errorType);
+            const deadlineTimeout = errorType === 'timeout' && request.suppressTimeoutCooldown;
+            const providerWideFailure = isProviderWideFailure(errorType, error);
+            const retryable = !providerWideFailure && !deadlineTimeout &&
+              ['timeout', 'transient', 'empty', 'unknown'].includes(errorType);
 
             if (attempt < maxAttempts && retryable) {
               await sleep(Math.max(0, Number(this.config.aiProviderRetryDelayMs) || 0));
@@ -402,7 +429,9 @@ export class AIProviderManager {
             const cooldownMs = errorType === 'model' || errorType === 'auth' || errorType === 'permission'
               ? Math.max(300000, Number(this.config.aiProviderCooldownMs) || 60000)
               : this.config.aiProviderCooldownMs;
-            this.setCooldown(providerId, capability, error, cooldownMs);
+            if (!deadlineTimeout) {
+              this.setCooldown(providerId, capability, error, cooldownMs);
+            }
             this.logger.warn?.('AI provider failed, trying next candidate', {
               userId: String(userId || ''),
               scope,
@@ -411,6 +440,7 @@ export class AIProviderManager {
               errorType,
               error: error.message
             });
+            if (providerWideFailure) break modelLoop;
             break;
           }
         }

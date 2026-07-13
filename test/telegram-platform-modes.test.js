@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PlatformModesTelegramAIBot, platformModesInternals } from '../src/services/platform-modes-telegram-bot.js';
+import { naturalAgentInternals } from '../src/services/natural-agent.js';
 
 function createBot(overrides = {}) {
   const bot = Object.create(PlatformModesTelegramAIBot.prototype);
@@ -15,6 +16,8 @@ function createBot(overrides = {}) {
     enableSecretaryAutoReply: true,
     botCollaborationCooldownMs: 5000,
     inlineQueryDebounceMs: 100,
+    inlineQueryResponseTimeoutMs: 7000,
+    inlineQuerySearchTimeoutMs: 3500,
     inlineQueryCacheTtlMs: 60000,
     enableToolCalls: true,
     enableWebSearch: true,
@@ -122,6 +125,139 @@ test('inline mode coalesces rapid typing and only calls AI for the last query', 
   );
 });
 
+test('new inline input cancels an in-flight answer without waiting for it', async () => {
+  const answers = [];
+  const bot = createBot({
+    config: { inlineQueryResponseTimeoutMs: 1000 },
+    methods: {
+      async completePlatformRequest({ text }) {
+        if (text === 'first question') return new Promise(() => {});
+        return `answer:${text}`;
+      }
+    }
+  });
+  const makeContext = (id, query) => ({
+    update: { inline_query: { id, query, from: { id: 771, language_code: 'en' } } },
+    answerInlineQuery: async (results, extra) => answers.push({ id, results, extra })
+  });
+
+  const first = bot.handleInlineQuery(makeContext('running-1', 'first question'));
+  await new Promise((resolve) => setTimeout(resolve, 130));
+  const startedAt = Date.now();
+  const second = bot.handleInlineQuery(makeContext('running-2', 'second question'));
+  await Promise.all([first, second]);
+
+  assert.ok(Date.now() - startedAt < 600);
+  assert.deepEqual(answers.find((item) => item.id === 'running-1').results, []);
+  assert.equal(
+    answers.find((item) => item.id === 'running-2').results[0].input_message_content.message_text,
+    'answer:second question'
+  );
+});
+
+test('inline mode returns a retry article before its hard response deadline', async () => {
+  const answers = [];
+  const bot = createBot({
+    config: { inlineQueryResponseTimeoutMs: 250 },
+    methods: {
+      async completePlatformRequest() {
+        return new Promise(() => {});
+      }
+    }
+  });
+
+  const startedAt = Date.now();
+  await bot.handleInlineQuery({
+    update: { inline_query: { id: 'deadline-1', query: 'slow question', from: { id: 772, language_code: 'en' } } },
+    answerInlineQuery: async (results, extra) => answers.push({ results, extra })
+  });
+
+  assert.ok(Date.now() - startedAt < 700);
+  assert.equal(answers.length, 1);
+  assert.match(answers[0].results[0].input_message_content.message_text, /took too long/i);
+  assert.deepEqual(answers[0].extra, { cache_time: 1, is_personal: true });
+});
+
+test('expired inline query errors are swallowed and never answered twice', async () => {
+  let answerCalls = 0;
+  const bot = createBot({
+    methods: {
+      async completePlatformRequest() {
+        return 'ready';
+      }
+    }
+  });
+  const expired = new Error('400: Bad Request: query is too old and response timeout expired or query ID is invalid');
+  expired.response = {
+    error_code: 400,
+    description: 'Bad Request: query is too old and response timeout expired or query ID is invalid'
+  };
+
+  await bot.handleInlineQuery({
+    update: { inline_query: { id: 'expired-1', query: 'hello', from: { id: 773, language_code: 'en' } } },
+    async answerInlineQuery() {
+      answerCalls += 1;
+      throw expired;
+    }
+  });
+
+  assert.equal(answerCalls, 1);
+});
+
+test('a transient Telegram send failure retries the same answer once', async () => {
+  const responses = [];
+  let answerCalls = 0;
+  const bot = createBot({
+    methods: {
+      async completePlatformRequest() {
+        return 'ready';
+      }
+    }
+  });
+
+  await bot.handleInlineQuery({
+    update: { inline_query: { id: 'transient-1', query: 'hello', from: { id: 774, language_code: 'en' } } },
+    async answerInlineQuery(results, extra) {
+      answerCalls += 1;
+      if (answerCalls === 1) throw new Error('503: temporary Telegram transport failure');
+      responses.push({ results, extra });
+    }
+  });
+
+  assert.equal(answerCalls, 2);
+  assert.equal(responses.length, 1);
+  assert.equal(responses[0].results[0].input_message_content.message_text, 'ready');
+});
+
+test('inline search and news fallback share one cumulative search budget', async () => {
+  let toolTimeoutMs = 0;
+  let newsTimeoutMs = 0;
+  const originalNewsFallback = naturalAgentInternals.fetchNewsFallback;
+  const bot = createBot({ config: { inlineQuerySearchTimeoutMs: 120 } });
+  bot.toolRegistry = {
+    async execute(_toolCall, context) {
+      toolTimeoutMs = context.requestTimeoutMs;
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      return JSON.stringify({ ok: false, error: 'TOOL_EXECUTION_FAILED' });
+    }
+  };
+  naturalAgentInternals.fetchNewsFallback = async (_query, options) => {
+    newsTimeoutMs = options.timeoutMs;
+    return '';
+  };
+
+  const startedAt = Date.now();
+  try {
+    await bot.getInlineSearchContext({ userId: '775', query: '今日新闻', timeoutMs: 120 });
+  } finally {
+    naturalAgentInternals.fetchNewsFallback = originalNewsFallback;
+  }
+
+  assert.equal(toolTimeoutMs, 120);
+  assert.ok(newsTimeoutMs === 0 || newsTimeoutMs < 80);
+  assert.ok(Date.now() - startedAt < 180);
+});
+
 test('empty inline query cancels pending work and never invokes AI or search', async () => {
   let aiCalls = 0;
   let searchCalls = 0;
@@ -185,11 +321,50 @@ test('inline current-information query prefetches web results and forces provide
   assert.equal(calls[0].type, 'tool');
   assert.equal(calls[0].toolCall.function.name, 'web_search');
   assert.equal(JSON.parse(calls[0].toolCall.function.arguments).query, '今日新闻');
+  assert.ok(calls[0].context.signal instanceof AbortSignal);
+  assert.equal(calls[0].context.requestTimeoutMs, 3500);
   assert.equal(calls[1].type, 'ai');
   assert.equal(calls[1].options.fallbackEnabled, true);
+  assert.ok(calls[1].options.signal instanceof AbortSignal);
+  assert.ok(calls[1].options.requestTimeoutMs > 0);
+  assert.ok(calls[1].options.requestTimeoutMs <= 7000);
   assert.match(calls[1].options.retrievedContext, /example\.com\/news/);
   assert.match(calls[1].options.role, /live-search/);
   assert.equal(answers[0][0].input_message_content.message_text, '这是联网后的新闻摘要。');
+});
+
+test('inline search formats retrieved results when AI generation fails', async () => {
+  const bot = createBot({
+    methods: {
+      async completePlatformRequest() {
+        throw new Error('AI request failed (429): quota');
+      }
+    }
+  });
+  bot.toolRegistry = {
+    async execute() {
+      return JSON.stringify({
+        results: [{
+          title: 'OpenAI update',
+          snippet: 'A fresh search summary.',
+          url: 'https://example.com/openai'
+        }]
+      });
+    }
+  };
+  const answers = [];
+
+  await bot.handleInlineQuery({
+    update: { inline_query: { id: 'search-ai-fail', query: '请搜索 OpenAI', from: { id: 801, language_code: 'en' } } },
+    answerInlineQuery: async (results, extra) => answers.push({ results, extra })
+  });
+
+  const text = answers[0].results[0].input_message_content.message_text;
+  assert.match(text, /Live search results/);
+  assert.match(text, /OpenAI update/);
+  assert.match(text, /A fresh search summary/);
+  assert.match(text, /https:\/\/example\.com\/openai/);
+  assert.deepEqual(answers[0].extra, { cache_time: 10, is_personal: true });
 });
 
 test('inline explicit search failure is reported without asking a model to invent an answer', async () => {
@@ -254,16 +429,20 @@ test('retrieved inline search context works with models that do not support tool
     }
   };
 
+  const controller = new AbortController();
   const answer = await bot.completePlatformRequest({
     userId: '81',
     text: '最新消息',
     scope: 'telegram_inline',
     fallbackEnabled: true,
-    retrievedContext: '{"results":[{"title":"fresh"}]}'
+    retrievedContext: '{"results":[{"title":"fresh"}]}',
+    requestTimeoutMs: 500,
+    signal: controller.signal
   });
 
   assert.equal(answer, 'grounded answer');
   assert.equal(request.fallbackEnabled, true);
+  assert.equal(request.request.suppressTimeoutCooldown, true);
   assert.deepEqual(request.request.tools, []);
   assert.match(request.request.messages[1].content, /fresh web search data/i);
 });

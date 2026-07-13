@@ -1,5 +1,6 @@
 import { GeminiClient } from './gemini-client.js';
 import { UnsupportedClientFeatureError } from './unsupported-client-feature-error.js';
+import { createRequestAbort } from '../utils/request-abort.js';
 
 function extractTextFromResponse(response) {
   return (response.candidates?.[0]?.content?.parts || [])
@@ -36,9 +37,12 @@ export class GeminiLiveClient extends GeminiClient {
     return this.capabilities;
   }
 
-  async request(model, payload) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.config.requestTimeoutMs);
+  async request(model, payload, { signal, requestTimeoutMs } = {}) {
+    const requestAbort = createRequestAbort({
+      signal,
+      timeoutMs: requestTimeoutMs,
+      fallbackTimeoutMs: this.config.requestTimeoutMs
+    });
 
     try {
       const endpoint = `${this.liveBaseUrl}/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(this.liveApiKey)}`;
@@ -46,7 +50,7 @@ export class GeminiLiveClient extends GeminiClient {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
-        signal: controller.signal
+        signal: requestAbort.signal
       });
 
       if (!response.ok) {
@@ -56,7 +60,7 @@ export class GeminiLiveClient extends GeminiClient {
 
       return response.json();
     } finally {
-      clearTimeout(timeout);
+      requestAbort.dispose();
     }
   }
 

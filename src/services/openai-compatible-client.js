@@ -1,5 +1,7 @@
 import { truncateText } from '../utils/text.js';
 
+import { createRequestAbort } from '../utils/request-abort.js';
+
 function flattenContent(content) {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
@@ -20,18 +22,22 @@ export class OpenAICompatibleClient {
   }
 
   async request(endpoint, options = {}) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.config.requestTimeoutMs);
+    const { signal: externalSignal, requestTimeoutMs, ...fetchOptions } = options;
+    const requestAbort = createRequestAbort({
+      signal: externalSignal,
+      timeoutMs: requestTimeoutMs,
+      fallbackTimeoutMs: this.config.requestTimeoutMs
+    });
 
     try {
       const response = await fetch(`${this.config.aiBaseUrl}${endpoint}`, {
-        ...options,
+        ...fetchOptions,
         headers: {
           Authorization: 'Bearer ' + this.config.aiApiKey,
-          ...(options.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
-          ...(options.headers || {})
+          ...(fetchOptions.body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+          ...(fetchOptions.headers || {})
         },
-        signal: controller.signal
+        signal: requestAbort.signal
       });
 
       if (!response.ok) {
@@ -45,11 +51,18 @@ export class OpenAICompatibleClient {
       }
       return response.arrayBuffer();
     } finally {
-      clearTimeout(timeout);
+      requestAbort.dispose();
     }
   }
 
-  async chatCompletion({ model, messages, tools = [], temperature = this.config.temperature }) {
+  async chatCompletion({
+    model,
+    messages,
+    tools = [],
+    temperature = this.config.temperature,
+    signal,
+    requestTimeoutMs
+  }) {
     const payload = {
       model,
       messages,
@@ -63,15 +76,24 @@ export class OpenAICompatibleClient {
 
     return this.request('/chat/completions', {
       method: 'POST',
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal,
+      requestTimeoutMs
     });
   }
 
-  async completeWithTools({ model, messages, tools = [], toolRunner, temperature }) {
+  async completeWithTools({ model, messages, tools = [], toolRunner, temperature, signal, requestTimeoutMs }) {
     const workingMessages = [...messages];
 
     for (let step = 0; step < Math.max(1, this.config.aiMaxToolSteps); step += 1) {
-      const response = await this.chatCompletion({ model, messages: workingMessages, tools, temperature });
+      const response = await this.chatCompletion({
+        model,
+        messages: workingMessages,
+        tools,
+        temperature,
+        signal,
+        requestTimeoutMs
+      });
       const choice = response.choices?.[0];
       if (!choice?.message) {
         throw new Error('AI provider returned an empty response.');
@@ -102,7 +124,13 @@ export class OpenAICompatibleClient {
       }
     }
 
-    const finalResponse = await this.chatCompletion({ model, messages: workingMessages, temperature });
+    const finalResponse = await this.chatCompletion({
+      model,
+      messages: workingMessages,
+      temperature,
+      signal,
+      requestTimeoutMs
+    });
     const finalChoice = finalResponse.choices?.[0]?.message;
     return {
       text: flattenContent(finalChoice?.content),

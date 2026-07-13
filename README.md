@@ -245,7 +245,7 @@ npm run verify
 
 代码部署后，还需要在 BotFather 的 Bot Settings 中为当前 Bot 开启对应平台模式。按钮详情页会根据 `getMe` 返回值显示 Inline、Guest、Guard、Secretary 的实际启用状态。访客、Inline 和 Secretary 的第三方消息不写入普通聊天记录或长期记忆。
 
-Inline Query 会在用户输入变化时不断产生 Telegram 更新。程序默认等待用户停止输入 700ms 后只处理最后一次，并为同一用户的相同问题缓存 60 秒，避免一句话重复消耗多次 AI 调用。可通过 `INLINE_QUERY_DEBOUNCE_MS` 和 `INLINE_QUERY_CACHE_TTL_MS` 调整。
+Inline Query 会在用户输入变化时不断产生 Telegram 更新。程序默认等待用户停止输入 1200ms 后只处理最后一次，并为同一用户的相同问题缓存 60 秒，避免一句话重复消耗多次 AI 调用。每次查询最多占用 7 秒，其中联网预取最多等待 2.5 秒；超时或新输入会立即取消旧任务，避免回复已经失效的 Telegram Query ID。可通过 `INLINE_QUERY_DEBOUNCE_MS`、`INLINE_QUERY_RESPONSE_TIMEOUT_MS`、`INLINE_QUERY_SEARCH_TIMEOUT_MS` 和 `INLINE_QUERY_CACHE_TTL_MS` 调整。
 
 ## English
 

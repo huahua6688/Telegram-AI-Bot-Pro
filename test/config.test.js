@@ -171,24 +171,32 @@ test('loadConfig exposes safe Telegram platform mode defaults', () => {
   delete process.env.GUARD_DEFAULT_ACTION;
   delete process.env.BOT_COLLABORATION_COOLDOWN_MS;
   delete process.env.INLINE_QUERY_DEBOUNCE_MS;
+  delete process.env.INLINE_QUERY_RESPONSE_TIMEOUT_MS;
+  delete process.env.INLINE_QUERY_SEARCH_TIMEOUT_MS;
   delete process.env.INLINE_QUERY_CACHE_TTL_MS;
   let config = loadConfig();
   assert.equal(config.enableSecretaryAutoReply, true);
   assert.equal(config.guardDefaultAction, 'queue');
   assert.equal(config.botCollaborationCooldownMs, 5000);
   assert.equal(config.inlineQueryDebounceMs, 1200);
+  assert.equal(config.inlineQueryResponseTimeoutMs, 7000);
+  assert.equal(config.inlineQuerySearchTimeoutMs, 2500);
   assert.equal(config.inlineQueryCacheTtlMs, 60000);
 
   process.env.ENABLE_SECRETARY_AUTO_REPLY = 'false';
   process.env.GUARD_DEFAULT_ACTION = 'decline';
   process.env.BOT_COLLABORATION_COOLDOWN_MS = '9000';
   process.env.INLINE_QUERY_DEBOUNCE_MS = '900';
+  process.env.INLINE_QUERY_RESPONSE_TIMEOUT_MS = '6500';
+  process.env.INLINE_QUERY_SEARCH_TIMEOUT_MS = '1800';
   process.env.INLINE_QUERY_CACHE_TTL_MS = '120000';
   config = loadConfig();
   assert.equal(config.enableSecretaryAutoReply, false);
   assert.equal(config.guardDefaultAction, 'decline');
   assert.equal(config.botCollaborationCooldownMs, 9000);
   assert.equal(config.inlineQueryDebounceMs, 900);
+  assert.equal(config.inlineQueryResponseTimeoutMs, 6500);
+  assert.equal(config.inlineQuerySearchTimeoutMs, 1800);
   assert.equal(config.inlineQueryCacheTtlMs, 120000);
 });
 

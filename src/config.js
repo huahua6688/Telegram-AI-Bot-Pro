@@ -260,6 +260,8 @@ export function loadConfig() {
       : 'queue',
     botCollaborationCooldownMs: parseInteger(process.env.BOT_COLLABORATION_COOLDOWN_MS, 5000),
     inlineQueryDebounceMs: parseInteger(process.env.INLINE_QUERY_DEBOUNCE_MS, 1200),
+    inlineQueryResponseTimeoutMs: parseInteger(process.env.INLINE_QUERY_RESPONSE_TIMEOUT_MS, 7000),
+    inlineQuerySearchTimeoutMs: parseInteger(process.env.INLINE_QUERY_SEARCH_TIMEOUT_MS, 2500),
     inlineQueryCacheTtlMs: parseInteger(process.env.INLINE_QUERY_CACHE_TTL_MS, 60000),
     databaseFile,
     legacyDataFile,
