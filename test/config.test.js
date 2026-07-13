@@ -176,7 +176,7 @@ test('loadConfig exposes safe Telegram platform mode defaults', () => {
   assert.equal(config.enableSecretaryAutoReply, true);
   assert.equal(config.guardDefaultAction, 'queue');
   assert.equal(config.botCollaborationCooldownMs, 5000);
-  assert.equal(config.inlineQueryDebounceMs, 700);
+  assert.equal(config.inlineQueryDebounceMs, 1200);
   assert.equal(config.inlineQueryCacheTtlMs, 60000);
 
   process.env.ENABLE_SECRETARY_AUTO_REPLY = 'false';

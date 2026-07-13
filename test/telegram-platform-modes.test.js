@@ -16,6 +16,8 @@ function createBot(overrides = {}) {
     botCollaborationCooldownMs: 5000,
     inlineQueryDebounceMs: 100,
     inlineQueryCacheTtlMs: 60000,
+    enableToolCalls: true,
+    enableWebSearch: true,
     ...overrides.config
   };
   bot.db = {
@@ -63,8 +65,8 @@ test('inline mode returns a personal AI article with short Telegram caching', as
   const bot = createBot({
     methods: {
       async completePlatformRequest({ text }) {
-        assert.equal(text, '今日新闻');
-        return '今天的重要新闻摘要。';
+        assert.equal(text, '解释人工智能');
+        return '人工智能是一类让机器完成智能任务的技术。';
       }
     }
   });
@@ -72,7 +74,7 @@ test('inline mode returns a personal AI article with short Telegram caching', as
   await bot.handleInlineQuery({
     update: {
       inline_query: {
-        query: '今日新闻',
+        query: '解释人工智能',
         from: { id: 11, language_code: 'zh-CN' }
       }
     },
@@ -81,7 +83,7 @@ test('inline mode returns a personal AI article with short Telegram caching', as
 
   assert.equal(answers.length, 1);
   assert.equal(answers[0].results[0].type, 'article');
-  assert.equal(answers[0].results[0].input_message_content.message_text, '今天的重要新闻摘要。');
+  assert.equal(answers[0].results[0].input_message_content.message_text, '人工智能是一类让机器完成智能任务的技术。');
   assert.deepEqual(answers[0].extra, { cache_time: 30, is_personal: true });
 });
 
@@ -107,17 +109,163 @@ test('inline mode coalesces rapid typing and only calls AI for the last query', 
     answerInlineQuery: async (results, extra) => answers.push({ id, results, extra })
   });
 
-  const first = bot.handleInlineQuery(makeContext('q1', '今日'));
+  const first = bot.handleInlineQuery(makeContext('q1', '解释'));
   await new Promise((resolve) => setTimeout(resolve, 20));
-  const second = bot.handleInlineQuery(makeContext('q2', '今日新闻'));
+  const second = bot.handleInlineQuery(makeContext('q2', '解释人工智能'));
   await Promise.all([first, second]);
 
   assert.equal(aiCalls, 1);
   assert.equal(answers.find((item) => item.id === 'q1').results.length, 0);
   assert.equal(
     answers.find((item) => item.id === 'q2').results[0].input_message_content.message_text,
-    'answer:今日新闻'
+    'answer:解释人工智能'
   );
+});
+
+test('empty inline query cancels pending work and never invokes AI or search', async () => {
+  let aiCalls = 0;
+  let searchCalls = 0;
+  const answers = [];
+  const bot = createBot({
+    methods: {
+      async completePlatformRequest() {
+        aiCalls += 1;
+        return 'must not run';
+      }
+    }
+  });
+  bot.toolRegistry = {
+    async execute() {
+      searchCalls += 1;
+      return '{}';
+    }
+  };
+  const makeContext = (id, query) => ({
+    update: { inline_query: { id, query, from: { id: 79, language_code: 'zh-CN' } } },
+    answerInlineQuery: async (results, extra) => answers.push({ id, results, extra })
+  });
+
+  const pending = bot.handleInlineQuery(makeContext('pending', '今日新闻'));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const empty = bot.handleInlineQuery(makeContext('empty', ''));
+  await Promise.all([pending, empty]);
+
+  assert.equal(aiCalls, 0);
+  assert.equal(searchCalls, 0);
+  assert.deepEqual(answers.find((item) => item.id === 'empty').results, []);
+  assert.deepEqual(answers.find((item) => item.id === 'empty').extra, { cache_time: 30, is_personal: true });
+});
+
+test('inline current-information query prefetches web results and forces provider fallback', async () => {
+  const calls = [];
+  const bot = createBot({
+    methods: {
+      async completePlatformRequest(options) {
+        calls.push({ type: 'ai', options });
+        return '这是联网后的新闻摘要。';
+      }
+    }
+  });
+  bot.toolRegistry = {
+    async execute(toolCall, context) {
+      calls.push({ type: 'tool', toolCall, context });
+      return JSON.stringify({
+        provider: 'duckduckgo',
+        results: [{ title: '今日新闻', url: 'https://example.com/news', snippet: 'fresh' }]
+      });
+    }
+  };
+  const answers = [];
+
+  await bot.handleInlineQuery({
+    update: { inline_query: { id: 'live-1', query: '今日新闻', from: { id: 80, language_code: 'zh-CN' } } },
+    answerInlineQuery: async (results) => answers.push(results)
+  });
+
+  assert.equal(calls[0].type, 'tool');
+  assert.equal(calls[0].toolCall.function.name, 'web_search');
+  assert.equal(JSON.parse(calls[0].toolCall.function.arguments).query, '今日新闻');
+  assert.equal(calls[1].type, 'ai');
+  assert.equal(calls[1].options.fallbackEnabled, true);
+  assert.match(calls[1].options.retrievedContext, /example\.com\/news/);
+  assert.match(calls[1].options.role, /live-search/);
+  assert.equal(answers[0][0].input_message_content.message_text, '这是联网后的新闻摘要。');
+});
+
+test('inline explicit search failure is reported without asking a model to invent an answer', async () => {
+  let aiCalls = 0;
+  const bot = createBot({
+    methods: {
+      async completePlatformRequest() {
+        aiCalls += 1;
+        return 'invented answer';
+      }
+    }
+  });
+  bot.toolRegistry = {
+    async execute() {
+      return JSON.stringify({ ok: false, error: 'TOOL_EXECUTION_FAILED' });
+    }
+  };
+  const answers = [];
+
+  await bot.handleInlineQuery({
+    update: { inline_query: { id: 'search-fail', query: '请搜索 OpenAI', from: { id: 82, language_code: 'zh-CN' } } },
+    answerInlineQuery: async (results) => answers.push(results)
+  });
+
+  assert.equal(aiCalls, 0);
+  assert.match(answers[0][0].input_message_content.message_text, /实时搜索暂时没有返回有效结果/);
+  assert.equal(platformModesInternals.inlineSearchQuery('帮我搜索 OpenAI'), 'OpenAI');
+});
+
+test('retrieved inline search context works with models that do not support tool calling', async () => {
+  let request;
+  const bot = createBot({
+    config: { defaultModel: 'free-model' },
+    db: {
+      findUser() {
+        return { id: '81' };
+      },
+      consumeDailyQuota() {
+        return { allowed: true };
+      },
+      async incrementStats() {}
+    },
+    methods: {
+      getEffectiveAISettings() {
+        return { providerId: 'free-provider', modelId: 'free-model', fallbackEnabled: false };
+      },
+      checkRateLimit() {
+        return true;
+      },
+      async completeWithAiFallback(options) {
+        request = options;
+        return { result: { text: 'grounded answer' }, providerId: 'fallback-provider', model: 'fallback-model' };
+      },
+      normalizeAiResult(result) {
+        return result;
+      }
+    }
+  });
+  bot.toolRegistry = {
+    getDefinitions() {
+      throw new Error('prefetched search must not require model tool calling');
+    }
+  };
+
+  const answer = await bot.completePlatformRequest({
+    userId: '81',
+    text: '最新消息',
+    scope: 'telegram_inline',
+    fallbackEnabled: true,
+    retrievedContext: '{"results":[{"title":"fresh"}]}'
+  });
+
+  assert.equal(answer, 'grounded answer');
+  assert.equal(request.fallbackEnabled, true);
+  assert.deepEqual(request.request.tools, []);
+  assert.match(request.request.messages[1].content, /fresh web search data/i);
 });
 
 test('inline mode reuses a personal short-term cache for identical queries', async () => {

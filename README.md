@@ -237,7 +237,7 @@ npm run verify
 
 `/help` 回复下方提供 5 个真正可用的 Telegram 模式入口；`/whoami` 只显示 ID，不再附带这些功能按钮：
 
-- **Inline Mode**：在任意聊天输入 `@机器人用户名 问题`，生成一条可直接发送的 AI 答案。
+- **Inline Mode**：在任意聊天输入 `@机器人用户名 问题`，停止输入后生成一条可直接发送的 AI 答案。空白查询不调用 AI；实时问题会先独立联网检索，因此不依赖当前模型的 Tool Calling 能力，模型失败时会自动尝试备用模型/Provider。
 - **Guest Chat Mode**：无需把 Bot 加入聊天，@提及或回复后进行一次性回答。
 - **Guard Mode**：处理入群请求；黑名单拒绝、白名单/管理员通过，其余按“审核 / 开放 / 严格”模式处理。管理员可在 Guard 详情页切换模式、添加、移除和查看名单，也可使用 `/allow ID`、`/disallow ID`、`/block ID`、`/unblock ID`。Bot 是群管理员时，会从 `chat_member` 更新自动同步 Telegram 明确标记的封禁和解封；普通主动退群不会加入黑名单。
 - **Secretary Mode**：通过 Telegram Business/Secretary 连接处理授权聊天，并在有权限时代表账号回复。
