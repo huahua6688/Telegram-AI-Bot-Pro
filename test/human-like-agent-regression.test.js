@@ -12,12 +12,13 @@ test("search results are composed into human answer", () => {
   assert.match(agent, /参考链接/);
 });
 
-test("natural agent is wired before old parsing", () => {
+test("strict translation parsing runs before broad news and search routing", () => {
   assert.match(bot, /tryHandleNaturalAgent/);
   const agentIndex = bot.indexOf("tryHandleNaturalAgent(this, ctx)");
-  const oldIndex = bot.indexOf("parseTranslationRequest(text)");
+  const translationIndex = bot.indexOf("parseTranslationRequest(text)");
   assert.ok(agentIndex > 0);
-  assert.ok(oldIndex > agentIndex);
+  assert.ok(translationIndex > 0);
+  assert.ok(translationIndex < agentIndex);
 });
 
 test("bottom keyboard is minimal", () => {

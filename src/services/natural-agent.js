@@ -124,7 +124,7 @@ function getRecentContext(bot, ctx) {
 
 function stripGeneratedReferences(answer = '') {
   return String(answer || '')
-    .replace(/\n{0,2}(参考链接|参考来源|来源|References|Sources)\s*[:：]?[\s\S]*$/i, '')
+    .replace(/(?:^|\n)[ \t]*(?:参考链接|参考来源|来源|References|Sources)(?:[ \t]*[:：][\s\S]*|[ \t]*(?:\r?\n[\s\S]*)?)$/i, '')
     .trim();
 }
 
@@ -140,6 +140,7 @@ function stripBareUrls(text = '') {
 
 async function rememberHandledInteraction(bot, ctx, userText = '', assistantText = '', model = '') {
   try {
+    if (typeof bot.getActiveMode === 'function' && bot.getActiveMode(ctx)?.type === 'privacy') return;
     const sessionId = createSessionId(ctx);
     const current = Array.isArray(bot.db.getConversation?.(sessionId))
       ? bot.db.getConversation(sessionId)
@@ -214,6 +215,7 @@ function formatSourceTimestamp(value = '', locale = 'zh', timeZone = 'Asia/Kuala
   try {
     return new Intl.DateTimeFormat(String(locale || 'en-GB').replaceAll('_', '-'), {
       timeZone,
+      year: 'numeric',
       month: '2-digit',
       day: '2-digit',
       hour: '2-digit',
@@ -262,7 +264,7 @@ function extractReferenceLinks(raw = '') {
           publishedAt: item.publishedAt || item.pubDate || item.date || ''
         }
       );
-      if (links.length >= 3) break;
+      if (links.length >= 6) break;
     }
 
     if (data.url) add(data.heading || data.title || '网页来源', data.url);
@@ -270,11 +272,11 @@ function extractReferenceLinks(raw = '') {
     const urls = String(raw || '').match(/https?:\/\/[^\s)）]+/g) || [];
     for (const url of urls) {
       add('', url);
-      if (links.length >= 3) break;
+      if (links.length >= 6) break;
     }
   }
 
-  return links.slice(0, 3);
+  return links.slice(0, 6);
 }
 
 function compactToolPayload(raw = '', maxChars = 6000) {
