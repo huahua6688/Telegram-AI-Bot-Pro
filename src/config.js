@@ -48,6 +48,27 @@ function parseList(value) {
     .filter(Boolean);
 }
 
+function normalizeNewsRegion(value = '') {
+  const region = String(value || '').trim().toUpperCase();
+  return /^[A-Z]{2}$/.test(region) ? region : 'MY';
+}
+
+function normalizeNewsLanguage(value = '') {
+  const language = String(value || '').trim();
+  if (!language || language.toLowerCase() === 'auto') return 'auto';
+  return /^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/i.test(language) ? language : 'auto';
+}
+
+function normalizeNewsTimeZone(value = '') {
+  const timeZone = String(value || '').trim() || 'Asia/Kuala_Lumpur';
+  try {
+    new Intl.DateTimeFormat('en', { timeZone }).format(0);
+    return timeZone;
+  } catch {
+    return 'Asia/Kuala_Lumpur';
+  }
+}
+
 function normalizeProviderList(value, fallback = []) {
   const items = parseList(value).map((item) => normalizeProvider(item, '')).filter(Boolean);
   return items.length > 0 ? Array.from(new Set(items)) : fallback;
@@ -263,6 +284,9 @@ export function loadConfig() {
     inlineQueryResponseTimeoutMs: parseInteger(process.env.INLINE_QUERY_RESPONSE_TIMEOUT_MS, 7000),
     inlineQuerySearchTimeoutMs: parseInteger(process.env.INLINE_QUERY_SEARCH_TIMEOUT_MS, 2500),
     inlineQueryCacheTtlMs: parseInteger(process.env.INLINE_QUERY_CACHE_TTL_MS, 60000),
+    newsRegion: normalizeNewsRegion(process.env.NEWS_REGION),
+    newsLanguage: normalizeNewsLanguage(process.env.NEWS_LANGUAGE),
+    newsTimeZone: normalizeNewsTimeZone(process.env.NEWS_TIME_ZONE),
     databaseFile,
     legacyDataFile,
     adminUserIds: new Set(parseList(process.env.ADMIN_USER_IDS).map(String)),

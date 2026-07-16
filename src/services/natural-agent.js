@@ -5,6 +5,22 @@ import { personaPresets } from '../config.js';
 const TARGET_LANGUAGE_PATTERN =
   '(韩语|韓語|韩国语|韓國語|korean|日语|日語|japanese|英语|英文|english|中文|chinese|高棉语|高棉語|柬埔寨语|柬埔寨語|khmer|粤语|粵語|cantonese|泰语|泰語|thai|马来语|馬來語|malay|越南语|越南語|vietnamese|法语|法語|french|西班牙语|西班牙語|spanish)';
 
+function isChineseLocale(locale = '') {
+  return String(locale || '').toLowerCase().startsWith('zh');
+}
+
+function resolveNewsLanguage(locale = 'zh', configured = 'auto') {
+  const configuredLanguage = String(configured || '').trim();
+  if (configuredLanguage && configuredLanguage.toLowerCase() !== 'auto') return configuredLanguage;
+
+  const normalized = String(locale || 'zh').trim().replaceAll('_', '-').toLowerCase();
+  if (normalized === 'yue' || normalized.startsWith('zh-hant') || /^zh-(?:tw|hk|mo)\b/.test(normalized)) {
+    return 'zh-TW';
+  }
+  if (normalized.startsWith('zh')) return 'zh-CN';
+  return normalized || 'en';
+}
+
 function escapeHtml(value = '') {
   return String(value || '')
     .replaceAll('&', '&amp;')
@@ -22,13 +38,18 @@ function cleanPlainText(text = '') {
     .replace(/```[\s\S]*?```/g, (block) =>
       block.replace(/^```[\w-]*\n?/, '').replace(/```$/, '').trim()
     )
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    .replace(/__([^_]+)__/g, '$1')
+    .replace(/^\s*(?:\*{3,}|_{3,}|-{3,}|={3,})\s*$/gm, '')
+    .replace(/\*\*\*([^*\n]+)\*\*\*/g, '$1')
+    .replace(/___([^_\n]+)___/g, '$1')
+    .replace(/\*\*([^*\n]+)\*\*/g, '$1')
+    .replace(/__([^_\n]+)__/g, '$1')
     .replace(/`([^`]+)`/g, '$1')
     .replace(/^\s{0,3}#{1,6}\s+/gm, '')
     .replace(/^\s*[\*•]\s+/gm, '- ')
     .replace(/^\s*>\s?/gm, '')
     .replace(/\[(.*?)\]\((https?:\/\/[^)]+)\)/g, '$1 $2')
+    .replace(/(^|[^\w])\*([^*\n]+)\*/g, '$1$2')
+    .replace(/(^|[^\w])_([^_\n]+)_/g, '$1$2')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
@@ -170,31 +191,57 @@ function normalizeUrl(url = '') {
 
   try {
     const u = new URL(raw);
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
 
-    if (u.hostname.includes('news.google.com') && u.searchParams.get('url')) {
-      return u.searchParams.get('url') || raw;
+    if ((u.hostname === 'news.google.com' || u.hostname.endsWith('.news.google.com')) && u.searchParams.get('url')) {
+      try {
+        const target = new URL(u.searchParams.get('url'));
+        if (target.protocol === 'http:' || target.protocol === 'https:') return target.toString();
+      } catch {
+        // Keep the safe Google News URL when its optional redirect target is malformed.
+      }
     }
 
-    return raw;
+    return u.toString();
   } catch {
-    return raw;
+    return '';
+  }
+}
+
+function formatSourceTimestamp(value = '', locale = 'zh', timeZone = 'Asia/Kuala_Lumpur') {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  try {
+    return new Intl.DateTimeFormat(String(locale || 'en-GB').replaceAll('_', '-'), {
+      timeZone,
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    }).format(date);
+  } catch {
+    return date.toISOString().slice(5, 16).replace('T', ' ');
   }
 }
 
 function extractReferenceLinks(raw = '') {
   const links = [];
 
-  function add(title, url) {
+  function add(title, url, { sourceName = '', publishedAt = '' } = {}) {
     const cleanUrl = normalizeUrl(url);
     const cleanTitle = cleanPlainText(title || '');
+    const cleanSourceName = cleanPlainText(sourceName || '');
 
     if (!cleanUrl) return;
     if (links.some((item) => item.url === cleanUrl)) return;
 
-    let label = cleanTitle || cleanUrl.replace(/^https?:\/\//, '').split('/')[0] || '来源';
-    label = truncateText(label.replace(/\s+/g, ' ').trim(), 80);
+    let label = cleanSourceName && cleanTitle
+      ? `${cleanSourceName}｜${cleanTitle}`
+      : cleanSourceName || cleanTitle || cleanUrl.replace(/^https?:\/\//, '').split('/')[0] || '来源';
+    label = truncateText(label.replace(/\s+/g, ' ').trim(), 110);
 
-    links.push({ title: label, url: cleanUrl });
+    links.push({ title: label, url: cleanUrl, sourceName: cleanSourceName, publishedAt });
   }
 
   try {
@@ -207,7 +254,14 @@ function extractReferenceLinks(raw = '') {
         : [];
 
     for (const item of results) {
-      add(item.title || item.Text || item.name, item.url || item.FirstURL || item.link);
+      add(
+        item.title || item.Text || item.name,
+        item.url || item.FirstURL || item.link,
+        {
+          sourceName: item.sourceName || item.source || item.publisher || '',
+          publishedAt: item.publishedAt || item.pubDate || item.date || ''
+        }
+      );
       if (links.length >= 3) break;
     }
 
@@ -223,12 +277,14 @@ function extractReferenceLinks(raw = '') {
   return links.slice(0, 3);
 }
 
-function compactToolPayload(raw = '') {
+function compactToolPayload(raw = '', maxChars = 6000) {
   const text = String(raw || '').trim();
   if (!text) return '';
 
   try {
     const data = JSON.parse(text);
+    const parsedMaxChars = Number(maxChars);
+    const safeMaxChars = Math.max(2, Number.isFinite(parsedMaxChars) ? Math.floor(parsedMaxChars) : 6000);
 
     const results = Array.isArray(data.results)
       ? data.results
@@ -236,40 +292,120 @@ function compactToolPayload(raw = '') {
         ? data.topics
         : [];
 
-    return JSON.stringify(
-      {
-        heading: data.heading || '',
-        answer: data.answer || '',
-        abstract: data.abstract || '',
+    const compact = {
+        heading: truncateText(String(data.heading || ''), 300),
+        answer: truncateText(String(data.answer || ''), 1200),
+        abstract: truncateText(String(data.abstract || ''), 1200),
         location: data.location || '',
         current: data.current || null,
         forecast: Array.isArray(data.forecast) ? data.forecast.slice(0, 5) : [],
-        results: results.slice(0, 8).map((item) => ({
-          title: item.title || item.Text || '',
-          description: item.description || item.Text || '',
-          url: item.url || item.FirstURL || item.link || ''
+        results: results.slice(0, 6).map((item) => ({
+          title: truncateText(String(item.title || item.Text || ''), 220),
+          description: truncateText(String(item.description || item.snippet || item.Text || ''), 600),
+          url: String(item.url || item.FirstURL || item.link || '').length <= 1400
+            ? String(item.url || item.FirstURL || item.link || '')
+            : '',
+          sourceName: truncateText(String(item.sourceName || item.source || item.publisher || ''), 120),
+          publishedAt: item.publishedAt || item.pubDate || item.date || ''
         }))
-      },
-      null,
-      2
-    );
+      };
+    let serialized = JSON.stringify(compact, null, 2);
+    while (serialized.length > safeMaxChars && compact.results.length > 1) {
+      compact.results.pop();
+      serialized = JSON.stringify(compact, null, 2);
+    }
+    if (serialized.length > safeMaxChars) {
+      compact.forecast = [];
+      compact.current = null;
+      compact.abstract = truncateText(compact.abstract, 300);
+      compact.answer = truncateText(compact.answer, 300);
+      serialized = JSON.stringify(compact, null, 2);
+    }
+    if (serialized.length > safeMaxChars) {
+      const fallback = {
+        heading: truncateText(compact.heading, 120),
+        answer: truncateText(compact.answer, 200),
+        results: compact.results.slice(0, 1).map((item) => ({
+          ...item,
+          description: truncateText(item.description, 200)
+        }))
+      };
+      serialized = JSON.stringify(fallback);
+      if (serialized.length > safeMaxChars) {
+        fallback.results = [];
+        serialized = JSON.stringify(fallback);
+      }
+      return serialized.length <= safeMaxChars ? serialized : '{}';
+    }
+    return serialized;
   } catch {
     return truncateText(text, 6000);
   }
 }
 
-function appendClickableReferences(answer = '', raw = '') {
+function escapeHtmlWithinLimit(value = '', maxChars = 3600) {
+  const text = String(value || '');
+  const parsedMaxChars = Number(maxChars);
+  const limit = Math.max(0, Number.isFinite(parsedMaxChars) ? Math.floor(parsedMaxChars) : 3600);
+  const escaped = escapeHtml(text);
+  if (escaped.length <= limit) return escaped;
+  if (limit <= 3) return '.'.repeat(limit);
+
+  const suffix = '...';
+  const prefixBudget = limit - suffix.length;
+  let low = 0;
+  let high = text.length;
+  let best = '';
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const candidate = escapeHtml(text.slice(0, middle));
+    if (candidate.length <= prefixBudget) {
+      best = candidate;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return `${best}${suffix}`;
+}
+
+function appendClickableReferences(
+  answer = '',
+  raw = '',
+  locale = 'zh',
+  maxChars = 3600,
+  timeZone = 'Asia/Kuala_Lumpur'
+) {
+  const parsedMaxChars = Number(maxChars);
+  const safeMaxChars = Math.max(
+    1,
+    Number.isFinite(parsedMaxChars) ? Math.floor(parsedMaxChars) : 3600
+  );
   const links = extractReferenceLinks(raw);
-  const cleanedAnswer = stripBareUrls(stripGeneratedReferences(answer));
-  const body = escapeHtml(cleanPlainText(cleanedAnswer));
+  const cleanedAnswer = stripBareUrls(stripGeneratedReferences(cleanPlainText(answer)));
+  const plainBody = cleanPlainText(cleanedAnswer);
 
-  if (!links.length) return body;
+  if (!links.length) return escapeHtmlWithinLimit(plainBody, safeMaxChars);
 
-  const refLines = links.map((item, index) => {
-    return `${index + 1}. <a href="${escapeAttr(item.url)}">${escapeHtml(item.title)}</a>`;
-  });
+  const chineseHeading = isChineseLocale(locale);
+  const heading = chineseHeading ? '参考来源' : 'Sources';
+  const headingLine = `${heading}${chineseHeading ? '：' : ':'}`;
+  const minimumBodyBudget = Math.min(200, Math.floor(safeMaxChars / 4));
+  const maximumSourceLength = safeMaxChars - minimumBodyBudget - 2;
+  const refLines = [];
+  for (const item of links) {
+    const timestamp = formatSourceTimestamp(item.publishedAt, locale, timeZone);
+    const line = `${refLines.length + 1}. <a href="${escapeAttr(item.url)}">${escapeHtml(item.title)}</a>${timestamp ? ` · ${escapeHtml(timestamp)}` : ''}`;
+    const candidate = `${headingLine}\n${[...refLines, line].join('\n')}`;
+    if (candidate.length <= maximumSourceLength) refLines.push(line);
+  }
 
-  return `${body}\n\n参考链接：\n${refLines.join('\n')}`;
+  if (!refLines.length) return escapeHtmlWithinLimit(plainBody, safeMaxChars);
+
+  const sourceBlock = `${headingLine}\n${refLines.join('\n')}`;
+  const bodyBudget = Math.max(0, safeMaxChars - sourceBlock.length - 2);
+  const body = escapeHtmlWithinLimit(plainBody, bodyBudget);
+  return body ? `${body}\n\n${sourceBlock}` : sourceBlock;
 }
 
 function rawFallbackText(raw = '', title = '结果') {
@@ -333,22 +469,128 @@ function decodeXml(value = '') {
 }
 
 function extractXmlTag(block = '', tag = '') {
-  const pattern = new RegExp(`<${tag}>([\\s\\S]*?)<\\/${tag}>`, 'i');
+  const pattern = new RegExp(`<${tag}(?:\\s[^>]*)?>([\\s\\S]*?)<\\/${tag}>`, 'i');
   const match = String(block || '').match(pattern);
   return match ? decodeXml(match[1]) : '';
 }
 
-async function fetchNewsFallback(query = '今日新闻', { signal, timeoutMs } = {}) {
+function extractXmlAttribute(block = '', tag = '', attribute = '') {
+  const pattern = new RegExp(`<${tag}\\b[^>]*\\b${attribute}=(?:"([^"]*)"|'([^']*)')`, 'i');
+  const match = String(block || '').match(pattern);
+  return decodeXml(match?.[1] || match?.[2] || '');
+}
+
+function newsLocalDateKey(value, timeZone = 'Asia/Kuala_Lumpur') {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return '';
+  try {
+    const parts = new Intl.DateTimeFormat('en', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    }).formatToParts(date);
+    const values = Object.fromEntries(parts.map((item) => [item.type, item.value]));
+    return `${values.year}-${values.month}-${values.day}`;
+  } catch {
+    return date.toISOString().slice(0, 10);
+  }
+}
+
+function isStrictTodayNewsQuery(query = '') {
+  return /今日|今天|本日|当日|當日|当天|當天|\btoday\b/i.test(String(query || ''));
+}
+
+function getExplicitNewsDateScope(query = '', now = Date.now(), timeZone = 'Asia/Kuala_Lumpur') {
+  const text = String(query || '');
+  const [currentYear] = newsLocalDateKey(now, timeZone).split('-').map(Number);
+  const fullDate = text.match(
+    /((?:19|20)\d{2})\s*(?:年|[-/.])\s*(\d{1,2})(?:\s*(?:月|[-/.])\s*(\d{1,2})(?:\s*(?:日|号|號))?)?/
+  );
+  if (fullDate) {
+    const year = Number(fullDate[1]);
+    const month = Number(fullDate[2]);
+    const day = Number(fullDate[3] || 0);
+    if (month >= 1 && month <= 12 && day >= 0 && day <= 31) return { year, month, day };
+  }
+
+  const monthOnly = text.match(/(?:^|\D)(\d{1,2})\s*月(?:\s*(\d{1,2})\s*(?:日|号|號))?/);
+  if (monthOnly) {
+    const month = Number(monthOnly[1]);
+    const day = Number(monthOnly[2] || 0);
+    if (month >= 1 && month <= 12 && day >= 0 && day <= 31) {
+      return { year: currentYear, month, day };
+    }
+  }
+
+  const yearOnly = text.match(/\b((?:19|20)\d{2})\b/);
+  return yearOnly ? { year: Number(yearOnly[1]), month: 0, day: 0 } : null;
+}
+
+function isDateScopedNewsQuery(query = '', now = Date.now(), timeZone = 'Asia/Kuala_Lumpur') {
+  const text = String(query || '');
+  if (/上周|上週|上个月|上個月|上月|昨日|昨天|前天|last\s+week|last\s+month|yesterday/i.test(text)) {
+    return true;
+  }
+
+  const scope = getExplicitNewsDateScope(text, now, timeZone);
+  if (!scope) return false;
+  const [currentYear, currentMonth, currentDay] = newsLocalDateKey(now, timeZone).split('-').map(Number);
+  if (scope.day === 0) return true;
+  return scope.year !== currentYear || scope.month !== currentMonth || scope.day !== currentDay;
+}
+
+async function fetchNewsFallback(query = '今日新闻', {
+  signal,
+  timeoutMs,
+  now = Date.now(),
+  timeZone = 'Asia/Kuala_Lumpur',
+  region = 'MY',
+  language = 'zh-CN',
+  freshOnly,
+  todayOnly = false
+} = {}) {
   const q = String(query || '今日新闻').trim();
+  const nowMs = now instanceof Date ? now.getTime() : Number(now);
+  const safeNowMs = Number.isFinite(nowMs) ? nowMs : Date.now();
+  const currentYear = Number(newsLocalDateKey(safeNowMs, timeZone).slice(0, 4));
+  const mentionedYears = Array.from(q.matchAll(/\b(?:19|20)\d{2}\b/g), (match) => Number(match[0]));
+  const explicitTodayIntent = isStrictTodayNewsQuery(q);
+  const explicitDateScope = explicitTodayIntent
+    ? null
+    : getExplicitNewsDateScope(q, safeNowMs, timeZone);
+  const isHistoricalQuery = !explicitTodayIntent && (
+    mentionedYears.some((year) => year !== currentYear) ||
+    isDateScopedNewsQuery(q, safeNowMs, timeZone)
+  );
+  const shouldFilterFresh = explicitTodayIntent
+    ? true
+    : typeof freshOnly === 'boolean'
+      ? freshOnly
+      : !isHistoricalQuery;
+  const strictToday = shouldFilterFresh && (todayOnly || explicitTodayIntent);
+  const rssQuery = shouldFilterFresh && !/\bwhen:\d+[hd]\b/i.test(q)
+    ? `${q} when:1d`
+    : q;
   const parsedTimeout = Number(timeoutMs);
   const boundedTimeout = Math.max(50, Math.min(
     8000,
     Number.isFinite(parsedTimeout) && parsedTimeout > 0 ? Math.floor(parsedTimeout) : 4000
   ));
+  const normalizedRegion = String(region || 'MY').trim().toUpperCase() || 'MY';
+  const normalizedLanguage = resolveNewsLanguage('zh', language);
+  const normalizedLanguageLower = normalizedLanguage.toLowerCase();
+  const ceidLanguage = normalizedLanguageLower.startsWith('zh-hant') ||
+    /^zh-(?:tw|hk|mo)\b/.test(normalizedLanguageLower)
+    ? 'zh-Hant'
+    : normalizedLanguageLower.startsWith('zh')
+      ? 'zh-Hans'
+      : normalizedLanguage.split('-')[0];
   const url =
     'https://news.google.com/rss/search?q=' +
-    encodeURIComponent(q) +
-    '&hl=zh-CN&gl=MY&ceid=MY:zh-Hans';
+    encodeURIComponent(rssQuery) +
+    `&hl=${encodeURIComponent(normalizedLanguage)}&gl=${encodeURIComponent(normalizedRegion)}` +
+    `&ceid=${encodeURIComponent(`${normalizedRegion}:${ceidLanguage}`)}`;
 
   const response = await fetch(url, {
     headers: { 'User-Agent': 'Telegram-AI-Bot-Pro' },
@@ -366,18 +608,61 @@ async function fetchNewsFallback(query = '今日新闻', { signal, timeoutMs } =
     const title = extractXmlTag(block, 'title');
     const link = extractXmlTag(block, 'link');
     const pubDate = extractXmlTag(block, 'pubDate');
+    const sourceName = extractXmlTag(block, 'source');
+    const sourceUrl = extractXmlAttribute(block, 'source', 'url');
+    const publishedAtMs = Date.parse(pubDate);
 
-    if (title) items.push({ title, link, pubDate });
-    if (items.length >= 6) break;
+    if (!title || !link) continue;
+    if (explicitDateScope) {
+      if (!Number.isFinite(publishedAtMs)) continue;
+      const [publishedYear, publishedMonth, publishedDay] = newsLocalDateKey(publishedAtMs, timeZone)
+        .split('-')
+        .map(Number);
+      if (publishedYear !== explicitDateScope.year) continue;
+      if (explicitDateScope.month > 0 && publishedMonth !== explicitDateScope.month) continue;
+      if (explicitDateScope.day > 0 && publishedDay !== explicitDateScope.day) continue;
+    }
+    if (shouldFilterFresh) {
+      if (!Number.isFinite(publishedAtMs)) continue;
+      const ageMs = safeNowMs - publishedAtMs;
+      if (ageMs < -15 * 60 * 1000) continue;
+      if (strictToday) {
+        if (newsLocalDateKey(publishedAtMs, timeZone) !== newsLocalDateKey(safeNowMs, timeZone)) continue;
+      } else if (ageMs > 36 * 60 * 60 * 1000) {
+        continue;
+      }
+    }
+
+    items.push({
+      title,
+      link,
+      sourceName,
+      sourceUrl,
+      pubDate,
+      publishedAt: Number.isFinite(publishedAtMs) ? new Date(publishedAtMs).toISOString() : '',
+      publishedAtMs: Number.isFinite(publishedAtMs) ? publishedAtMs : 0
+    });
+    if (items.length >= 50) break;
   }
 
   if (items.length === 0) return '';
 
+  items.sort((left, right) => right.publishedAtMs - left.publishedAtMs);
+
   return JSON.stringify({
-    results: items.map((item) => ({
+    freshOnly: shouldFilterFresh,
+    strictToday,
+    timeZone,
+    results: items.slice(0, 6).map((item) => ({
       title: item.title,
-      description: item.pubDate,
-      url: item.link
+      description: [item.sourceName, formatSourceTimestamp(item.publishedAt, normalizedLanguage, timeZone)]
+        .filter(Boolean)
+        .join(' · '),
+      url: item.link,
+      sourceName: item.sourceName,
+      sourceUrl: item.sourceUrl,
+      pubDate: item.pubDate,
+      publishedAt: item.publishedAt
     }))
   });
 }
@@ -539,7 +824,10 @@ async function runSearch(bot, ctx, query, originalText = query) {
 
     if (!hasUsefulToolResult(raw) && looksLikeNewsSearch(keyword)) {
       const fallbackRaw = await fetchNewsFallback(keyword, {
-        timeoutMs: bot.config?.requestTimeoutMs
+        timeoutMs: bot.config?.requestTimeoutMs,
+        timeZone: bot.config?.newsTimeZone,
+        region: bot.config?.newsRegion,
+        language: resolveNewsLanguage(locale, bot.config?.newsLanguage)
       });
       if (fallbackRaw) raw = fallbackRaw;
     }
@@ -561,7 +849,13 @@ async function runSearch(bot, ctx, query, originalText = query) {
       title: '联网搜索结果'
     });
 
-    const finalText = appendClickableReferences(answer, raw);
+    const finalText = appendClickableReferences(
+      answer,
+      raw,
+      locale,
+      Math.min(3500, Number(bot.config.maxOutputChars) || 3500),
+      bot.config.newsTimeZone
+    );
     await replyHtml(ctx, finalText, bot.config.maxOutputChars);
     await rememberHandledInteraction(bot, ctx, originalText, answer, modelName(bot, ctx));
     return true;
@@ -614,7 +908,13 @@ async function runUrl(bot, ctx, url, originalText = url) {
       title: '网页摘要'
     });
 
-    const finalText = appendClickableReferences(answer, raw || JSON.stringify({ results: [{ title: '打开网页', url: targetUrl }] }));
+    const finalText = appendClickableReferences(
+      answer,
+      raw || JSON.stringify({ results: [{ title: '打开网页', url: targetUrl }] }),
+      locale,
+      Math.min(3500, Number(bot.config.maxOutputChars) || 3500),
+      bot.config.newsTimeZone
+    );
     await replyHtml(ctx, finalText, bot.config.maxOutputChars);
     await rememberHandledInteraction(bot, ctx, originalText, answer, modelName(bot, ctx));
     return true;
@@ -654,7 +954,13 @@ async function runWeather(bot, ctx, location, originalText = location) {
       title: '天气'
     });
 
-    const finalText = appendClickableReferences(answer, raw);
+    const finalText = appendClickableReferences(
+      answer,
+      raw,
+      locale,
+      Math.min(3500, Number(bot.config.maxOutputChars) || 3500),
+      bot.config.newsTimeZone
+    );
     await replyHtml(ctx, finalText, bot.config.maxOutputChars);
     await rememberHandledInteraction(bot, ctx, originalText, answer, modelName(bot, ctx));
     return true;
@@ -942,13 +1248,21 @@ export const naturalAgentInternals = {
   isFollowUpOnly,
   extractWeatherLocation,
   looksLikeNewsSearch,
+  isStrictTodayNewsQuery,
   looksLikeCurrentSearch,
   normalizeSearchQuery,
   cleanPlainText,
   getRecentContext,
   hasUsefulToolResult,
   extractReferenceLinks,
+  compactToolPayload,
   appendClickableReferences,
+  escapeHtmlWithinLimit,
+  resolveNewsLanguage,
+  formatSourceTimestamp,
+  newsLocalDateKey,
+  getExplicitNewsDateScope,
+  isDateScopedNewsQuery,
   rawFallbackText,
   composeHumanAnswer,
   fetchNewsFallback,

@@ -36,7 +36,15 @@ function createBot(overrides = {}) {
   bot.inlineQueryStates = new Map();
   bot.inlineResultCache = new Map();
   bot.bot = overrides.bot || { telegram: { async callApi() {} } };
-  bot.getLocale = () => 'zh';
+  bot.getLocale = (ctx, storedUser = undefined) => {
+    const preferred = String(storedUser?.preferredLanguage || '').trim().toLowerCase();
+    if (preferred && preferred !== 'auto') return preferred;
+    const sender = ctx?.from || ctx?.update?.inline_query?.from || {};
+    const code = String(sender.language_code || 'zh').toLowerCase();
+    if (code.startsWith('zh-hant') || /^zh-(?:tw|hk|mo)/.test(code)) return 'zh-hant';
+    if (code.startsWith('zh')) return 'zh';
+    return code.split('-')[0] || 'en';
+  };
   bot.isAllowed = () => true;
   bot.checkRateLimit = () => true;
   bot.formatLogError = (error) => ({ detail: String(error?.message || error) });
@@ -90,6 +98,32 @@ test('inline mode returns a personal AI article with short Telegram caching', as
   assert.equal(answers[0].results[0].type, 'article');
   assert.equal(answers[0].results[0].input_message_content.message_text, '人工智能是一类让机器完成智能任务的技术。');
   assert.deepEqual(answers[0].extra, { cache_time: 30, is_personal: true });
+});
+
+test('inline mode honors the saved account language instead of Telegram device language', async () => {
+  let requestLocale = '';
+  const bot = createBot({
+    db: {
+      findUser() {
+        return { id: '111', preferredLanguage: 'km', persona: 'default' };
+      }
+    },
+    methods: {
+      async completePlatformRequest(options) {
+        requestLocale = options.locale;
+        return 'ចម្លើយ';
+      }
+    }
+  });
+  const answers = [];
+
+  await bot.handleInlineQuery({
+    update: { inline_query: { id: 'saved-locale', query: 'hello', from: { id: 111, language_code: 'en-US' } } },
+    answerInlineQuery: async (results) => answers.push(results)
+  });
+
+  assert.equal(requestLocale, 'km');
+  assert.equal(answers[0][0].input_message_content.message_text, 'ចម្លើយ');
 });
 
 test('inline mode coalesces rapid typing and only calls AI for the last query', async () => {
@@ -231,6 +265,82 @@ test('a transient Telegram send failure retries the same answer once', async () 
   assert.equal(responses[0].results[0].input_message_content.message_text, 'ready');
 });
 
+test('inline articles use the same plain-text cleanup as private chat', () => {
+  const article = platformModesInternals.inlineArticle('***重点***\n***\n**正文**\n### 标题', '**查询**');
+  assert.equal(article.input_message_content.message_text, '重点\n\n正文\n标题');
+  assert.equal(article.title, '查询');
+  assert.doesNotMatch(article.input_message_content.message_text, /[\*#]/);
+});
+
+test('inline source HTML stays bounded and complete even when a result URL is oversized', () => {
+  const raw = JSON.stringify({
+    results: [
+      { title: 'Oversized source', url: `https://example.com/${'a'.repeat(5000)}` },
+      { title: 'Verified source', url: 'https://example.org/verified' }
+    ]
+  });
+  const formatted = naturalAgentInternals.appendClickableReferences('***摘要***', raw, 'zh', 3900);
+  const article = platformModesInternals.inlineArticle(formatted, '新闻', { html: true });
+
+  assert.ok(formatted.length <= 3900);
+  assert.match(formatted, /https:\/\/example\.org\/verified/);
+  assert.equal((formatted.match(/<a /g) || []).length, (formatted.match(/<\/a>/g) || []).length);
+  assert.equal(article.input_message_content.parse_mode, 'HTML');
+  assert.equal(article.input_message_content.message_text, formatted);
+});
+
+test('inline HTML escaping respects the output cap with and without sources', () => {
+  const escapeHeavyBody = '<&'.repeat(3000);
+  const withoutSources = naturalAgentInternals.appendClickableReferences(
+    escapeHeavyBody,
+    JSON.stringify({ results: [] }),
+    'zh',
+    3900
+  );
+  const withSources = naturalAgentInternals.appendClickableReferences(
+    escapeHeavyBody,
+    JSON.stringify({ results: [{ title: 'Source', url: 'https://example.com/source' }] }),
+    'en',
+    3900
+  );
+
+  assert.ok(withoutSources.length <= 3900);
+  assert.ok(withSources.length <= 3900);
+  assert.ok(withSources.length > 3500, 'escape-aware truncation should use the available body budget');
+  assert.match(withSources, /Sources:\n1\. <a href="https:\/\/example\.com\/source">Source<\/a>/);
+});
+
+test('inline search payload compaction preserves valid JSON and source metadata', () => {
+  const raw = JSON.stringify({
+    results: Array.from({ length: 20 }, (_, index) => ({
+      title: `Result ${index}`,
+      snippet: 'x'.repeat(2000),
+      url: `https://example.com/${index}`,
+      sourceName: `Source ${index}`,
+      publishedAt: '2026-07-16T03:00:00.000Z'
+    }))
+  });
+  const compact = naturalAgentInternals.compactToolPayload(raw, 6000);
+  const parsed = JSON.parse(compact);
+
+  assert.ok(compact.length <= 6000);
+  assert.ok(parsed.results.length > 0);
+  assert.equal(parsed.results[0].sourceName, 'Source 0');
+  assert.equal(parsed.results[0].publishedAt, '2026-07-16T03:00:00.000Z');
+});
+
+test('unsafe Google News redirect targets never become Telegram link protocols', () => {
+  const raw = JSON.stringify({
+    results: [{
+      title: 'Untrusted redirect',
+      url: 'https://news.google.com/?url=javascript%3Aalert%281%29'
+    }]
+  });
+  const formatted = naturalAgentInternals.appendClickableReferences('摘要', raw, 'zh', 3900);
+  assert.doesNotMatch(formatted, /href="javascript:/i);
+  assert.match(formatted, /href="https:\/\/news\.google\.com\//i);
+});
+
 test('inline Telegram delivery is bounded and aborts a stuck API request', async () => {
   const bot = createBot({ config: { inlineQueryResponseTimeoutMs: 250 } });
   let calls = 0;
@@ -277,7 +387,33 @@ test('inline delivery does not retry non-transient Telegram errors', async () =>
   assert.equal(calls, 1);
 });
 
-test('inline news search races RSS within one budget and cancels the slower web request', async () => {
+test('inline delivery retries malformed Telegram HTML once as plain text', async () => {
+  const bot = createBot();
+  const payloads = [];
+  const error = new Error("400: Bad Request: can't parse entities");
+  error.response = { error_code: 400, description: "Bad Request: can't parse entities" };
+  const article = platformModesInternals.inlineArticle(
+    '摘要\n\n参考来源：\n1. <a href="https://example.com/news">Example</a>',
+    '新闻',
+    { html: true }
+  );
+
+  const delivered = await bot.answerInlineQuerySafely({
+    update: { inline_query: { id: 'html-retry' } },
+    async answerInlineQuery(results) {
+      payloads.push(results);
+      if (payloads.length === 1) throw error;
+    }
+  }, 'html-retry', [article], { cache_time: 1, is_personal: true });
+
+  assert.equal(delivered, true);
+  assert.equal(payloads.length, 2);
+  assert.equal(payloads[0][0].input_message_content.parse_mode, 'HTML');
+  assert.equal('parse_mode' in payloads[1][0].input_message_content, false);
+  assert.match(payloads[1][0].input_message_content.message_text, /Example/);
+});
+
+test('inline news search uses dated RSS without starting undated web search', async () => {
   let toolTimeoutMs = 0;
   let newsTimeoutMs = 0;
   let toolStartedAt = 0;
@@ -308,20 +444,51 @@ test('inline news search races RSS within one budget and cancels the slower web 
 
   let raw;
   try {
-    raw = await bot.getInlineSearchContext({ userId: '775', query: '今日新闻', timeoutMs: 120 });
+    raw = await bot.getInlineSearchContext({ userId: '775', query: 'latest AI news', timeoutMs: 120 });
   } finally {
     naturalAgentInternals.fetchNewsFallback = originalNewsFallback;
   }
 
-  assert.equal(toolTimeoutMs, 120);
+  assert.equal(toolTimeoutMs, 0);
   assert.equal(newsTimeoutMs, 120);
-  assert.ok(toolStartedAt > 0);
+  assert.equal(toolStartedAt, 0);
   assert.ok(newsStartedAt > 0);
-  assert.equal(toolAborted, true);
+  assert.equal(toolAborted, false);
   assert.match(raw, /Fresh headline/);
 });
 
-test('inline RSS fallback only races explicit news intent', async () => {
+test('general news never starts an undated web search when dated RSS is available', async () => {
+  const originalNewsFallback = naturalAgentInternals.fetchNewsFallback;
+  const bot = createBot({ config: { inlineQuerySearchTimeoutMs: 500 } });
+  let toolCalls = 0;
+  bot.toolRegistry = {
+    async execute() {
+      toolCalls += 1;
+      return JSON.stringify({ results: [{ title: 'Old undated result', url: 'https://old.example/news' }] });
+    }
+  };
+  naturalAgentInternals.fetchNewsFallback = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    return JSON.stringify({
+      results: [{
+        title: 'Fresh dated result',
+        url: 'https://fresh.example/news',
+        publishedAt: '2026-07-16T03:00:00.000Z'
+      }]
+    });
+  };
+
+  try {
+    const raw = await bot.getInlineSearchContext({ userId: '775', query: 'latest AI news', timeoutMs: 500 });
+    assert.match(raw, /Fresh dated result/);
+    assert.doesNotMatch(raw, /Old undated result/);
+    assert.equal(toolCalls, 0);
+  } finally {
+    naturalAgentInternals.fetchNewsFallback = originalNewsFallback;
+  }
+});
+
+test('inline RSS fallback only runs for explicit news intent', async () => {
   let newsCalls = 0;
   const originalNewsFallback = naturalAgentInternals.fetchNewsFallback;
   const bot = createBot();
@@ -352,6 +519,32 @@ test('inline RSS fallback only races explicit news intent', async () => {
   assert.notEqual(platformModesInternals.inlineSearchQuery('热点时事资讯'), '');
   assert.equal(platformModesInternals.isInlineNewsQuery('最新汇率'), false);
   assert.equal(platformModesInternals.isInlineNewsQuery('今天新加坡天气'), false);
+});
+
+test('dated news RSS remains available when model tool calling is disabled', async () => {
+  const originalNewsFallback = naturalAgentInternals.fetchNewsFallback;
+  const bot = createBot({ config: { enableToolCalls: false, enableWebSearch: true } });
+  bot.toolRegistry = undefined;
+  let receivedOptions;
+  naturalAgentInternals.fetchNewsFallback = async (_query, options) => {
+    receivedOptions = options;
+    return JSON.stringify({
+      results: [{
+        title: 'Verified dated news',
+        url: 'https://example.com/dated',
+        publishedAt: '2026-07-16T03:00:00.000Z'
+      }]
+    });
+  };
+
+  try {
+    const raw = await bot.getInlineSearchContext({ userId: '775', query: 'today news', locale: 'km' });
+    assert.match(raw, /Verified dated news/);
+    assert.equal(receivedOptions.todayOnly, true);
+    assert.equal(receivedOptions.language, 'km');
+  } finally {
+    naturalAgentInternals.fetchNewsFallback = originalNewsFallback;
+  }
 });
 
 test('quota guard only charges one expensive action per Telegram update', async () => {
@@ -539,6 +732,45 @@ test('failed platform AI work refunds its reserved quota', async () => {
   assert.equal(usage, 0);
 });
 
+test('a quota-refund persistence error never suppresses the prepared inline reply', async () => {
+  let usage = 0;
+  let writes = 0;
+  const warnings = [];
+  const answers = [];
+  const bot = createBot({
+    db: {
+      findUser() { return { id: '778' }; },
+      consumeDailyQuota() {
+        usage += 1;
+        return { allowed: true };
+      },
+      refundDailyQuota() {
+        usage = Math.max(0, usage - 1);
+      },
+      async write() {
+        writes += 1;
+        if (writes > 1) throw new Error('injected refund persistence failure');
+      }
+    },
+    methods: {
+      async completePlatformRequest() {
+        throw new Error('provider unavailable');
+      }
+    }
+  });
+  bot.logger.warn = (message) => warnings.push(message);
+
+  await bot.handleInlineQuery({
+    update: { inline_query: { id: 'refund-write-fail', query: 'hello', from: { id: 778, language_code: 'en' } } },
+    answerInlineQuery: async (results) => answers.push(results)
+  });
+
+  assert.equal(usage, 0);
+  assert.equal(answers.length, 1);
+  assert.match(answers[0][0].input_message_content.message_text, /暂时无法处理/);
+  assert.ok(warnings.includes('Failed to persist inline quota refund'));
+});
+
 test('empty inline query cancels pending work and never invokes AI or search', async () => {
   let aiCalls = 0;
   let searchCalls = 0;
@@ -575,35 +807,48 @@ test('empty inline query cancels pending work and never invokes AI or search', a
 
 test('inline current-information query prefetches web results and forces provider fallback', async () => {
   const calls = [];
+  const originalNewsFallback = naturalAgentInternals.fetchNewsFallback;
   const bot = createBot({
     methods: {
       async completePlatformRequest(options) {
         calls.push({ type: 'ai', options });
-        return '这是联网后的新闻摘要。';
+        return '***这是联网后的新闻摘要。***\n来源：https://fake.example/news';
       }
     }
   });
   bot.toolRegistry = {
-    async execute(toolCall, context) {
-      calls.push({ type: 'tool', toolCall, context });
-      return JSON.stringify({
-        provider: 'duckduckgo',
-        results: [{ title: '今日新闻', url: 'https://example.com/news', snippet: 'fresh' }]
-      });
+    async execute() {
+      throw new Error('strict today news must not use undated web results');
     }
+  };
+  naturalAgentInternals.fetchNewsFallback = async (query, options) => {
+    calls.push({ type: 'rss', query, options });
+    return JSON.stringify({
+      provider: 'google-news-rss',
+      results: [{
+        title: '今日新闻',
+        sourceName: 'Example News',
+        publishedAt: '2026-07-16T03:00:00.000Z',
+        url: 'https://example.com/news',
+        description: 'Example News · 07/16 11:00'
+      }]
+    });
   };
   const answers = [];
 
-  await bot.handleInlineQuery({
-    update: { inline_query: { id: 'live-1', query: '今日新闻', from: { id: 80, language_code: 'zh-CN' } } },
-    answerInlineQuery: async (results) => answers.push(results)
-  });
+  try {
+    await bot.handleInlineQuery({
+      update: { inline_query: { id: 'live-1', query: '今日新闻', from: { id: 80, language_code: 'zh-CN' } } },
+      answerInlineQuery: async (results) => answers.push(results)
+    });
+  } finally {
+    naturalAgentInternals.fetchNewsFallback = originalNewsFallback;
+  }
 
-  assert.equal(calls[0].type, 'tool');
-  assert.equal(calls[0].toolCall.function.name, 'web_search');
-  assert.equal(JSON.parse(calls[0].toolCall.function.arguments).query, '今日新闻');
-  assert.ok(calls[0].context.signal instanceof AbortSignal);
-  assert.equal(calls[0].context.requestTimeoutMs, 3500);
+  assert.equal(calls[0].type, 'rss');
+  assert.equal(calls[0].query, '今日新闻');
+  assert.ok(calls[0].options.signal instanceof AbortSignal);
+  assert.equal(calls[0].options.timeoutMs, 3500);
   assert.equal(calls[1].type, 'ai');
   assert.equal(calls[1].options.fallbackEnabled, true);
   assert.ok(calls[1].options.signal instanceof AbortSignal);
@@ -611,7 +856,55 @@ test('inline current-information query prefetches web results and forces provide
   assert.ok(calls[1].options.requestTimeoutMs <= 7000);
   assert.match(calls[1].options.retrievedContext, /example\.com\/news/);
   assert.match(calls[1].options.role, /live-search/);
-  assert.equal(answers[0][0].input_message_content.message_text, '这是联网后的新闻摘要。');
+  const message = answers[0][0].input_message_content;
+  assert.match(message.message_text, /这是联网后的新闻摘要/);
+  assert.match(message.message_text, /参考来源/);
+  assert.match(message.message_text, /Example News/);
+  assert.match(message.message_text, /07\/16.*11:00/);
+  assert.match(message.message_text, /https:\/\/example\.com\/news/);
+  assert.doesNotMatch(message.message_text, /fake\.example|\*\*\*/);
+  assert.equal(message.parse_mode, 'HTML');
+});
+
+test('strict today news never falls back to an old undated web result', async () => {
+  const originalNewsFallback = naturalAgentInternals.fetchNewsFallback;
+  let toolCalls = 0;
+  let aiCalls = 0;
+  const bot = createBot({
+    methods: {
+      async completePlatformRequest() {
+        aiCalls += 1;
+        return 'must not run';
+      }
+    }
+  });
+  bot.toolRegistry = {
+    async execute(toolCall, context) {
+      void toolCall;
+      void context;
+      toolCalls += 1;
+      return JSON.stringify({
+        results: [{ title: 'Old story', url: 'https://old.example/story' }]
+      });
+    }
+  };
+  naturalAgentInternals.fetchNewsFallback = async () => '';
+  const answers = [];
+
+  try {
+    await bot.handleInlineQuery({
+      update: { inline_query: { id: 'today-empty', query: '今日新闻', from: { id: 80, language_code: 'zh-CN' } } },
+      answerInlineQuery: async (results) => answers.push(results)
+    });
+  } finally {
+    naturalAgentInternals.fetchNewsFallback = originalNewsFallback;
+  }
+
+  const text = answers[0][0].input_message_content.message_text;
+  assert.equal(toolCalls, 0);
+  assert.equal(aiCalls, 0);
+  assert.match(text, /不会用旧闻冒充今日结果/);
+  assert.doesNotMatch(text, /Old story/);
 });
 
 test('inline search formats retrieved results when AI generation fails', async () => {
@@ -681,7 +974,11 @@ test('retrieved inline search context works with models that do not support tool
     config: { defaultModel: 'free-model' },
     db: {
       findUser() {
-        return { id: '81' };
+        return {
+          id: '81',
+          preferredLanguage: 'km',
+          customSystemPrompt: 'CUSTOM INLINE PERSONA'
+        };
       },
       consumeDailyQuota() {
         return { allowed: true };
@@ -723,21 +1020,42 @@ test('retrieved inline search context works with models that do not support tool
 
   assert.equal(answer, 'grounded answer');
   assert.equal(request.fallbackEnabled, true);
+  assert.equal(request.preferredProvider, 'free-provider');
+  assert.equal(request.model, 'free-model');
   assert.equal(request.request.suppressTimeoutCooldown, true);
   assert.deepEqual(request.request.tools, []);
   assert.match(request.request.messages[1].content, /fresh web search data/i);
+  assert.match(request.request.messages[0].content, /CUSTOM INLINE PERSONA/);
+  assert.match(request.request.messages[0].content, /Do not use Markdown headings/);
+  assert.match(request.request.messages[0].content, /never invent a source/);
+  assert.doesNotMatch(request.request.messages[0].content, /Use only its dated facts/);
 });
 
 test('inline mode reuses a personal short-term cache for identical queries', async () => {
   let aiCalls = 0;
+  let quotaCalls = 0;
+  let rateChecks = 0;
   const bot = createBot({
+    db: {
+      findUser() { return { id: '78', persona: 'default' }; },
+      consumeDailyQuota() {
+        quotaCalls += 1;
+        return { allowed: true };
+      },
+      async write() {}
+    },
     methods: {
+      checkRateLimit() {
+        rateChecks += 1;
+        return true;
+      },
       async completePlatformRequest() {
         aiCalls += 1;
         return 'cached answer';
       }
     }
   });
+  bot.rateLimits = new Map();
   const makeContext = (id) => ({
     update: { inline_query: { id, query: 'same question', from: { id: 78, language_code: 'en' } } },
     answerInlineQuery: async () => undefined
@@ -746,6 +1064,53 @@ test('inline mode reuses a personal short-term cache for identical queries', asy
   await bot.handleInlineQuery(makeContext('same-1'));
   await bot.handleInlineQuery(makeContext('same-2'));
   assert.equal(aiCalls, 1);
+  assert.equal(quotaCalls, 1);
+  assert.equal(rateChecks, 1);
+});
+
+test('inline cache preserves source HTML and invalidates when persona settings change', async () => {
+  let aiCalls = 0;
+  let searchCalls = 0;
+  const user = { id: '781', persona: 'default', preferredLanguage: 'en' };
+  const answers = [];
+  const bot = createBot({
+    db: {
+      findUser() { return user; },
+      consumeDailyQuota() { return { allowed: true }; },
+      async write() {}
+    },
+    methods: {
+      async getInlineSearchContext() {
+        searchCalls += 1;
+        return JSON.stringify({
+          results: [{ title: 'Fresh source', url: 'https://example.com/fresh' }]
+        });
+      },
+      async completePlatformRequest() {
+        aiCalls += 1;
+        return `***answer:${user.persona}***`;
+      }
+    }
+  });
+  const makeContext = (id) => ({
+    update: { inline_query: { id, query: 'search latest update', from: { id: 781, language_code: 'zh-CN' } } },
+    answerInlineQuery: async (results) => answers.push(results[0])
+  });
+
+  await bot.handleInlineQuery(makeContext('html-cache-1'));
+  await bot.handleInlineQuery(makeContext('html-cache-2'));
+  assert.equal(aiCalls, 1);
+  assert.equal(searchCalls, 1);
+  assert.equal(answers[0].input_message_content.parse_mode, 'HTML');
+  assert.equal(answers[1].input_message_content.parse_mode, 'HTML');
+  assert.match(answers[1].input_message_content.message_text, /<a href="https:\/\/example\.com\/fresh">/);
+  assert.doesNotMatch(answers[1].input_message_content.message_text, /\*\*\*/);
+
+  user.persona = 'teacher';
+  await bot.handleInlineQuery(makeContext('html-cache-3'));
+  assert.equal(aiCalls, 2);
+  assert.equal(searchCalls, 2);
+  assert.match(answers[2].input_message_content.message_text, /answer:teacher/);
 });
 
 test('guest mode answers once through answerGuestQuery without saving a conversation', async () => {
