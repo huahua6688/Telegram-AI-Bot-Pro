@@ -168,20 +168,204 @@ test('Google News RSS fallback stops at its own timeout', async () => {
   assert.ok(Date.now() - startedAt < 500, 'news fallback should be bounded');
 });
 
-test('Google News RSS fallbacks unwrap CDATA titles and dates', async () => {
+test('Google News RSS fallback keeps only local-today stories, sorts them, and preserves sources', async () => {
+  const requestedUrls = [];
+  globalThis.fetch = async (url) => {
+    requestedUrls.push(String(url));
+    return new Response(`
+      <rss><channel>
+        <item>
+          <title><![CDATA[Older local-today headline]]></title>
+          <link>https://example.com/older-today</link>
+          <pubDate><![CDATA[Sun, 12 Jul 2026 23:30:00 GMT]]></pubDate>
+          <source url="https://www.apnews.com">AP News</source>
+        </item>
+        <item>
+          <title><![CDATA[Fresh &amp; verified headline]]></title>
+          <link>https://example.com/fresh</link>
+          <pubDate><![CDATA[Mon, 13 Jul 2026 00:10:00 GMT]]></pubDate>
+          <source url="https://www.reuters.com">Reuters</source>
+        </item>
+        <item>
+          <title>Previous local-day headline</title>
+          <link>https://example.com/old</link>
+          <pubDate>Sun, 12 Jul 2026 15:30:00 GMT</pubDate>
+          <source url="https://example.com">Old Source</source>
+        </item>
+      </channel></rss>
+    `, { status: 200, headers: { 'content-type': 'application/rss+xml' } });
+  };
+
+  const naturalResult = JSON.parse(await naturalAgentInternals.fetchNewsFallback('today news', {
+    now: Date.parse('2026-07-13T00:30:00.000Z'),
+    timeZone: 'Asia/Shanghai',
+    region: 'CN',
+    language: 'zh-CN'
+  }));
+  const productResult = await productAgentInternals.fetchNewsFallback('today news');
+
+  assert.match(new URL(requestedUrls[0]).searchParams.get('q'), /when:1d/);
+  assert.equal(naturalResult.results.length, 2);
+  assert.equal(naturalResult.results[0].title, 'Fresh & verified headline');
+  assert.equal(naturalResult.results[0].sourceName, 'Reuters');
+  assert.equal(naturalResult.results[0].sourceUrl, 'https://www.reuters.com');
+  assert.equal(naturalResult.results[0].publishedAt, '2026-07-13T00:10:00.000Z');
+  assert.equal(naturalResult.results[1].title, 'Older local-today headline');
+  assert.doesNotMatch(JSON.stringify(naturalResult), /Previous local-day headline/);
+  assert.match(productResult, /标题：Fresh & verified headline/);
+  assert.doesNotMatch(productResult, /CDATA/);
+});
+
+test('Google News freshness uses the configured local year and recognizes today synonyms', async () => {
   globalThis.fetch = async () => new Response(`
     <rss><channel><item>
-      <title><![CDATA[Fresh &amp; verified headline]]></title>
-      <link>https://example.com/fresh</link>
-      <pubDate><![CDATA[Mon, 13 Jul 2026 03:00:00 GMT]]></pubDate>
+      <title>Old headline</title>
+      <link>https://example.com/old</link>
+      <pubDate>Mon, 01 Jan 2024 00:00:00 GMT</pubDate>
+      <source url="https://example.com">Old Source</source>
     </item></channel></rss>
   `, { status: 200, headers: { 'content-type': 'application/rss+xml' } });
 
-  const naturalResult = JSON.parse(await naturalAgentInternals.fetchNewsFallback('today news'));
-  const productResult = await productAgentInternals.fetchNewsFallback('today news');
+  const raw = await naturalAgentInternals.fetchNewsFallback('2026 news', {
+    now: Date.parse('2025-12-31T16:30:00.000Z'),
+    timeZone: 'Asia/Kuala_Lumpur'
+  });
 
-  assert.equal(naturalResult.results[0].title, 'Fresh & verified headline');
-  assert.equal(naturalResult.results[0].description, 'Mon, 13 Jul 2026 03:00:00 GMT');
-  assert.match(productResult, /标题：Fresh & verified headline/);
-  assert.doesNotMatch(productResult, /CDATA/);
+  assert.equal(raw, '');
+  assert.equal(naturalAgentInternals.isStrictTodayNewsQuery('当天新闻'), true);
+  assert.equal(naturalAgentInternals.isStrictTodayNewsQuery('當日要聞'), true);
+});
+
+test('Google News allows explicitly date-scoped history from the current year', async () => {
+  let requestedUrl = '';
+  globalThis.fetch = async (url) => {
+    requestedUrl = String(url);
+    return new Response(`
+      <rss><channel><item>
+        <title>January headline</title>
+        <link>https://example.com/january</link>
+        <pubDate>Thu, 15 Jan 2026 02:00:00 GMT</pubDate>
+        <source url="https://example.com">Archive Source</source>
+      </item></channel></rss>
+    `, { status: 200, headers: { 'content-type': 'application/rss+xml' } });
+  };
+
+  const raw = await naturalAgentInternals.fetchNewsFallback('2026年1月新闻', {
+    now: Date.parse('2026-07-16T03:00:00.000Z'),
+    timeZone: 'Asia/Shanghai'
+  });
+
+  assert.match(raw, /January headline/);
+  assert.doesNotMatch(new URL(requestedUrl).searchParams.get('q'), /when:1d/);
+  assert.equal(naturalAgentInternals.isDateScopedNewsQuery('上周新闻'), true);
+  assert.equal(
+    naturalAgentInternals.isDateScopedNewsQuery(
+      '2026年7月新闻',
+      Date.parse('2026-07-16T03:00:00.000Z'),
+      'Asia/Shanghai'
+    ),
+    true
+  );
+  assert.equal(
+    naturalAgentInternals.isDateScopedNewsQuery(
+      '2026年新闻',
+      Date.parse('2026-07-16T03:00:00.000Z'),
+      'Asia/Shanghai'
+    ),
+    true
+  );
+  assert.equal(
+    naturalAgentInternals.isDateScopedNewsQuery(
+      '2026年7月16日新闻',
+      Date.parse('2026-07-16T03:00:00.000Z'),
+      'Asia/Shanghai'
+    ),
+    false
+  );
+});
+
+test('inline-style news filtering keeps the local day and rejects future timestamps', async () => {
+  globalThis.fetch = async () => new Response(`
+    <rss><channel>
+      <item>
+        <title>Today headline</title>
+        <link>https://example.com/today</link>
+        <pubDate>Thu, 16 Jul 2026 02:00:00 GMT</pubDate>
+      </item>
+      <item>
+        <title>Previous local-day headline</title>
+        <link>https://example.com/yesterday</link>
+        <pubDate>Wed, 15 Jul 2026 15:30:00 GMT</pubDate>
+      </item>
+      <item>
+        <title>Future headline</title>
+        <link>https://example.com/future</link>
+        <pubDate>Thu, 16 Jul 2026 03:30:00 GMT</pubDate>
+      </item>
+    </channel></rss>
+  `, { status: 200, headers: { 'content-type': 'application/rss+xml' } });
+
+  const generic = JSON.parse(await naturalAgentInternals.fetchNewsFallback('latest news', {
+    now: Date.parse('2026-07-16T03:00:00.000Z'),
+    timeZone: 'Asia/Shanghai'
+  }));
+  const localToday = JSON.parse(await naturalAgentInternals.fetchNewsFallback('latest news', {
+    now: Date.parse('2026-07-16T03:00:00.000Z'),
+    timeZone: 'Asia/Shanghai',
+    todayOnly: true
+  }));
+
+  assert.match(JSON.stringify(generic), /Previous local-day headline/);
+  assert.doesNotMatch(JSON.stringify(generic), /Future headline/);
+  assert.deepEqual(localToday.results.map((item) => item.title), ['Today headline']);
+});
+
+test('explicit today intent takes precedence over years mentioned as the news topic', async () => {
+  globalThis.fetch = async () => new Response(`
+    <rss><channel>
+      <item>
+        <title>Today article discussing 2025</title>
+        <link>https://example.com/today-about-2025</link>
+        <pubDate>Thu, 16 Jul 2026 02:00:00 GMT</pubDate>
+      </item>
+      <item>
+        <title>Old article published in 2025</title>
+        <link>https://example.com/old-2025</link>
+        <pubDate>Wed, 16 Jul 2025 02:00:00 GMT</pubDate>
+      </item>
+    </channel></rss>
+  `, { status: 200, headers: { 'content-type': 'application/rss+xml' } });
+
+  const result = JSON.parse(await naturalAgentInternals.fetchNewsFallback('今天关于2025年的新闻', {
+    now: Date.parse('2026-07-16T03:00:00.000Z'),
+    timeZone: 'Asia/Shanghai'
+  }));
+
+  assert.equal(result.freshOnly, true);
+  assert.equal(result.strictToday, true);
+  assert.deepEqual(result.results.map((item) => item.title), ['Today article discussing 2025']);
+});
+
+test('Google News requests the traditional Chinese feed for traditional locales', async () => {
+  let requestedUrl = '';
+  globalThis.fetch = async (url) => {
+    requestedUrl = String(url);
+    return new Response(`
+      <rss><channel><item>
+        <title>今日新聞</title>
+        <link>https://example.com/today</link>
+        <pubDate>Thu, 16 Jul 2026 02:00:00 GMT</pubDate>
+        <source url="https://example.com">新聞來源</source>
+      </item></channel></rss>
+    `, { status: 200, headers: { 'content-type': 'application/rss+xml' } });
+  };
+
+  await naturalAgentInternals.fetchNewsFallback('今日新聞', {
+    now: Date.parse('2026-07-16T03:00:00.000Z'),
+    timeZone: 'Asia/Taipei',
+    region: 'TW',
+    language: 'zh-TW'
+  });
+
+  assert.equal(new URL(requestedUrl).searchParams.get('ceid'), 'TW:zh-Hant');
 });

@@ -533,7 +533,7 @@ function formatText(template, params = {}) {
   );
 }
 
-function createSystemPrompt(config, chatSettings, userSettings, locale) {
+export function createSystemPrompt(config, chatSettings, userSettings, locale) {
   const personaPrompt = userSettings.customSystemPrompt || personaPresets[userSettings.persona] || config.systemPrompt;
   const chatPrompt = chatSettings.systemPrompt ? `\n\nChat instructions: ${chatSettings.systemPrompt}` : '';
   const languagePrompt = createLanguagePrompt(locale);
@@ -564,7 +564,7 @@ function createSystemPrompt(config, chatSettings, userSettings, locale) {
 
 
 
-function cleanBotOutput(text = '') {
+export function cleanBotOutput(text = '') {
   const blocks = [];
 
   let out = String(text || '').replace(/```[\s\S]*?```/g, (x) => {

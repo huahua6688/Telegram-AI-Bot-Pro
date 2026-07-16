@@ -174,6 +174,9 @@ test('loadConfig exposes safe Telegram platform mode defaults', () => {
   delete process.env.INLINE_QUERY_RESPONSE_TIMEOUT_MS;
   delete process.env.INLINE_QUERY_SEARCH_TIMEOUT_MS;
   delete process.env.INLINE_QUERY_CACHE_TTL_MS;
+  delete process.env.NEWS_REGION;
+  delete process.env.NEWS_LANGUAGE;
+  delete process.env.NEWS_TIME_ZONE;
   let config = loadConfig();
   assert.equal(config.enableSecretaryAutoReply, true);
   assert.equal(config.guardDefaultAction, 'queue');
@@ -182,6 +185,9 @@ test('loadConfig exposes safe Telegram platform mode defaults', () => {
   assert.equal(config.inlineQueryResponseTimeoutMs, 7000);
   assert.equal(config.inlineQuerySearchTimeoutMs, 2500);
   assert.equal(config.inlineQueryCacheTtlMs, 60000);
+  assert.equal(config.newsRegion, 'MY');
+  assert.equal(config.newsLanguage, 'auto');
+  assert.equal(config.newsTimeZone, 'Asia/Kuala_Lumpur');
 
   process.env.ENABLE_SECRETARY_AUTO_REPLY = 'false';
   process.env.GUARD_DEFAULT_ACTION = 'decline';
@@ -190,6 +196,9 @@ test('loadConfig exposes safe Telegram platform mode defaults', () => {
   process.env.INLINE_QUERY_RESPONSE_TIMEOUT_MS = '6500';
   process.env.INLINE_QUERY_SEARCH_TIMEOUT_MS = '1800';
   process.env.INLINE_QUERY_CACHE_TTL_MS = '120000';
+  process.env.NEWS_REGION = 'sg';
+  process.env.NEWS_LANGUAGE = 'en-SG';
+  process.env.NEWS_TIME_ZONE = 'Asia/Singapore';
   config = loadConfig();
   assert.equal(config.enableSecretaryAutoReply, false);
   assert.equal(config.guardDefaultAction, 'decline');
@@ -198,6 +207,17 @@ test('loadConfig exposes safe Telegram platform mode defaults', () => {
   assert.equal(config.inlineQueryResponseTimeoutMs, 6500);
   assert.equal(config.inlineQuerySearchTimeoutMs, 1800);
   assert.equal(config.inlineQueryCacheTtlMs, 120000);
+  assert.equal(config.newsRegion, 'SG');
+  assert.equal(config.newsLanguage, 'en-SG');
+  assert.equal(config.newsTimeZone, 'Asia/Singapore');
+
+  process.env.NEWS_REGION = 'not-a-region';
+  process.env.NEWS_LANGUAGE = '<invalid>';
+  process.env.NEWS_TIME_ZONE = 'Mars/Olympus';
+  config = loadConfig();
+  assert.equal(config.newsRegion, 'MY');
+  assert.equal(config.newsLanguage, 'auto');
+  assert.equal(config.newsTimeZone, 'Asia/Kuala_Lumpur');
 });
 
 test('loadConfig parses admin API options', () => {
