@@ -70,6 +70,8 @@ test('/help owns the five Telegram platform mode buttons while /whoami stays cle
   ]);
   assert.equal(bot.createWhoamiKeyboard({}, 'zh'), undefined);
   assert.match(replies[0].text, /Telegram 扩展模式/);
+  assert.match(replies[0].text, /把 @botusername 放在句末/);
+  assert.match(replies[0].text, /\/ask@botusername/);
   assert.match(PlatformModesTelegramAIBot.prototype.constructor.toString(), /platform_mode:/);
   assert.doesNotMatch(PlatformModesTelegramAIBot.prototype.registerCommands.toString(), /platform_mode:/);
 });
@@ -98,6 +100,333 @@ test('inline mode returns a personal AI article with short Telegram caching', as
   assert.equal(answers[0].results[0].type, 'article');
   assert.equal(answers[0].results[0].input_message_content.message_text, '人工智能是一类让机器完成智能任务的技术。');
   assert.deepEqual(answers[0].extra, { cache_time: 30, is_personal: true });
+});
+
+test('/ask is an unambiguous human group entry and preserves bot-to-bot behavior', async () => {
+  const calls = [];
+  const bot = createBot({
+    methods: {
+      async handleIncomingMessage(ctx, options) {
+        calls.push({ text: ctx.message.text, options });
+      }
+    }
+  });
+  bot.botUsername = 'assistant_bot';
+  const ctx = {
+    payload: '请解释这个问题',
+    from: { id: 11, is_bot: false },
+    chat: { id: -100, type: 'group' },
+    message: { text: '/ask@assistant_bot 请解释这个问题' },
+    reply: async () => undefined
+  };
+
+  await bot.handleBotAskCommand(ctx);
+  assert.deepEqual(calls, [{ text: '请解释这个问题', options: { forceRespond: true } }]);
+  assert.equal(ctx.message.text, '/ask@assistant_bot 请解释这个问题');
+});
+
+test('group trigger filtering runs before natural actions and strips exact mentions', async () => {
+  let routedText = '';
+  let routedCalls = 0;
+  const bot = createBot({
+    config: { groupTriggerMode: 'smart', groupTriggerKeyword: 'ai' },
+    db: {
+      findUser() { return { id: '12' }; },
+      findChat() { return { triggerMode: 'smart', keyword: 'ai' }; }
+    },
+    methods: {
+      async handleBottomKeyboardAction(ctx) {
+        routedCalls += 1;
+        routedText = ctx.message.text;
+        return true;
+      }
+    }
+  });
+  bot.botUserId = '500';
+  bot.botUsername = 'assistant_bot';
+
+  await bot.handleIncomingMessage({
+    from: { id: 12 },
+    chat: { id: -100, type: 'group' },
+    message: { text: '今日新闻' }
+  });
+  assert.equal(routedCalls, 0, 'unaddressed group text must not reach search/translation/menu routing');
+
+  const addressed = {
+    from: { id: 12 },
+    chat: { id: -100, type: 'group' },
+    message: {
+      text: '今日新闻 @assistant_bot',
+      entities: [{ type: 'mention', offset: 5, length: 14 }]
+    }
+  };
+  await bot.handleIncomingMessage(addressed);
+  assert.equal(routedCalls, 1);
+  assert.equal(routedText, '今日新闻');
+});
+
+test('explicit pending actions work in groups without requiring a second mention', async () => {
+  let handledText = '';
+  const bot = createBot({
+    config: { groupTriggerMode: 'mention', groupTriggerKeyword: 'ai' },
+    db: {
+      findUser() { return { id: '12' }; },
+      findChat() { return { triggerMode: 'mention', keyword: 'ai' }; }
+    },
+    methods: {
+      async handleBottomKeyboardAction() { return false; },
+      async handlePendingMenuAction(ctx) {
+        handledText = ctx.message.text;
+        return true;
+      }
+    }
+  });
+  bot.pendingMenuActions = new Map();
+  bot.activeModes = new Map();
+  const ctx = {
+    from: { id: 12 },
+    chat: { id: -100, type: 'group' },
+    message: { text: '需要处理的下一条内容' }
+  };
+  bot.setPendingMenuAction(ctx, { type: 'web_prompt' });
+
+  await bot.handleIncomingMessage(ctx);
+  assert.equal(handledText, '需要处理的下一条内容');
+});
+
+test('mention-only pings respect access control and punctuation does not consume AI quota', async () => {
+  const replies = [];
+  let quotaCalls = 0;
+  const bot = createBot({
+    config: { groupTriggerMode: 'mention', groupTriggerKeyword: 'ai' },
+    db: {
+      findUser() { return { id: '12', isBlocked: true }; },
+      findChat() { return { triggerMode: 'mention', keyword: 'ai' }; }
+    },
+    methods: {
+      isAllowed() { return false; },
+      async consumeQuotaForContext() { quotaCalls += 1; return true; }
+    }
+  });
+  bot.botUsername = 'assistant_bot';
+  bot.botUserId = '500';
+
+  await bot.handleIncomingMessage({
+    from: { id: 12 },
+    chat: { id: -100, type: 'group' },
+    message: {
+      text: '@assistant_bot？',
+      entities: [{ type: 'mention', offset: 0, length: 14 }]
+    },
+    reply: async (text) => replies.push(text)
+  });
+
+  assert.equal(quotaCalls, 0);
+  assert.equal(replies.length, 1);
+  assert.match(replies[0], /没有.*权限|permission/i);
+});
+
+test('explicit translation is routed before news and search shortcuts', async () => {
+  let translated;
+  const bot = createBot({
+    db: {
+      findUser() { return { id: '12' }; },
+      findChat() { return {}; }
+    },
+    methods: {
+      async handleBottomKeyboardAction() { return false; },
+      async runTranslation(_ctx, text, targetLanguage) {
+        translated = { text, targetLanguage };
+      }
+    }
+  });
+
+  await bot.handleIncomingMessage({
+    from: { id: 12 },
+    chat: { id: 12, type: 'private' },
+    message: { text: '翻译 news' }
+  });
+
+  assert.deepEqual(translated, { text: 'news', targetLanguage: 'auto' });
+});
+
+test('messages sent via this bot inline are not processed again', async () => {
+  let dbReads = 0;
+  const bot = createBot({
+    db: {
+      findUser() { dbReads += 1; return undefined; },
+      findChat() { dbReads += 1; return undefined; }
+    }
+  });
+  bot.botUserId = '500';
+  bot.botUsername = 'assistant_bot';
+
+  await bot.handleIncomingMessage({
+    from: { id: 12 },
+    chat: { id: -100, type: 'group' },
+    message: {
+      text: 'Inline answer',
+      via_bot: { id: 500, username: 'assistant_bot' }
+    }
+  });
+  assert.equal(dbReads, 0);
+});
+
+test('inline translation takes priority over news search and sends only the translation', async () => {
+  let aiRequest;
+  let searchCalls = 0;
+  let quotaCalls = 0;
+  const answers = [];
+  const bot = createBot({
+    config: {
+      translationProvider: 'gemini',
+      translationModel: 'translation-model',
+      defaultModel: 'chat-model'
+    },
+    db: {
+      findUser() { return { id: '112', preferredLanguage: 'zh' }; },
+      consumeDailyQuota() {
+        quotaCalls += 1;
+        return { allowed: true };
+      },
+      async write() {},
+      async incrementStats() {}
+    },
+    methods: {
+      async completeWithAiFallback(options) {
+        aiRequest = options;
+        return { result: { text: 'news\nTranslation: 新闻' } };
+      }
+    }
+  });
+  bot.toolRegistry = {
+    async execute() {
+      searchCalls += 1;
+      throw new Error('translation must not invoke search');
+    }
+  };
+
+  await bot.handleInlineQuery({
+    update: { inline_query: { id: 'inline-translation', query: '翻译 news', from: { id: 112, language_code: 'zh-CN' } } },
+    answerInlineQuery: async (results) => answers.push(results)
+  });
+
+  assert.equal(searchCalls, 0);
+  assert.equal(quotaCalls, 1);
+  assert.equal(aiRequest.scope, 'translation');
+  assert.equal(aiRequest.capability, 'translation');
+  assert.equal(aiRequest.preferredProvider, 'gemini');
+  assert.equal(aiRequest.model, 'translation-model');
+  assert.deepEqual(aiRequest.request.tools, []);
+  assert.match(aiRequest.request.messages[1].content, /<source_text>\nnews\n<\/source_text>/);
+  assert.doesNotMatch(aiRequest.request.messages[1].content, /翻译 news/);
+  assert.equal(answers[0][0].title, '发送译文');
+  assert.equal(answers[0][0].input_message_content.message_text, '新闻');
+});
+
+test('incomplete inline translation returns guidance without quota, search, or AI calls', async () => {
+  let expensiveCalls = 0;
+  const answers = [];
+  const bot = createBot({
+    db: {
+      findUser() { return { id: '113' }; },
+      consumeDailyQuota() {
+        expensiveCalls += 1;
+        return { allowed: true };
+      }
+    },
+    methods: {
+      async completeWithAiFallback() {
+        expensiveCalls += 1;
+        return { result: { text: 'must not run' } };
+      },
+      async getInlineSearchContext() {
+        expensiveCalls += 1;
+        return '';
+      }
+    }
+  });
+
+  const incompleteQueries = ['翻译：', '翻译成英文：', 'translate:', 'translate to English:', '中译英'];
+  for (const [index, query] of incompleteQueries.entries()) {
+    await bot.handleInlineQuery({
+      update: { inline_query: { id: `inline-translation-incomplete-${index}`, query, from: { id: 113, language_code: 'zh-CN' } } },
+      answerInlineQuery: async (results) => answers.push(results)
+    });
+  }
+
+  assert.equal(expensiveCalls, 0);
+  assert.equal(answers.length, incompleteQueries.length);
+  for (const result of answers) assert.match(result[0].title, /继续输入翻译内容/);
+});
+
+test('translation parsing requires a real command boundary and keeps ambiguous source text intact', () => {
+  const bot = createBot();
+
+  assert.equal(bot.parseTranslationRequest('travel plans'), null);
+  assert.equal(bot.parseTranslationRequest('trending news'), null);
+  assert.equal(bot.parseTranslationRequest('trump news'), null);
+  assert.equal(bot.parseTranslationRequest('翻译成英文：'), null);
+  assert.deepEqual(bot.parseTranslationRequest('translate I want to go'), {
+    targetLanguage: 'auto',
+    text: 'I want to go'
+  });
+  assert.deepEqual(bot.parseTranslationRequest('translate hello to Chinese'), {
+    targetLanguage: 'Simplified Chinese',
+    text: 'hello'
+  });
+});
+
+test('translation cleanup removes explicit echoes without deleting valid leading words', () => {
+  assert.equal(platformModesInternals.cleanInlineTranslationOutput('I love you', 'I'), 'I love you');
+  assert.equal(platformModesInternals.cleanInlineTranslationOutput('OpenAI builds AI', 'OpenAI'), 'OpenAI builds AI');
+  assert.equal(platformModesInternals.cleanInlineTranslationOutput('hello\nTranslation: 你好', 'hello'), '你好');
+});
+
+test('source cleanup only removes a dedicated references heading', () => {
+  const prose = '消息来源显示市场正在变化。\n第二段仍然必须保留。';
+  assert.equal(naturalAgentInternals.stripGeneratedReferences(prose), prose);
+  assert.equal(
+    naturalAgentInternals.stripGeneratedReferences('正文保留\nSources:\n1. https://example.com'),
+    '正文保留'
+  );
+
+  const context = JSON.stringify({
+    results: Array.from({ length: 4 }, (_, index) => ({
+      title: `新闻 ${index + 1}`,
+      description: `摘要 ${index + 1}`,
+      url: `https://example.com/${index + 1}`,
+      publishedAt: '2026-07-16T01:00:00.000Z'
+    }))
+  });
+  const digest = platformModesInternals.formatInlineNewsDigest(context, prose, 'zh', 'Asia/Shanghai');
+  for (let index = 1; index <= 4; index += 1) assert.match(digest, new RegExp(`新闻 ${index}`));
+});
+
+test('inline cache preserves case-sensitive translation queries', async () => {
+  let aiCalls = 0;
+  const bot = createBot({
+    config: { enableWebSearch: false },
+    db: {
+      findUser() { return { id: '114' }; },
+      consumeDailyQuota() { return { allowed: true }; },
+      async write() {}
+    },
+    methods: {
+      async completeWithAiFallback() {
+        aiCalls += 1;
+        return { result: { text: `translation-${aiCalls}` } };
+      }
+    }
+  });
+  const ctx = (id, query) => ({
+    update: { inline_query: { id, query, from: { id: 114, language_code: 'en' } } },
+    answerInlineQuery: async () => undefined
+  });
+
+  await bot.handleInlineQuery(ctx('case-1', 'translate polish'));
+  await bot.handleInlineQuery(ctx('case-2', 'translate Polish'));
+  assert.equal(aiCalls, 2);
 });
 
 test('inline mode honors the saved account language instead of Telegram device language', async () => {
@@ -419,6 +748,7 @@ test('inline news search uses dated RSS without starting undated web search', as
   let toolStartedAt = 0;
   let newsStartedAt = 0;
   let toolAborted = false;
+  let receivedOptions;
   const originalNewsFallback = naturalAgentInternals.fetchNewsFallback;
   const bot = createBot({ config: { inlineQuerySearchTimeoutMs: 120 } });
   bot.toolRegistry = {
@@ -434,6 +764,7 @@ test('inline news search uses dated RSS without starting undated web search', as
     }
   };
   naturalAgentInternals.fetchNewsFallback = async (_query, options) => {
+    receivedOptions = options;
     newsTimeoutMs = options.timeoutMs;
     newsStartedAt = Date.now();
     await new Promise((resolve) => setTimeout(resolve, 15));
@@ -454,6 +785,7 @@ test('inline news search uses dated RSS without starting undated web search', as
   assert.equal(toolStartedAt, 0);
   assert.ok(newsStartedAt > 0);
   assert.equal(toolAborted, false);
+  assert.equal(receivedOptions?.todayOnly, false);
   assert.match(raw, /Fresh headline/);
 });
 
@@ -825,13 +1157,13 @@ test('inline current-information query prefetches web results and forces provide
     calls.push({ type: 'rss', query, options });
     return JSON.stringify({
       provider: 'google-news-rss',
-      results: [{
-        title: '今日新闻',
-        sourceName: 'Example News',
-        publishedAt: '2026-07-16T03:00:00.000Z',
-        url: 'https://example.com/news',
-        description: 'Example News · 07/16 11:00'
-      }]
+      results: Array.from({ length: 4 }, (_, index) => ({
+        title: `今日新闻 ${index + 1}`,
+        sourceName: `Example News ${index + 1}`,
+        publishedAt: `2026-07-16T0${index + 1}:00:00.000Z`,
+        url: `https://example.com/news-${index + 1}`,
+        description: `Example News ${index + 1} · 2026/07/16 ${9 + index}:00`
+      }))
     });
   };
   const answers = [];
@@ -856,12 +1188,18 @@ test('inline current-information query prefetches web results and forces provide
   assert.ok(calls[1].options.requestTimeoutMs <= 7000);
   assert.match(calls[1].options.retrievedContext, /example\.com\/news/);
   assert.match(calls[1].options.role, /live-search/);
+  assert.equal(answers[0].length, 5, 'digest plus four individual news results should be returned');
+  assert.match(answers[0][0].title, /新闻摘要.*4 条/);
+  assert.equal(answers[0][1].title, '今日新闻 1');
+  assert.equal(answers[0][4].title, '今日新闻 4');
   const message = answers[0][0].input_message_content;
   assert.match(message.message_text, /这是联网后的新闻摘要/);
   assert.match(message.message_text, /参考来源/);
+  assert.match(message.message_text, /今日新闻 1/);
+  assert.match(message.message_text, /今日新闻 4/);
   assert.match(message.message_text, /Example News/);
-  assert.match(message.message_text, /07\/16.*11:00/);
-  assert.match(message.message_text, /https:\/\/example\.com\/news/);
+  assert.match(message.message_text, /2026.*07.*16/);
+  assert.match(message.message_text, /https:\/\/example\.com\/news-1/);
   assert.doesNotMatch(message.message_text, /fake\.example|\*\*\*/);
   assert.equal(message.parse_mode, 'HTML');
 });

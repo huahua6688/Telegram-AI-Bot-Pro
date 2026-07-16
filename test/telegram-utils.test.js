@@ -5,9 +5,11 @@ import {
   createTelegramSessionId,
   decorateTelegramReplyText,
   getTelegramReplyContext,
+  messageMentionsTelegramBot,
   normalizeLanguageCode,
   resolveTelegramThreadId,
-  shouldRespondToMessage
+  shouldRespondToMessage,
+  stripTelegramBotMentionsFromMessage
 } from '../src/utils/telegram.js';
 
 test('splitMessage preserves content in chunks', () => {
@@ -49,6 +51,56 @@ test('shouldRespondToMessage supports smart group triggers', () => {
     }),
     false
   );
+});
+
+test('group triggers use exact Telegram mentions and keyword boundaries', () => {
+  const exact = {
+    text: '请解释这个问题 @mybot',
+    entities: [{ type: 'mention', offset: 8, length: 6 }]
+  };
+  assert.equal(messageMentionsTelegramBot(exact, 'mybot', '99'), true);
+  assert.equal(messageMentionsTelegramBot({ text: 'hello @mybot_backup' }, 'mybot', '99'), false);
+  assert.equal(messageMentionsTelegramBot({
+    text: '点这里',
+    entities: [{ type: 'text_mention', offset: 0, length: 3, user: { id: 99 } }]
+  }, 'mybot', '99'), true);
+
+  assert.equal(shouldRespondToMessage({
+    chatType: 'group',
+    text: 'he said hello by email',
+    triggerMode: 'keyword',
+    keyword: 'ai'
+  }), false);
+  assert.equal(shouldRespondToMessage({
+    chatType: 'group',
+    text: 'AI 请帮忙',
+    triggerMode: 'keyword',
+    keyword: 'ai'
+  }), true);
+});
+
+test('bot mentions are removed before routing or sending the prompt to AI', () => {
+  const message = {
+    text: '帮我翻译 hello @mybot',
+    entities: [{ type: 'mention', offset: 11, length: 6 }],
+    caption: '图片说明 @mybot'
+  };
+  assert.deepEqual(stripTelegramBotMentionsFromMessage(message, 'mybot', '99'), {
+    text: '帮我翻译 hello',
+    caption: '图片说明'
+  });
+});
+
+test('removing a bot mention preserves multiline code indentation', () => {
+  const text = '请检查代码：\n```python\nif ready:\n    run()\n```\n@mybot';
+  const offset = text.lastIndexOf('@mybot');
+  const stripped = stripTelegramBotMentionsFromMessage({
+    text,
+    entities: [{ type: 'mention', offset, length: 6 }]
+  }, 'mybot', '99');
+
+  assert.equal(stripped.text, '请检查代码：\n```python\nif ready:\n    run()\n```');
+  assert.match(stripped.text, /\n {4}run\(\)/);
 });
 
 test('normalizeLanguageCode normalizes Telegram language codes', () => {

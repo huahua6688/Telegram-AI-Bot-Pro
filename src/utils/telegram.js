@@ -87,34 +87,133 @@ export function decorateTelegramReplyText(text = '', message = {}, maxChars = 24
   ].join('\n');
 }
 
+function normalizedBotUsername(value = '') {
+  return String(value || '').trim().replace(/^@/, '').toLowerCase();
+}
+
+function escapeRegExp(value = '') {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function botMentionPattern(botUsername = '') {
+  const username = normalizedBotUsername(botUsername);
+  if (!username) return null;
+  return new RegExp(`(^|[^A-Za-z0-9_])@${escapeRegExp(username)}(?=$|[^A-Za-z0-9_])`, 'gi');
+}
+
+function entityMentionsBot(source = '', entity = {}, botUsername = '', botUserId = '') {
+  if (entity?.type === 'text_mention') {
+    return Boolean(botUserId) && String(entity.user?.id || '') === String(botUserId);
+  }
+  if (entity?.type !== 'mention') return false;
+
+  const offset = Math.max(0, Number(entity.offset) || 0);
+  const length = Math.max(0, Number(entity.length) || 0);
+  const entityText = String(source || '').slice(offset, offset + length).toLowerCase();
+  const username = normalizedBotUsername(botUsername);
+  return Boolean(username) && entityText === `@${username}`;
+}
+
+export function messageMentionsTelegramBot(message = {}, botUsername = '', botUserId = '') {
+  const fields = [
+    [String(message?.text || ''), Array.isArray(message?.entities) ? message.entities : []],
+    [String(message?.caption || ''), Array.isArray(message?.caption_entities) ? message.caption_entities : []]
+  ];
+
+  for (const [source, entities] of fields) {
+    if (entities.some((entity) => entityMentionsBot(source, entity, botUsername, botUserId))) {
+      return true;
+    }
+  }
+
+  const pattern = botMentionPattern(botUsername);
+  if (!pattern) return false;
+  return fields.some(([source]) => {
+    pattern.lastIndex = 0;
+    return pattern.test(source);
+  });
+}
+
+export function stripTelegramBotMention(text = '', entities = [], botUsername = '', botUserId = '') {
+  let output = String(text || '');
+  const spans = (Array.isArray(entities) ? entities : [])
+    .filter((entity) => entityMentionsBot(output, entity, botUsername, botUserId))
+    .map((entity) => ({
+      offset: Math.max(0, Number(entity.offset) || 0),
+      length: Math.max(0, Number(entity.length) || 0)
+    }))
+    .filter((span) => span.length > 0)
+    .sort((left, right) => right.offset - left.offset);
+
+  for (const span of spans) {
+    const before = output.slice(0, span.offset);
+    const after = output.slice(span.offset + span.length);
+    const separator = before && after && !/\s$/.test(before) && !/^\s/.test(after) ? ' ' : '';
+    output = `${before}${separator}${after}`;
+  }
+
+  const pattern = botMentionPattern(botUsername);
+  if (pattern) output = output.replace(pattern, '$1');
+
+  return output.trim();
+}
+
+export function stripTelegramBotMentionsFromMessage(message = {}, botUsername = '', botUserId = '') {
+  return {
+    text: stripTelegramBotMention(message?.text, message?.entities, botUsername, botUserId),
+    caption: stripTelegramBotMention(message?.caption, message?.caption_entities, botUsername, botUserId)
+  };
+}
+
+function includesTriggerKeyword(content = '', keyword = '') {
+  const normalizedContent = String(content || '').toLowerCase();
+  const normalizedKeyword = String(keyword || '').trim().toLowerCase();
+  if (!normalizedKeyword) return false;
+
+  if (/^[\x00-\x7f]+$/.test(normalizedKeyword)) {
+    const pattern = new RegExp(
+      `(^|[^A-Za-z0-9_])${escapeRegExp(normalizedKeyword)}(?=$|[^A-Za-z0-9_])`,
+      'i'
+    );
+    return pattern.test(normalizedContent);
+  }
+
+  return normalizedContent.includes(normalizedKeyword);
+}
+
 export function shouldRespondToMessage({
   chatType,
   text = '',
   caption = '',
   isReplyToBot = false,
   botUsername = '',
+  botUserId = '',
+  message = null,
+  hasMention,
   triggerMode = 'smart',
   keyword = 'ai'
 }) {
   if (chatType === 'private') return true;
 
   const content = `${text} ${caption}`.trim().toLowerCase();
-  const normalizedKeyword = keyword.trim().toLowerCase();
-  const mention = botUsername ? `@${botUsername.toLowerCase()}` : '';
-  const hasMention = mention ? content.includes(mention) : false;
-  const hasKeyword = normalizedKeyword ? content.includes(normalizedKeyword) : false;
+  const detectedMention = typeof hasMention === 'boolean'
+    ? hasMention
+    : message
+      ? messageMentionsTelegramBot(message, botUsername, botUserId)
+      : messageMentionsTelegramBot({ text, caption }, botUsername, botUserId);
+  const hasKeyword = includesTriggerKeyword(content, keyword);
 
   switch (triggerMode) {
     case 'all':
       return true;
     case 'mention':
-      return hasMention;
+      return detectedMention;
     case 'reply':
       return isReplyToBot;
     case 'keyword':
       return hasKeyword;
     case 'smart':
     default:
-      return hasMention || isReplyToBot || hasKeyword;
+      return detectedMention || isReplyToBot || hasKeyword;
   }
 }

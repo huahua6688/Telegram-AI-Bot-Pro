@@ -10,41 +10,24 @@ export class AudioOrchestrator {
     this.getProviderName = getProviderName;
   }
 
-  async transcribeIncomingAudio({ file, prompt, locale, userText = '' }) {
-    const capabilities = this.getProviderCapabilities();
+  async transcribeIncomingAudio({
+    file,
+    prompt,
+    locale,
+    userText = '',
+    aiClient = null,
+    capabilities = null,
+    providerName = ''
+  }) {
+    const activeClient = aiClient || this.aiClient;
+    const activeCapabilities = capabilities || this.getProviderCapabilities();
+    const activeProviderName = providerName || this.getProviderName();
     const downgradeEvents = [];
 
-    if (this.config.enableLiveAudio && capabilities.liveAudio && capabilities.speechTranscription) {
+    if (activeCapabilities.speechTranscription) {
+      const mode = this.config.enableLiveAudio && activeCapabilities.liveAudio ? 'live_audio' : 'stt';
       try {
-        const transcript = await this.aiClient.transcribeAudio({
-          buffer: file.buffer,
-          filename: file.filename,
-          mimeType: file.mimeType,
-          prompt: prompt || 'Transcribe the audio accurately.'
-        });
-        await this.db.incrementStats('voiceTranscriptions');
-        return {
-          ok: true,
-          text: [userText, `Voice transcript:\n${transcript}`].filter(Boolean).join('\n\n'),
-          transcript,
-          mode: 'live_audio',
-          downgradeEvents
-        };
-      } catch (error) {
-        downgradeEvents.push({ from: 'live_audio', to: 'stt', reason: error.message });
-        this.logger.warn('Audio downgrade event', {
-          provider: this.getProviderName(),
-          locale,
-          from: 'live_audio',
-          to: 'stt',
-          reason: error.message
-        });
-      }
-    }
-
-    if (capabilities.speechTranscription) {
-      try {
-        const transcript = await this.aiClient.transcribeAudio({
+        const transcript = await activeClient.transcribeAudio({
           buffer: file.buffer,
           filename: file.filename,
           mimeType: file.mimeType,
@@ -55,15 +38,15 @@ export class AudioOrchestrator {
           ok: true,
           text: [userText, `Voice transcript:\n${transcript}`].filter(Boolean).join('\n\n'),
           transcript,
-          mode: 'stt',
+          mode,
           downgradeEvents
         };
       } catch (error) {
-        downgradeEvents.push({ from: 'stt', to: 'text', reason: error.message });
+        downgradeEvents.push({ from: mode, to: 'text', reason: error.message });
         this.logger.warn('Audio downgrade event', {
-          provider: this.getProviderName(),
+          provider: activeProviderName,
           locale,
-          from: 'stt',
+          from: mode,
           to: 'text',
           reason: error.message
         });
@@ -71,7 +54,7 @@ export class AudioOrchestrator {
     } else {
       downgradeEvents.push({ from: 'stt', to: 'text', reason: 'provider_capability_missing' });
       this.logger.warn('Audio downgrade event', {
-        provider: this.getProviderName(),
+        provider: activeProviderName,
         locale,
         from: 'stt',
         to: 'text',
@@ -87,8 +70,10 @@ export class AudioOrchestrator {
     };
   }
 
-  async textToSpeech({ input }) {
-    const capabilities = this.getProviderCapabilities();
+  async textToSpeech({ input, aiClient = null, capabilities = null, providerName = '' }) {
+    const activeClient = aiClient || this.aiClient;
+    const activeCapabilities = capabilities || this.getProviderCapabilities();
+    const activeProviderName = providerName || this.getProviderName();
     const downgradeEvents = [];
     const normalizedInput = truncateText(String(input || ''), 4000);
 
@@ -96,32 +81,17 @@ export class AudioOrchestrator {
       return { ok: false, error: 'EMPTY_INPUT', downgradeEvents };
     }
 
-    if (this.config.enableLiveAudio && capabilities.liveAudio && capabilities.speechSynthesis) {
+    if (activeCapabilities.speechSynthesis) {
+      const mode = this.config.enableLiveAudio && activeCapabilities.liveAudio ? 'live_audio' : 'tts';
       try {
-        const audio = await this.aiClient.generateSpeech({ input: normalizedInput });
+        const audio = await activeClient.generateSpeech({ input: normalizedInput });
         await this.db.incrementStats('ttsGenerations');
-        return { ok: true, audio, mode: 'live_audio', downgradeEvents };
+        return { ok: true, audio, mode, downgradeEvents };
       } catch (error) {
-        downgradeEvents.push({ from: 'live_audio', to: 'tts', reason: error.message });
+        downgradeEvents.push({ from: mode, to: 'text', reason: error.message });
         this.logger.warn('Audio downgrade event', {
-          provider: this.getProviderName(),
-          from: 'live_audio',
-          to: 'tts',
-          reason: error.message
-        });
-      }
-    }
-
-    if (capabilities.speechSynthesis) {
-      try {
-        const audio = await this.aiClient.generateSpeech({ input: normalizedInput });
-        await this.db.incrementStats('ttsGenerations');
-        return { ok: true, audio, mode: 'tts', downgradeEvents };
-      } catch (error) {
-        downgradeEvents.push({ from: 'tts', to: 'text', reason: error.message });
-        this.logger.warn('Audio downgrade event', {
-          provider: this.getProviderName(),
-          from: 'tts',
+          provider: activeProviderName,
+          from: mode,
           to: 'text',
           reason: error.message
         });
@@ -131,7 +101,7 @@ export class AudioOrchestrator {
 
     downgradeEvents.push({ from: 'tts', to: 'text', reason: 'provider_capability_missing' });
     this.logger.warn('Audio downgrade event', {
-      provider: this.getProviderName(),
+      provider: activeProviderName,
       from: 'tts',
       to: 'text',
       reason: 'provider_capability_missing'

@@ -1,9 +1,10 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { Markup } from 'telegraf';
 import { stripHtml, truncateText } from '../utils/text.js';
+import { decorateTelegramReplyText, stripTelegramBotMentionsFromMessage } from '../utils/telegram.js';
 import { HelpTelegramAIBot, helpTelegramBotInternals } from './help-telegram-bot.js';
 import { naturalAgentInternals } from './natural-agent.js';
-import { cleanBotOutput, createSystemPrompt } from './telegram-bot.js';
+import { cleanBotOutput, createSystemPrompt, isIncompleteTranslationPrompt } from './telegram-bot.js';
 
 const PLATFORM_MODE_NAMES = Object.freeze({
   inline: 'Inline Mode',
@@ -49,6 +50,29 @@ function localText(locale, zh, en) {
   return String(locale || '').toLowerCase().startsWith('zh') ? zh : en;
 }
 
+function groupTriggerHelp(locale = 'zh', botUsername = '') {
+  const mention = botUsername ? `@${String(botUsername).replace(/^@/, '')}` : '@botusername';
+  return localText(
+    locale,
+    [
+      '群聊中如何叫我：',
+      `- 最可靠：直接回复我的上一条消息。`,
+      `- 普通提及：先写问题，再把 ${mention} 放在句末。`,
+      `- 无歧义命令：/ask${mention} 问题。`,
+      `- 如果输入框以 ${mention} 开头，Telegram 会进入 Inline Mode；这时需要从候选结果中选择一条发送。`,
+      '- BotFather 群隐私模式决定我能收到哪些群消息；项目内“隐私聊天”和 Guard Mode 不是同一功能。'
+    ].join('\n'),
+    [
+      'How to address me in groups:',
+      '- Most reliable: reply directly to my previous message.',
+      `- Normal mention: write the question first and put ${mention} at the end.`,
+      `- Unambiguous command: /ask${mention} question.`,
+      `- If the composer starts with ${mention}, Telegram opens Inline Mode; choose a result to send it.`,
+      '- BotFather group privacy controls which group messages I receive; Private Chat and Guard Mode are separate features.'
+    ].join('\n')
+  );
+}
+
 function safeText(value = '', maxChars = 3500) {
   return truncateText(String(value || '').replace(/\u0000/g, '').trim(), maxChars);
 }
@@ -92,6 +116,132 @@ function inlineArticle(text, title = 'AI reply', { html = false } = {}) {
       link_preview_options: { is_disabled: true }
     }
   };
+}
+
+function isIncompleteInlineTranslationQuery(text = '') {
+  return isIncompleteTranslationPrompt(text);
+}
+
+function cleanInlineTranslationOutput(text = '', sourceText = '') {
+  let output = String(text || '').replace(/\u0000/g, '').trim();
+  const fenced = output.match(/^```(?:[^\n]*)\n?([\s\S]*?)\n?```$/);
+  if (fenced) output = fenced[1].trim();
+
+  const labelled = output.match(/(?:^|\n)(?:translation|translated text|译文|譯文|翻译结果|翻譯結果)\s*[:：]\s*([\s\S]+)$/i);
+  if (labelled) output = labelled[1].trim();
+  output = output.replace(/^(?:translation|translated text|译文|譯文|翻译结果|翻譯結果)\s*[:：]\s*/i, '').trim();
+
+  const source = String(sourceText || '').trim();
+  if (source && output.length > source.length && output.startsWith(source)) {
+    const echoed = output.slice(source.length).match(/^(?:[ \t]*\r?\n+\s*|[ \t]*[-—>:：]+[ \t]*)([\s\S]+)$/);
+    if (echoed?.[1]?.trim()) output = echoed[1].trim();
+  }
+
+  return safeText(output, 4000);
+}
+
+function inlineCacheQueryKey(query = '') {
+  return String(query || '').normalize('NFC').trim();
+}
+
+function parseInlineSourceItems(raw = '', maxItems = 6) {
+  try {
+    const data = JSON.parse(String(raw || '').trim());
+    const sourceItems = Array.isArray(data.results)
+      ? data.results
+      : Array.isArray(data.topics)
+        ? data.topics
+        : [];
+    const items = [];
+
+    for (const item of sourceItems) {
+      const reference = naturalAgentInternals.extractReferenceLinks(JSON.stringify({ results: [item] }))[0];
+      if (!reference?.url) continue;
+      const title = safeText(cleanBotOutput(item.title || item.text || item.heading || reference.title || ''), 180);
+      if (!title) continue;
+      if (items.some((candidate) => candidate.url === reference.url)) continue;
+      items.push({
+        title,
+        description: safeText(cleanBotOutput(item.description || item.snippet || ''), 320),
+        url: reference.url,
+        sourceName: safeText(cleanBotOutput(item.sourceName || item.source || item.publisher || ''), 120),
+        publishedAt: item.publishedAt || item.pubDate || item.date || ''
+      });
+      if (items.length >= Math.max(1, Number(maxItems) || 6)) break;
+    }
+    return items;
+  } catch {
+    return [];
+  }
+}
+
+function formatInlineNewsDigest(raw = '', answer = '', locale = 'zh', timeZone = 'Asia/Kuala_Lumpur') {
+  const items = parseInlineSourceItems(raw, 6);
+  const overview = safeText(cleanBotOutput(answer), 900);
+  const heading = localText(locale, `最新新闻（含来源，共 ${items.length} 条）：`, `Latest sourced news (${items.length} items):`);
+  const lines = items.map((item, index) => [
+    `${index + 1}. ${item.title}`,
+    item.description
+  ].filter(Boolean).join('\n'));
+  const body = [overview, items.length ? heading : '', ...lines].filter(Boolean).join('\n\n');
+  return naturalAgentInternals.appendClickableReferences(
+    body || formatInlineSearchFallback(raw, locale, timeZone),
+    raw,
+    locale,
+    3900,
+    timeZone
+  );
+}
+
+function buildInlineResponseResults({
+  answer = '',
+  query = '',
+  kind = 'answer',
+  context = '',
+  locale = 'zh',
+  timeZone = 'Asia/Kuala_Lumpur'
+} = {}) {
+  if (kind === 'translation') {
+    return [inlineArticle(
+      cleanInlineTranslationOutput(answer),
+      localText(locale, '发送译文', 'Send translation')
+    )];
+  }
+
+  if (kind === 'news') {
+    const items = parseInlineSourceItems(context, 6);
+    const digest = formatInlineNewsDigest(context, answer, locale, timeZone);
+    const results = [inlineArticle(
+      digest,
+      localText(locale, `新闻摘要 · ${items.length} 条`, `News digest · ${items.length} items`),
+      { html: true }
+    )];
+    for (const item of items) {
+      const itemRaw = JSON.stringify({ results: [item] });
+      const itemBody = naturalAgentInternals.appendClickableReferences(
+        [item.title, item.description].filter(Boolean).join('\n\n'),
+        itemRaw,
+        locale,
+        3900,
+        timeZone
+      );
+      results.push(inlineArticle(itemBody, item.title, { html: true }));
+    }
+    return results;
+  }
+
+  if (kind === 'search') {
+    const formatted = naturalAgentInternals.appendClickableReferences(
+      cleanBotOutput(answer),
+      context,
+      locale,
+      3900,
+      timeZone
+    );
+    return [inlineArticle(formatted, localText(locale, '发送联网回答', 'Send live answer'), { html: true })];
+  }
+
+  return [inlineArticle(cleanBotOutput(answer), localText(locale, '发送回答', 'Send answer'))];
 }
 
 function inlineSearchQuery(text = '') {
@@ -177,7 +327,7 @@ function formatInlineSearchFallback(raw = '', locale = 'zh', timeZone = 'Asia/Ku
       : Array.isArray(data.topics)
         ? data.topics
         : [];
-    const items = sourceItems.slice(0, 4).map((item, index) => {
+    const items = sourceItems.slice(0, 6).map((item, index) => {
       const title = safeText(item.title || item.text || item.heading || '', 180);
       const description = safeText(item.snippet || item.description || '', 300);
       return [
@@ -321,6 +471,8 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     const locale = this.getLocale(ctx);
     const text = [
       helpTelegramBotInternals.buildHiddenFeatureHelp(locale),
+      '',
+      groupTriggerHelp(locale, this.botUsername),
       '',
       localText(locale, 'Telegram 扩展模式：', 'Telegram platform modes:')
     ].join('\n');
@@ -525,6 +677,60 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     }
   }
 
+  async completeInlineTranslation({
+    userId = '',
+    text = '',
+    targetLanguage = 'auto',
+    locale = 'zh',
+    requestTimeoutMs,
+    signal
+  } = {}) {
+    const sourceText = safeText(text, this.config.maxInputChars || 12000);
+    if (!sourceText) throw inlineWorkError('INLINE_TRANSLATION_EMPTY', 'Inline translation source is empty.');
+    const targetInstruction = targetLanguage === 'auto'
+      ? 'Detect the source language. If it is Chinese, translate it into natural English; otherwise translate it into natural Simplified Chinese.'
+      : `Translate the source text into ${targetLanguage}.`;
+    const model = this.config.translationModel || this.config.defaultModel;
+    const completion = await this.completeWithAiFallback({
+      scope: 'translation',
+      capability: 'translation',
+      userId: String(userId || ''),
+      preferredProvider: this.config.translationProvider,
+      fallbackEnabled: true,
+      model,
+      locale,
+      request: {
+        requestTimeoutMs,
+        signal,
+        suppressTimeoutCooldown: Boolean(signal && Number(requestTimeoutMs) > 0),
+        messages: [
+          {
+            role: 'system',
+            content: [
+              'You are a professional translation engine.',
+              'Translate accurately and naturally while preserving names, numbers, emojis, tone, and line breaks.',
+              'Output only the translated text.',
+              'Never repeat or quote the source text.',
+              'Never add labels such as Translation, 译文, explanations, notes, or Markdown fences.'
+            ].join('\n')
+          },
+          {
+            role: 'user',
+            content: `${targetInstruction}\n\n<source_text>\n${sourceText}\n</source_text>`
+          }
+        ],
+        tools: [],
+        temperature: 0.1
+      }
+    });
+    if (signal?.aborted) throw inlineWorkError('INLINE_QUERY_SUPERSEDED', 'Inline query was superseded.');
+    const translated = cleanInlineTranslationOutput(this.normalizeAiResult(completion.result).text, sourceText);
+    if (!translated) throw new Error('Translation provider returned no valid reply.');
+    await this.db.incrementStats?.('messagesHandled');
+    await this.db.incrementStats?.('aiCalls');
+    return translated;
+  }
+
   async refundPlatformQuotaReservation(reservation = {}) {
     const userId = String(reservation.userId || '');
     if (!reservation.reserved || !userId || typeof this.db.refundDailyQuota !== 'function') return false;
@@ -561,7 +767,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     return state;
   }
 
-  getInlineCacheFingerprint(userId = '', locale = '') {
+  getInlineCacheFingerprint(userId = '', locale = '', { query = '', kind = 'answer' } = {}) {
     let user = {};
     let settings = {};
     try {
@@ -581,24 +787,47 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
       customSystemPrompt: user.customSystemPrompt || '',
       providerId: settings.providerId || '',
       modelId: settings.modelId || '',
-      fallbackEnabled: Boolean(settings.fallbackEnabled)
+      fallbackEnabled: Boolean(settings.fallbackEnabled),
+      kind,
+      translationProvider: kind === 'translation' ? this.config.translationProvider || '' : '',
+      translationModel: kind === 'translation' ? this.config.translationModel || this.config.defaultModel || '' : '',
+      strictNewsDate: kind === 'news' && naturalAgentInternals.isStrictTodayNewsQuery(query)
+        ? naturalAgentInternals.newsLocalDateKey(Date.now(), this.config.newsTimeZone)
+        : '',
+      newsTimeZone: kind === 'news' ? this.config.newsTimeZone || '' : ''
     })).digest('hex').slice(0, 20);
   }
 
   getCachedInlineAnswer(userId = '', query = '', fingerprint = '') {
-    const key = `${String(userId || 'anonymous')}:${String(fingerprint || '')}:${String(query || '').toLowerCase()}`;
+    const key = `${String(userId || 'anonymous')}:${String(fingerprint || '')}:${inlineCacheQueryKey(query)}`;
     const cached = this.inlineResultCache.get(key);
     if (!cached) return null;
     if (Date.now() - cached.createdAt > Math.max(1000, Number(this.config.inlineQueryCacheTtlMs) || 60000)) {
       this.inlineResultCache.delete(key);
       return null;
     }
-    return { answer: cached.answer, html: Boolean(cached.html) };
+    return {
+      answer: cached.answer,
+      html: Boolean(cached.html),
+      kind: cached.kind || 'answer',
+      context: cached.context || ''
+    };
   }
 
-  cacheInlineAnswer(userId = '', query = '', answer = '', { html = false, fingerprint = '' } = {}) {
-    const key = `${String(userId || 'anonymous')}:${String(fingerprint || '')}:${String(query || '').toLowerCase()}`;
-    this.inlineResultCache.set(key, { answer, html: Boolean(html), createdAt: Date.now() });
+  cacheInlineAnswer(userId = '', query = '', answer = '', {
+    html = false,
+    fingerprint = '',
+    kind = 'answer',
+    context = ''
+  } = {}) {
+    const key = `${String(userId || 'anonymous')}:${String(fingerprint || '')}:${inlineCacheQueryKey(query)}`;
+    this.inlineResultCache.set(key, {
+      answer,
+      html: Boolean(html),
+      kind,
+      context,
+      createdAt: Date.now()
+    });
     while (this.inlineResultCache.size > 300) {
       this.inlineResultCache.delete(this.inlineResultCache.keys().next().value);
     }
@@ -776,7 +1005,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
           timeZone: this.config.newsTimeZone,
           region: this.config.newsRegion,
           language: naturalAgentInternals.resolveNewsLanguage(locale, this.config.newsLanguage),
-          todayOnly: true
+          todayOnly: naturalAgentInternals.isStrictTodayNewsQuery(searchQuery)
         })
       )));
       candidates.push(rssSearch);
@@ -817,6 +1046,17 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     const userId = String(user.id || 'anonymous');
     const queryId = String(ctx.update.inline_query?.id || randomUUID());
     const locale = this.getLocale(ctx, this.db.findUser?.(userId));
+    const translationIncomplete = isIncompleteInlineTranslationQuery(query);
+    const translationRequest = translationIncomplete ? null : this.parseTranslationRequest?.(query);
+    const searchQuery = translationRequest ? '' : inlineSearchQuery(query);
+    const searchIsNews = Boolean(searchQuery && isInlineNewsQuery(searchQuery));
+    const responseKind = translationRequest
+      ? 'translation'
+      : searchIsNews
+        ? 'news'
+        : searchQuery
+          ? 'search'
+          : 'answer';
     const state = this.getInlineQueryState(userId);
     state.abortController?.abort();
     const abortController = new AbortController();
@@ -829,7 +1069,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
       Number(this.config.inlineQueryResponseTimeoutMs) || 7000
     );
     const remainingMs = () => Math.max(1, deadlineAt - Date.now());
-    const runToken = { version, queryId };
+    const runToken = { version, queryId, query };
     const isLatest = () => state.version === version && state.latestQueryId === queryId;
 
     if (!query) {
@@ -841,6 +1081,23 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
         queryId,
         [],
         { cache_time: 30, is_personal: true }
+      );
+    }
+
+    if (translationIncomplete) {
+      if (state.abortController === abortController) state.abortController = null;
+      return this.answerInlineQuerySafely(
+        ctx,
+        queryId,
+        [inlineArticle(
+          localText(
+            locale,
+            '请继续输入要翻译的原文，例如：翻译成英文 你好，今天怎么样？',
+            'Continue with the source text, for example: translate to English: 你好，今天怎么样？'
+          ),
+          localText(locale, '继续输入翻译内容', 'Continue typing the translation')
+        )],
+        { cache_time: 1, is_personal: true }
       );
     }
 
@@ -891,11 +1148,21 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
         () => this.assertPlatformRequestAllowed(userId, '', { checkRateLimit: false }),
         { deadlineAt, signal: abortController.signal }
       );
-      cacheFingerprint = this.getInlineCacheFingerprint(userId, locale);
+      cacheFingerprint = this.getInlineCacheFingerprint(userId, locale, {
+        query: searchQuery || query,
+        kind: responseKind
+      });
       const cachedAnswer = this.getCachedInlineAnswer(userId, query, cacheFingerprint);
       if (cachedAnswer?.answer) {
         response = {
-          results: [inlineArticle(cachedAnswer.answer, query, { html: cachedAnswer.html })],
+          results: buildInlineResponseResults({
+            answer: cachedAnswer.answer,
+            query,
+            kind: cachedAnswer.kind,
+            context: cachedAnswer.context,
+            locale,
+            timeZone: this.config.newsTimeZone
+          }),
           extra: { cache_time: 30, is_personal: true }
         };
       }
@@ -913,21 +1180,21 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
             await this.db.write?.();
           }
         }, { deadlineAt, signal: abortController.signal });
-        const searchQuery = inlineSearchQuery(query);
-        const searchIsNews = Boolean(searchQuery && isInlineNewsQuery(searchQuery));
-        const retrievedContext = await this.runInlineWork(
-          () => this.getInlineSearchContext({
-            userId,
-            query,
-            locale,
-            signal: abortController.signal,
-            timeoutMs: Math.min(
-              remainingMs(),
-              Number(this.config.inlineQuerySearchTimeoutMs) || 3500
-            )
-          }),
-          { deadlineAt, signal: abortController.signal }
-        );
+        const retrievedContext = translationRequest
+          ? ''
+          : await this.runInlineWork(
+              () => this.getInlineSearchContext({
+                userId,
+                query,
+                locale,
+                signal: abortController.signal,
+                timeoutMs: Math.min(
+                  remainingMs(),
+                  Number(this.config.inlineQuerySearchTimeoutMs) || 3500
+                )
+              }),
+              { deadlineAt, signal: abortController.signal }
+            );
         if (!isLatest()) {
           throw inlineWorkError('INLINE_QUERY_SUPERSEDED', 'Inline query was superseded.');
         }
@@ -955,35 +1222,48 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
         } else {
           try {
             const answer = await this.runInlineWork(
-              () => this.completePlatformRequest({
-                userId,
-                text: query,
-                locale,
-                scope: 'telegram_inline',
-                role: retrievedContext ? 'inline live-search answer generator' : 'inline answer generator',
-                fallbackEnabled: true,
-                retrievedContext,
-                retrievedContextIsNews: searchIsNews,
-                requestTimeoutMs: remainingMs(),
-                signal: abortController.signal,
-                accessAlreadyChecked: true,
-                quotaAlreadyReserved: quotaReserved
-              }),
+              () => translationRequest
+                ? this.completeInlineTranslation({
+                    userId,
+                    text: translationRequest.text,
+                    targetLanguage: translationRequest.targetLanguage,
+                    locale,
+                    requestTimeoutMs: remainingMs(),
+                    signal: abortController.signal
+                  })
+                : this.completePlatformRequest({
+                    userId,
+                    text: query,
+                    locale,
+                    scope: 'telegram_inline',
+                    role: retrievedContext ? 'inline live-search answer generator' : 'inline answer generator',
+                    fallbackEnabled: true,
+                    retrievedContext,
+                    retrievedContextIsNews: searchIsNews,
+                    requestTimeoutMs: remainingMs(),
+                    signal: abortController.signal,
+                    accessAlreadyChecked: true,
+                    quotaAlreadyReserved: quotaReserved
+                  }),
               { deadlineAt, signal: abortController.signal }
             );
-            const formattedAnswer = retrievedContext
-              ? naturalAgentInternals.appendClickableReferences(
-                  cleanBotOutput(answer),
-                  retrievedContext,
-                  locale,
-                  3900,
-                  this.config.newsTimeZone
-                )
+            const cleanAnswer = responseKind === 'translation'
+              ? cleanInlineTranslationOutput(answer, translationRequest?.text)
               : cleanBotOutput(answer);
-            const html = Boolean(retrievedContext);
-            this.cacheInlineAnswer(userId, query, formattedAnswer, { html, fingerprint: cacheFingerprint });
+            this.cacheInlineAnswer(userId, query, cleanAnswer, {
+              fingerprint: cacheFingerprint,
+              kind: responseKind,
+              context: retrievedContext
+            });
             response = {
-              results: [inlineArticle(formattedAnswer, query || PLATFORM_MODE_NAMES.inline, { html })],
+              results: buildInlineResponseResults({
+                answer: cleanAnswer,
+                query,
+                kind: responseKind,
+                context: retrievedContext,
+                locale,
+                timeZone: this.config.newsTimeZone
+              }),
               extra: { cache_time: 30, is_personal: true }
             };
             quotaShouldCommit = true;
@@ -996,9 +1276,24 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
             this.logger?.warn?.('Inline AI generation failed, using retrieved search results', {
               error: this.formatLogError(error)
             });
-            this.cacheInlineAnswer(userId, query, searchFallback, { html: true, fingerprint: cacheFingerprint });
+            const fallbackAnswer = searchIsNews
+              ? localText(locale, '以下是搜索到的最新新闻：', 'Here is the latest sourced news:')
+              : decodeHtmlText(searchFallback);
+            const fallbackKind = searchIsNews ? 'news' : 'search';
+            this.cacheInlineAnswer(userId, query, fallbackAnswer, {
+              fingerprint: cacheFingerprint,
+              kind: fallbackKind,
+              context: retrievedContext
+            });
             response = {
-              results: [inlineArticle(searchFallback, query, { html: true })],
+              results: buildInlineResponseResults({
+                answer: fallbackAnswer,
+                query,
+                kind: fallbackKind,
+                context: retrievedContext,
+                locale,
+                timeZone: this.config.newsTimeZone
+              }),
               extra: { cache_time: 10, is_personal: true }
             };
             quotaShouldCommit = true;
@@ -1059,7 +1354,12 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     if (!queryId) return;
     const caller = message.guest_bot_caller_user || message.from || {};
     const locale = String(caller.language_code || '').startsWith('en') ? 'en' : 'zh';
-    const input = [message.quote?.text, message.text || message.caption].filter(Boolean).join('\n\n');
+    const stripped = stripTelegramBotMentionsFromMessage(message, this.botUsername, this.botUserId);
+    const input = decorateTelegramReplyText(
+      stripped.text || stripped.caption,
+      message,
+      this.config.maxInputChars || 12000
+    );
     const quotaReservation = {};
 
     try {
@@ -1398,13 +1698,31 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
   }
 
   async handleBotAskCommand(ctx) {
-    if (!ctx.from?.is_bot) {
-      await ctx.reply(this.getPlatformModeDetails(this.getLocale(ctx), 'bot_to_bot'));
+    const prompt = safeText(ctx.payload, this.config.maxInputChars || 12000);
+    if (!prompt) {
+      const mention = this.botUsername ? `@${this.botUsername}` : '@botusername';
+      await ctx.reply(localText(
+        this.getLocale(ctx),
+        `用法：/ask${mention} 你的问题`,
+        `Usage: /ask${mention} your question`
+      ));
       return;
     }
-    const prompt = safeText(ctx.payload, this.config.maxInputChars || 12000);
-    if (!prompt) return;
-    await this.answerBotMessage(ctx, prompt);
+
+    if (ctx.from?.is_bot) {
+      await this.answerBotMessage(ctx, prompt);
+      return;
+    }
+
+    const message = ctx.message || ctx.update?.message;
+    if (!message) return;
+    const originalText = message.text;
+    message.text = prompt;
+    try {
+      await this.handleIncomingMessage(ctx, { forceRespond: true });
+    } finally {
+      message.text = originalText;
+    }
   }
 
   async handlePossibleBotMessage(ctx, next) {
@@ -1432,10 +1750,16 @@ export const platformModesInternals = {
   PLATFORM_MODE_NAMES,
   TELEGRAM_ALLOWED_UPDATES,
   addBounded,
+  buildInlineResponseResults,
+  cleanInlineTranslationOutput,
+  formatInlineNewsDigest,
+  groupTriggerHelp,
   inlineArticle,
+  isIncompleteInlineTranslationQuery,
   isInlineNewsQuery,
   isRetryableInlineDeliveryError,
   inlineSearchQuery,
+  parseInlineSourceItems,
   platformCapabilityState,
   safeText
 };

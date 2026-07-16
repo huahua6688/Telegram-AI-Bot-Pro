@@ -10,6 +10,8 @@ import { ToolRegistry } from '../src/services/tool-registry.js';
 import { TelegramAIBot } from '../src/services/telegram-bot.js';
 import { PrivacyTelegramAIBot } from '../src/services/privacy-telegram-bot.js';
 import { tryHandleNaturalAgent } from '../src/services/natural-agent.js';
+import { MultimodalActionService } from '../src/services/multimodal-action-service.js';
+import { AudioOrchestrator } from '../src/services/audio-orchestrator.js';
 
 function logger() {
   return {
@@ -841,4 +843,120 @@ test('search replies hide naked source URLs behind clickable titles', async () =
   assert.equal(replies[0].extra.parse_mode, 'HTML');
   assert.match(replies[0].message, /<a href="https:\/\/example\.com\/current-news">Example News<\/a>/);
   assert.doesNotMatch(replies[0].message.replace(/href="[^"]+"/g, ''), /https:\/\//);
+});
+
+test('capability provider selection stays request-scoped during overlapping requests', async () => {
+  const bot = Object.create(TelegramAIBot.prototype);
+  const initialClient = { id: 'initial' };
+  const clientA = { id: 'a' };
+  const clientB = { id: 'b' };
+  bot.aiClient = initialClient;
+  bot.activeServiceProvider = 'initial';
+  bot.multimodalActions = { aiClient: initialClient };
+  bot.audioOrchestrator = { aiClient: initialClient };
+  bot.providerManager = {
+    selectProvider({ preferredProvider }) {
+      const client = preferredProvider === 'a' ? clientA : clientB;
+      return {
+        providerId: preferredProvider,
+        providerName: preferredProvider.toUpperCase(),
+        client,
+        capabilities: { imageGeneration: true }
+      };
+    }
+  };
+
+  let releaseA;
+  let releaseB;
+  const waitA = new Promise((resolve) => { releaseA = resolve; });
+  const waitB = new Promise((resolve) => { releaseB = resolve; });
+
+  const requestA = bot.withProviderForCapability('imageGeneration', 'a', async (selected) => {
+    assert.equal(selected.client, clientA);
+    await waitA;
+    return selected.providerId;
+  });
+  const requestB = bot.withProviderForCapability('imageGeneration', 'b', async (selected) => {
+    assert.equal(selected.client, clientB);
+    await waitB;
+    return selected.providerId;
+  });
+
+  assert.equal(bot.aiClient, initialClient);
+  assert.equal(bot.multimodalActions.aiClient, initialClient);
+  assert.equal(bot.audioOrchestrator.aiClient, initialClient);
+
+  releaseA();
+  assert.equal(await requestA, 'a');
+  assert.equal(bot.aiClient, initialClient);
+  releaseB();
+  assert.equal(await requestB, 'b');
+  assert.equal(bot.aiClient, initialClient);
+  assert.equal(bot.activeServiceProvider, 'initial');
+});
+
+test('unavailable capability provider does not silently use the default client', async () => {
+  const bot = Object.create(TelegramAIBot.prototype);
+  bot.providerManager = { selectProvider: () => null };
+  let callbackCalled = false;
+
+  const result = await bot.withProviderForCapability('imageGeneration', 'missing', async () => {
+    callbackCalled = true;
+    return { ok: true };
+  });
+
+  assert.equal(callbackCalled, false);
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'PROVIDER_UNAVAILABLE');
+});
+
+test('media services use the request-scoped provider client and avoid duplicate live retries', async () => {
+  const stats = [];
+  const db = { incrementStats: async (name) => stats.push(name) };
+  const silentLogger = logger();
+  const defaultClient = {
+    async generateImage() { throw new Error('default image client used'); },
+    async generateSpeech() { throw new Error('default speech client used'); }
+  };
+
+  const images = new MultimodalActionService({
+    aiClient: defaultClient,
+    db,
+    logger: silentLogger,
+    getProviderCapabilities: () => ({ imageGeneration: false }),
+    getProviderName: () => 'default'
+  });
+  const imageResult = await images.runImageAction({
+    mode: 'generate',
+    prompt: 'test',
+    aiClient: { async generateImage() { return { data: [{ url: 'https://example.com/image.png' }] }; } },
+    capabilities: { imageGeneration: true },
+    providerName: 'request-provider'
+  });
+  assert.equal(imageResult.ok, true);
+
+  let speechCalls = 0;
+  const audio = new AudioOrchestrator({
+    config: { enableLiveAudio: true },
+    aiClient: defaultClient,
+    db,
+    logger: silentLogger,
+    getProviderCapabilities: () => ({ speechSynthesis: false }),
+    getProviderName: () => 'default'
+  });
+  const speechResult = await audio.textToSpeech({
+    input: 'hello',
+    aiClient: {
+      async generateSpeech() {
+        speechCalls += 1;
+        throw new Error('request failed');
+      }
+    },
+    capabilities: { liveAudio: true, speechSynthesis: true },
+    providerName: 'request-provider'
+  });
+
+  assert.equal(speechResult.ok, false);
+  assert.equal(speechCalls, 1);
+  assert.deepEqual(stats, ['aiCalls', 'imageGenerations']);
 });

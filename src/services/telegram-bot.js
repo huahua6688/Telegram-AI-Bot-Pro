@@ -6,9 +6,11 @@ import {
   decorateTelegramReplyText,
   extractCommandArgs,
   getTelegramReplyContext,
+  messageMentionsTelegramBot,
   normalizeCommand,
   normalizeLanguageCode,
-  shouldRespondToMessage
+  shouldRespondToMessage,
+  stripTelegramBotMentionsFromMessage
 } from '../utils/telegram.js';
 import { extractUrls, splitMessage, toDataUri, truncateText } from '../utils/text.js';
 import { personaPresets } from '../config.js';
@@ -53,6 +55,48 @@ const BOT_COMMAND_NAMES = [
   'reset',
   'whoami'
 ];
+
+const KNOWN_TRANSLATION_TARGETS = new Set([
+  'simplified chinese',
+  'traditional chinese',
+  'english',
+  'hong kong cantonese written in natural traditional chinese cantonese characters',
+  'khmer',
+  'japanese',
+  'korean',
+  'thai',
+  'malay',
+  'indonesian',
+  'vietnamese',
+  'french',
+  'spanish',
+  'german',
+  'italian',
+  'portuguese',
+  'russian',
+  'turkish',
+  'persian',
+  'ukrainian',
+  'polish',
+  'dutch',
+  'hebrew',
+  'filipino',
+  'arabic',
+  'hindi'
+]);
+
+export function isIncompleteTranslationPrompt(text = '') {
+  const query = String(text || '').trim();
+  if (!query) return false;
+  if (/^(?:翻译|翻譯|translate|tr)\s*[:：]?\s*$/i.test(query)) return true;
+  if (/^(?:中译英|中譯英|英译中|英譯中|粤译中|粵譯中|简译繁|簡譯繁|繁译简|繁譯簡)\s*[:：]?\s*$/i.test(query)) {
+    return true;
+  }
+  if (/^(?:翻译成|翻譯成|翻译为|翻譯為|译成|譯成|翻成)\s*[^\s:：]+(?:\s*[（(][^）)]*[）)])?\s*[:：]?\s*$/i.test(query)) {
+    return true;
+  }
+  return /^(?:translate|tr)\b\s+(?:to|into)\s+[^:：]+?\s*[:：]?\s*$/i.test(query);
+}
 
 const AI_PROVIDER_MENU_ORDER = [
   'auto',
@@ -281,7 +325,7 @@ function createLanguagePrompt(locale = 'en') {
 const UI_TEXT = {
   zh: {
     helpTitle: '可用能力：',
-    featureConversation: '- 文本对话：私聊直接发消息，群聊支持 @我 / 回复我 / 关键词触发',
+    featureConversation: '- 文本对话：私聊直接发消息；群聊可回复我、把 @机器人用户名 放在问题末尾，或使用 /ask@机器人用户名 问题',
     featureReset: '- 清空记忆：使用按钮或发送“清空记忆”',
     featureModels: '- 模型列表：使用按钮查看可用模型',
     featureModel: '- 切换模型：在回复操作条点“🧠 模型”',
@@ -327,6 +371,7 @@ const UI_TEXT = {
     keywordUsage: '用法：/keyword 触发关键词',
     keywordSet: '群聊触发关键词已设置为：{keyword}',
     adminOnly: '只有管理员可以执行此命令。',
+    groupAdminOnly: '只有机器人管理员或当前群管理员可以修改群聊触发设置。',
     blockUsage: '用法：/{command} 用户ID',
     allowUsage: '用法：/{command} 用户ID',
     blockDone: '已封禁用户：{userId}',
@@ -404,7 +449,7 @@ const UI_TEXT = {
   },
   en: {
     helpTitle: 'Available features:',
-    featureConversation: '- Chat directly in private; groups support @mention, reply, or keyword triggers',
+    featureConversation: '- Chat directly in private; in groups, reply to me, put @botusername after the question, or use /ask@botusername question',
     featureReset: '- Clear memory: use the button or send "clear memory"',
     featureModels: '- Model list: view available models via buttons',
     featureModel: '- Switch model: tap "🧠 Model" on the reply action bar',
@@ -450,6 +495,7 @@ const UI_TEXT = {
     keywordUsage: 'Usage: /keyword trigger keyword',
     keywordSet: 'Group trigger keyword set to: {keyword}',
     adminOnly: 'Only admins can use this command.',
+    groupAdminOnly: 'Only bot administrators or administrators of this group can change group trigger settings.',
     blockUsage: 'Usage: /{command} userId',
     allowUsage: 'Usage: /{command} userId',
     blockDone: 'Blocked user: {userId}',
@@ -600,6 +646,22 @@ export function cleanBotOutput(text = '') {
   }
 
   return out.trim();
+}
+
+function cleanTranslationReply(text = '', sourceText = '') {
+  let output = String(text || '').replace(/\u0000/g, '').trim();
+  const fenced = output.match(/^```(?:[^\n]*)\n?([\s\S]*?)\n?```$/);
+  if (fenced) output = fenced[1].trim();
+  const labelled = output.match(/(?:^|\n)(?:translation|translated text|译文|譯文|翻译结果|翻譯結果)\s*[:：]\s*([\s\S]+)$/i);
+  if (labelled) output = labelled[1].trim();
+  output = output.replace(/^(?:translation|translated text|译文|譯文|翻译结果|翻譯結果)\s*[:：]\s*/i, '').trim();
+
+  const source = String(sourceText || '').trim();
+  if (source && output.length > source.length && output.startsWith(source)) {
+    const echoed = output.slice(source.length).match(/^(?:[ \t]*\r?\n+\s*|[ \t]*[-—>:：]+[ \t]*)([\s\S]+)$/);
+    if (echoed?.[1]?.trim()) output = echoed[1].trim();
+  }
+  return output;
 }
 
 
@@ -813,7 +875,9 @@ export class TelegramAIBot {
   }
 
   setPendingMenuAction(ctx, action) {
-    this.pendingMenuActions.set(this.getPendingMenuKey(ctx), {
+    const key = this.getPendingMenuKey(ctx);
+    this.activeModes?.delete(key);
+    this.pendingMenuActions.set(key, {
       action,
       createdAt: Date.now()
     });
@@ -832,7 +896,7 @@ export class TelegramAIBot {
 
   takePendingMenuAction(ctx) {
     const key = this.getPendingMenuKey(ctx);
-    const state = this.pendingMenuActions.get(key);
+    const state = this.pendingMenuActions?.get(key);
     if (!state) return null;
     this.pendingMenuActions.delete(key);
 
@@ -842,6 +906,17 @@ export class TelegramAIBot {
     }
 
     return state.action;
+  }
+
+  hasPendingMenuAction(ctx) {
+    const key = this.getPendingMenuKey(ctx);
+    const state = this.pendingMenuActions?.get(key);
+    if (!state) return false;
+    if (Date.now() - state.createdAt > 5 * 60 * 1000) {
+      this.pendingMenuActions.delete(key);
+      return false;
+    }
+    return true;
   }
 
 
@@ -857,7 +932,7 @@ export class TelegramAIBot {
   }
 
   getActiveMode(ctx) {
-    return this.activeModes.get(this.getActiveModeKey(ctx)) || null;
+    return this.activeModes?.get(this.getActiveModeKey(ctx)) || null;
   }
 
   clearActiveMode(ctx) {
@@ -920,10 +995,12 @@ export class TelegramAIBot {
     const text = String(ctx.message?.text || ctx.message?.caption || '').trim();
     const locale = this.getLocale(ctx);
     const pending = this.normalizePendingAction(pendingAction);
+    const retryPending = () => this.setPendingMenuAction(ctx, pending);
 
     if (pending.type === 'translate_prompt') {
       const locale = this.getLocale(ctx);
       if (!text) {
+        retryPending();
         await ctx.reply(this.t(locale, 'translationSendPrompt'));
         return true;
       }
@@ -934,6 +1011,7 @@ export class TelegramAIBot {
     if (pending.type === 'web_prompt') {
       const locale = this.getLocale(ctx);
       if (!text) {
+        retryPending();
         await ctx.reply(this.t(locale, 'webUsage'));
         return true;
       }
@@ -942,9 +1020,10 @@ export class TelegramAIBot {
 
     if (pending.type === 'image_prompt' || pending.type === 'image_understand_prompt') {
       if (ctx.message?.photo?.length) {
-        return this.handleIncomingMessage(ctx);
+        return this.handleIncomingMessage(ctx, { forceRespond: true });
       }
 
+      retryPending();
       await ctx.reply(localText(locale, '请直接发送图片给我识别。', 'Please send an image for me to inspect.'), this.createImageActionKeyboard(locale));
       return true;
     }
@@ -952,6 +1031,7 @@ export class TelegramAIBot {
     if (pending.type === 'image_generate_prompt') {
       const prompt = text;
       if (!prompt) {
+        retryPending();
         await ctx.reply(
           localText(locale, '请直接发送图片描述，例如：一只赛博朋克风格的猫。', 'Please send an image description, for example: a cyberpunk cat.'),
           this.createImageActionKeyboard(locale)
@@ -966,6 +1046,7 @@ export class TelegramAIBot {
     if (pending.type === 'image_edit_prompt') {
       const prompt = text || ctx.message?.caption || '';
       if (!ctx.message?.photo?.length) {
+        retryPending();
         await ctx.reply(
           localText(locale, '请发送要编辑的图片，并在图片说明里写编辑要求。', 'Please send the image to edit and put the edit request in the caption.'),
           this.createImageActionKeyboard(locale)
@@ -974,6 +1055,7 @@ export class TelegramAIBot {
       }
 
       if (!prompt) {
+        retryPending();
         await ctx.reply(
           localText(locale, '请在图片说明里写编辑要求，例如：把背景改成夜晚城市。', 'Please write the edit request in the image caption, for example: change the background to a night city.'),
           this.createImageActionKeyboard(locale)
@@ -991,6 +1073,7 @@ export class TelegramAIBot {
         return true;
       }
 
+      retryPending();
       await ctx.reply(
         localText(locale, '请直接发送 Telegram 语音消息或音频文件。', 'Please send a Telegram voice message or audio file.'),
         this.createVoiceActionKeyboard(locale)
@@ -1000,6 +1083,7 @@ export class TelegramAIBot {
 
     if (pending.type === 'voice_tts_prompt') {
       if (!text) {
+        retryPending();
         await ctx.reply(localText(locale, '请直接发送要朗读的文字。', 'Please send the text to read aloud.'), this.createVoiceActionKeyboard(locale));
         return true;
       }
@@ -1027,6 +1111,7 @@ export class TelegramAIBot {
       pending.type === 'file_translate_prompt'
     ) {
       if (!ctx.message?.document) {
+        retryPending();
         await ctx.reply(
           localText(locale, '请直接发送 PDF、DOCX、XLSX、TXT、MD、JSON、CSV 或 XML 文件。', 'Please send a PDF, DOCX, XLSX, TXT, MD, JSON, CSV, or XML file.'),
           this.createFileActionKeyboard(locale)
@@ -1056,6 +1141,14 @@ export class TelegramAIBot {
 
   ui(locale = 'en', key = '') {
     return uiLabel(locale, key);
+  }
+
+  isBottomKeyboardActionText(ctx) {
+    const normalized = String(ctx.message?.text || '')
+      .replace(/[🆘⚙️🛠❌]/g, '')
+      .trim()
+      .toLowerCase();
+    return /^(?:退出模式|退出|结束模式|结束|exit mode|exit|stop|cancel|帮助|help|设置|设置中心|settings?|setting|管理|管理员|后台|admin)$/.test(normalized);
   }
 
   async handleBottomKeyboardAction(ctx) {
@@ -2015,6 +2108,7 @@ export class TelegramAIBot {
   parseTranslationRequest(text = '') {
     const content = String(text || '').trim();
     if (!content) return null;
+    if (isIncompleteTranslationPrompt(content)) return null;
 
     let match = content.match(/^(?:中译英|中譯英|中文翻英文|中文翻译成英文|中文翻譯成英文)\s*[:：]?\s*([\s\S]+)$/i);
     if (match) return { text: match[1].trim(), targetLanguage: 'English' };
@@ -2071,7 +2165,28 @@ export class TelegramAIBot {
       };
     }
 
-    match = content.match(/^(?:翻译|翻譯|translate|tr)\s*[:：]?\s*([\s\S]+)$/i);
+    match = content.match(/^(?:translate|tr)\s+([\s\S]+?)\s+(?:to|into)\s+([^:：]+)$/i);
+    if (match) {
+      const targetLanguage = this.normalizeTranslationTarget(match[2]);
+      if (!KNOWN_TRANSLATION_TARGETS.has(targetLanguage.toLowerCase())) {
+        match = null;
+      } else {
+        return {
+          targetLanguage,
+          text: match[1].trim()
+        };
+      }
+    }
+
+    match = content.match(/^(?:翻译|翻譯)\s*[:：]?\s*([\s\S]+)$/i);
+    if (match) {
+      return {
+        targetLanguage: 'auto',
+        text: match[1].trim()
+      };
+    }
+
+    match = content.match(/^(?:translate|tr)\b(?:\s*[:：]\s*|\s+)([\s\S]+)$/i);
     if (match) {
       return {
         targetLanguage: 'auto',
@@ -2137,12 +2252,13 @@ export class TelegramAIBot {
       });
 
       const result = this.normalizeAiResult(completion.result);
-      if (!result.text) {
+      const translatedText = cleanTranslationReply(result.text, sourceText);
+      if (!translatedText) {
         await this.refundQuotaForContext(ctx);
         await ctx.reply(this.t(locale, 'noReply'));
         return;
       }
-      await sendTextReply(ctx, result.text, this.config.maxOutputChars);
+      await sendTextReply(ctx, translatedText, this.config.maxOutputChars);
     } catch (error) {
       await this.refundQuotaForContext(ctx);
       if (this.isAiQuotaError(error)) {
@@ -2215,7 +2331,12 @@ export class TelegramAIBot {
 
   async withProviderForCapability(capability, preferredProvider, callback) {
     if (!this.providerManager) {
-      return callback();
+      return callback({
+        providerId: this.activeServiceProvider || '',
+        providerName: this.getProviderName(),
+        client: this.aiClient,
+        capabilities: this.getProviderCapabilities()
+      });
     }
 
     const selected = this.providerManager.selectProvider({
@@ -2224,29 +2345,17 @@ export class TelegramAIBot {
       fallbackEnabled: true
     });
     if (!selected?.client) {
-      return callback(null);
+      return {
+        ok: false,
+        code: 'PROVIDER_UNAVAILABLE',
+        error: `No configured provider supports ${capability}.`
+      };
     }
 
-    const previous = {
-      activeServiceProvider: this.activeServiceProvider,
-      aiClient: this.aiClient,
-      multimodalClient: this.multimodalActions.aiClient,
-      audioClient: this.audioOrchestrator.aiClient
-    };
-
-    this.activeServiceProvider = selected.providerId;
-    this.aiClient = selected.client;
-    this.multimodalActions.aiClient = selected.client;
-    this.audioOrchestrator.aiClient = selected.client;
-
-    try {
-      return await callback(selected);
-    } finally {
-      this.activeServiceProvider = previous.activeServiceProvider;
-      this.aiClient = previous.aiClient;
-      this.multimodalActions.aiClient = previous.multimodalClient;
-      this.audioOrchestrator.aiClient = previous.audioClient;
-    }
+    // Provider selection is request-scoped. Mutating shared service clients here
+    // lets overlapping Telegram updates restore each other's provider out of
+    // order and can permanently route later requests through the wrong client.
+    return callback(selected);
   }
 
   extractJsonObject(text = '') {
@@ -3145,6 +3254,8 @@ export class TelegramAIBot {
     this.bot.command('whoami', (ctx) => this.handleWhoami(ctx));
     this.bot.command('translate', (ctx) => this.runTranslation(ctx, extractCommandArgs(ctx.message.text || ''), 'auto'));
     this.bot.command('tr', (ctx) => this.runTranslation(ctx, extractCommandArgs(ctx.message.text || ''), 'auto'));
+    this.bot.command('chatmode', (ctx) => this.handleChatMode(ctx));
+    this.bot.command('keyword', (ctx) => this.handleKeyword(ctx));
     this.bot.command('block', (ctx) => this.handleBlock(ctx, true));
     this.bot.command('unblock', (ctx) => this.handleBlock(ctx, false));
     this.bot.command('allow', (ctx) => this.handleAllow(ctx, true));
@@ -3167,6 +3278,23 @@ export class TelegramAIBot {
       return this.accessControl.isAdmin(userId);
     }
     return this.config.adminUserIds.has(userId);
+  }
+
+  async canManageGroupSettings(ctx) {
+    if (this.isAdmin(ctx)) return true;
+    if (!ctx.chat?.id || !ctx.from?.id || typeof ctx.telegram?.getChatMember !== 'function') return false;
+
+    try {
+      const member = await ctx.telegram.getChatMember(ctx.chat.id, ctx.from.id);
+      return member?.status === 'creator' || member?.status === 'administrator';
+    } catch (error) {
+      this.logger?.warn?.('Failed to verify Telegram group administrator', {
+        chatId: ctx.chat?.id,
+        userId: ctx.from?.id,
+        error: this.formatLogError(error)
+      });
+      return false;
+    }
   }
 
   isAllowed(ctx) {
@@ -4023,6 +4151,13 @@ export class TelegramAIBot {
                 await this.db.incrementStats('toolCalls');
                 await this.db.incrementStats('aiCalls');
                 await sendSearchReply(ctx, grounded.text, this.config.maxOutputChars, locale);
+                await naturalAgentInternals.rememberHandledInteraction(
+                  this,
+                  ctx,
+                  query,
+                  grounded.text,
+                  model
+                );
                 return;
               }
             } catch (error) {
@@ -4081,6 +4216,13 @@ export class TelegramAIBot {
       } else {
         await sendTextReply(ctx, composed.text, this.config.maxOutputChars);
       }
+      await naturalAgentInternals.rememberHandledInteraction(
+        this,
+        ctx,
+        query,
+        composed.text,
+        preferredModel
+      );
     } catch (error) {
       await this.refundQuotaForContext(ctx);
       const hint = localText(
@@ -4115,9 +4257,12 @@ export class TelegramAIBot {
       const result = await this.withProviderForCapability(
         capability,
         this.config.imageProvider,
-        () => this.multimodalActions.runImageAction({
+        (selected) => this.multimodalActions.runImageAction({
           mode,
-          prompt
+          prompt,
+          aiClient: selected.client,
+          capabilities: selected.capabilities,
+          providerName: selected.providerName
         })
       );
       if (!result.ok) {
@@ -4166,11 +4311,14 @@ export class TelegramAIBot {
       const result = await this.withProviderForCapability(
         'imageEditing',
         this.config.imageProvider,
-        () => this.multimodalActions.runImageAction({
+        (selected) => this.multimodalActions.runImageAction({
           mode: 'edit',
           prompt,
           imageBuffer: file.buffer,
-          mimeType: file.mimeType
+          mimeType: file.mimeType,
+          aiClient: selected.client,
+          capabilities: selected.capabilities,
+          providerName: selected.providerName
         })
       );
       if (!result.ok) {
@@ -4230,11 +4378,14 @@ export class TelegramAIBot {
       const result = await this.withProviderForCapability(
         'speechTranscription',
         this.config.transcriptionProvider,
-        () => this.audioOrchestrator.transcribeIncomingAudio({
+        (selected) => this.audioOrchestrator.transcribeIncomingAudio({
           file,
           locale,
           userText: '',
-          prompt: 'Transcribe the user audio accurately. Output only the transcription text.'
+          prompt: 'Transcribe the user audio accurately. Output only the transcription text.',
+          aiClient: selected.client,
+          capabilities: selected.capabilities,
+          providerName: selected.providerName
         })
       );
 
@@ -4244,7 +4395,6 @@ export class TelegramAIBot {
         return;
       }
 
-      await this.db.incrementStats('voiceTranscriptions');
 
       const title = localText(locale, '🎙 语音转文字结果：', '🎙 Transcription:');
       if (!result.text) {
@@ -4285,7 +4435,12 @@ export class TelegramAIBot {
       const result = await this.withProviderForCapability(
         'speechSynthesis',
         this.config.ttsProvider,
-        () => this.audioOrchestrator.textToSpeech({ input: text })
+        (selected) => this.audioOrchestrator.textToSpeech({
+          input: text,
+          aiClient: selected.client,
+          capabilities: selected.capabilities,
+          providerName: selected.providerName
+        })
       );
       if (!result.ok) {
         await this.refundQuotaForContext(ctx);
@@ -4847,6 +5002,11 @@ export class TelegramAIBot {
       return;
     }
 
+    if (!(await this.canManageGroupSettings(ctx))) {
+      await ctx.reply(this.t(locale, 'groupAdminOnly'));
+      return;
+    }
+
     const mode = extractCommandArgs(ctx.message.text || '');
     const allowed = ['smart', 'all', 'mention', 'reply', 'keyword'];
     if (!mode || !allowed.includes(mode)) {
@@ -4862,6 +5022,11 @@ export class TelegramAIBot {
     const locale = this.getLocale(ctx);
     if (ctx.chat.type === 'private') {
       await ctx.reply(this.t(locale, 'privateOnlyCommand'));
+      return;
+    }
+
+    if (!(await this.canManageGroupSettings(ctx))) {
+      await ctx.reply(this.t(locale, 'groupAdminOnly'));
       return;
     }
 
@@ -6012,8 +6177,17 @@ export class TelegramAIBot {
 
 
   async handleIncomingMessage(ctx) {
-    const text = ctx.message.text || '';
-    const caption = ctx.message.caption || '';
+    const { forceRespond = false } = arguments[1] || {};
+    let text = ctx.message?.text || '';
+    let caption = ctx.message?.caption || '';
+
+    const viaBot = ctx.message?.via_bot;
+    const sentViaCurrentBot = Boolean(viaBot && (
+      (this.botUserId && String(viaBot.id || '') === String(this.botUserId)) ||
+      (this.botUsername && String(viaBot.username || '').toLowerCase() === String(this.botUsername).toLowerCase())
+    ));
+    if (sentViaCurrentBot) return;
+
     const command = normalizeCommand(text);
     if (command.startsWith('/')) {
       return;
@@ -6023,13 +6197,61 @@ export class TelegramAIBot {
     const chat = this.db.findChat(ctx.chat.id);
     const locale = this.getLocale(ctx, user);
 
-    if (await this.handleBottomKeyboardAction(ctx)) return;
+    const repliedFrom = ctx.message?.reply_to_message?.from;
+    const isReplyToCurrentBot = Boolean(
+      (this.botUserId && repliedFrom?.id != null && String(repliedFrom.id) === String(this.botUserId)) ||
+      (this.botUsername && String(repliedFrom?.username || '').toLowerCase() === String(this.botUsername).toLowerCase())
+    );
+    const hasBotMention = messageMentionsTelegramBot(ctx.message, this.botUsername, this.botUserId);
+    const hasInteractiveState = Boolean(this.getActiveMode(ctx)) || this.hasPendingMenuAction(ctx);
+    const isBottomKeyboardInput = this.isBottomKeyboardActionText(ctx);
+    const shouldRespond = forceRespond || hasInteractiveState || isBottomKeyboardInput || shouldRespondToMessage({
+      chatType: ctx.chat.type,
+      text,
+      caption,
+      message: ctx.message,
+      hasMention: hasBotMention,
+      isReplyToBot: isReplyToCurrentBot,
+      botUsername: this.botUsername,
+      botUserId: this.botUserId,
+      triggerMode: chat?.triggerMode || this.config.groupTriggerMode,
+      keyword: chat?.keyword || this.config.groupTriggerKeyword
+    });
 
-    const activeMode = this.getActiveMode(ctx);
-    if (activeMode) {
-      const handled = await this.handleActiveMode(ctx, activeMode);
-      if (handled) return;
+    if (!shouldRespond) return;
+
+    if (ctx.chat.type !== 'private' && hasBotMention) {
+      const stripped = stripTelegramBotMentionsFromMessage(ctx.message, this.botUsername, this.botUserId);
+      text = stripped.text;
+      caption = stripped.caption;
+      if (typeof ctx.message?.text === 'string') ctx.message.text = text;
+      if (typeof ctx.message?.caption === 'string') ctx.message.caption = caption;
     }
+
+    const hasProcessableAttachment = Boolean(
+      ctx.message?.photo?.length || ctx.message?.voice || ctx.message?.audio || ctx.message?.document
+    );
+    const mentionOnlyText = `${text}\n${caption}`.trim();
+    const isMentionOnlyPing = hasBotMention && (!mentionOnlyText || /^[\s\p{P}\p{S}]+$/u.test(mentionOnlyText));
+    if (ctx.chat.type !== 'private' && isMentionOnlyPing && !hasProcessableAttachment) {
+      if (!this.isAllowed(ctx)) {
+        await ctx.reply(this.t(locale, 'noAccess'));
+        return;
+      }
+      if (!this.checkRateLimit(ctx.from?.id)) {
+        await ctx.reply(this.t(locale, 'rateLimited'));
+        return;
+      }
+      const mention = this.botUsername ? `@${this.botUsername}` : '@botusername';
+      await ctx.reply(localText(
+        locale,
+        `我在。请直接回复这条消息继续提问，或先写问题、再把 ${mention} 放在句末。`,
+        `I am here. Reply to this message, or write the question first and put ${mention} at the end.`
+      ));
+      return;
+    }
+
+    if (await this.handleBottomKeyboardAction(ctx)) return;
 
     // 用户点击功能按钮后的下一条输入必须优先执行，不能被普通聊天代理截走。
     const pendingAction = this.takePendingMenuAction(ctx);
@@ -6038,38 +6260,25 @@ export class TelegramAIBot {
       if (handled !== false) return;
     }
 
-    if (await tryHandleNaturalAgent(this, ctx)) return;
-
-
-
+    const activeMode = this.getActiveMode(ctx);
+    if (activeMode) {
+      const handled = await this.handleActiveMode(ctx, activeMode);
+      if (handled) return;
+    }
 
     const translationRequest = text ? this.parseTranslationRequest(text) : null;
     if (translationRequest) {
       return this.runTranslation(ctx, translationRequest.text, translationRequest.targetLanguage);
     }
 
+    if (await tryHandleNaturalAgent(this, ctx)) return;
+
+
     const naturalAction = text ? this.parseNaturalLanguageAction(text, locale) : null;
 
     if (naturalAction) {
       if (await this.handleMenuAction(ctx, naturalAction, locale)) return;
     }
-
-    const repliedFrom = ctx.message.reply_to_message?.from;
-    const isReplyToCurrentBot = Boolean(
-      (this.botUserId && repliedFrom?.id != null && String(repliedFrom.id) === this.botUserId) ||
-      (this.botUsername && repliedFrom?.username === this.botUsername)
-    );
-    const shouldRespond = shouldRespondToMessage({
-      chatType: ctx.chat.type,
-      text,
-      caption,
-      isReplyToBot: isReplyToCurrentBot,
-      botUsername: this.botUsername,
-      triggerMode: chat?.triggerMode || this.config.groupTriggerMode,
-      keyword: chat?.keyword || this.config.groupTriggerKeyword
-    });
-
-    if (!shouldRespond) return;
 
     if (!(await this.consumeQuotaForContext(ctx))) return;
 
@@ -6289,12 +6498,15 @@ export class TelegramAIBot {
         voice.file_name || 'audio.ogg',
         voice.mime_type || 'audio/ogg'
       );
-      const audioResult = await this.withProviderForCapability('speechTranscription', this.config.transcriptionProvider, () => {
+      const audioResult = await this.withProviderForCapability('speechTranscription', this.config.transcriptionProvider, (selected) => {
         return this.audioOrchestrator.transcribeIncomingAudio({
           file,
           locale,
           userText: decoratedText,
-          prompt: 'Transcribe the user audio accurately.'
+          prompt: 'Transcribe the user audio accurately.',
+          aiClient: selected.client,
+          capabilities: selected.capabilities,
+          providerName: selected.providerName
         });
       });
       if (!audioResult.ok) {

@@ -37,33 +37,42 @@ export class MultimodalActionService {
     };
   }
 
-  async runImageAction({ mode, prompt, imageBuffer, mimeType }) {
-    const capabilities = this.getProviderCapabilities();
-    const provider = this.getProviderName();
+  async runImageAction({
+    mode,
+    prompt,
+    imageBuffer,
+    mimeType,
+    aiClient = null,
+    capabilities = null,
+    providerName = ''
+  }) {
+    const activeClient = aiClient || this.aiClient;
+    const activeCapabilities = capabilities || this.getProviderCapabilities();
+    const provider = providerName || this.getProviderName();
 
     if (mode === 'generate') {
-      if (!capabilities.imageGeneration) {
+      if (!activeCapabilities.imageGeneration) {
         return {
           ok: false,
           code: 'IMAGE_GENERATION_UNSUPPORTED',
           message: `Provider ${provider} does not support image generation.`
         };
       }
-      const response = await this.aiClient.generateImage({ prompt });
+      const response = await activeClient.generateImage({ prompt });
       await this.db.incrementStats('aiCalls');
       await this.db.incrementStats('imageGenerations');
       return { ok: true, mode, response };
     }
 
     if (mode === 'edit') {
-      if (!capabilities.imageEditing || typeof this.aiClient.editImage !== 'function') {
+      if (!activeCapabilities.imageEditing || typeof activeClient.editImage !== 'function') {
         return {
           ok: false,
           code: 'IMAGE_EDIT_UNSUPPORTED',
           message: `Provider ${provider} does not support image editing.`
         };
       }
-      const response = await this.aiClient.editImage({ prompt, imageBuffer, mimeType });
+      const response = await activeClient.editImage({ prompt, imageBuffer, mimeType });
       await this.db.incrementStats('aiCalls');
       await this.db.incrementStats('imageGenerations');
       return { ok: true, mode, response };
