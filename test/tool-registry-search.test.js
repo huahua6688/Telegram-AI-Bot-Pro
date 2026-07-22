@@ -32,7 +32,14 @@ function createRegistry(overrides = {}, logger = { info() {}, warn() {}, debug()
 
 function rejectWhenAborted(signal, callback = () => undefined) {
   return new Promise((resolve, reject) => {
+    // A real pending fetch keeps the process alive. AbortSignal.timeout() uses
+    // an unref'ed timer on Linux/Node 24, so this mock needs one referenced
+    // safety timer or node:test may cancel the test before the abort fires.
+    const safetyTimer = setTimeout(() => {
+      reject(new Error('Mock fetch did not receive an abort before its deadline.'));
+    }, 1500);
     const abort = () => {
+      clearTimeout(safetyTimer);
       callback();
       reject(signal?.reason || new DOMException('Aborted', 'AbortError'));
     };
