@@ -142,6 +142,76 @@ test('loadConfig supports provider-specific key fallback to AI_API_KEY', () => {
   assert.equal(config.deepseekApiKey, 'shared-key');
 });
 
+test('legacy AI_API_KEY does not make unrelated fallback providers look configured', () => {
+  resetEnv();
+  process.env.AI_PROVIDER = 'gemini';
+  process.env.AI_API_KEY = 'gemini-legacy-key';
+  delete process.env.OPENAI_API_KEY;
+  delete process.env.ANTHROPIC_API_KEY;
+  delete process.env.DEEPSEEK_API_KEY;
+  delete process.env.QWEN_API_KEY;
+  delete process.env.GROK_API_KEY;
+  delete process.env.GLM_API_KEY;
+  delete process.env.DOUBAO_API_KEY;
+
+  const config = loadConfig();
+  assert.equal(config.geminiApiKey, 'gemini-legacy-key');
+  assert.equal(config.openaiApiKey, '');
+  assert.equal(config.anthropicApiKey, '');
+  assert.equal(config.deepseekApiKey, '');
+  assert.equal(config.qwenApiKey, '');
+  assert.equal(config.grokApiKey, '');
+  assert.equal(config.glmApiKey, '');
+  assert.equal(config.doubaoApiKey, '');
+});
+
+test('loadConfig parses Telegram Stars products and independent free quotas', () => {
+  resetEnv();
+  process.env.STARS_PRODUCTS_JSON = JSON.stringify([{
+    id: 'starter',
+    title: '入门额度包',
+    titleEn: 'Starter credits',
+    description: '综合额度',
+    descriptionEn: 'Mixed credits',
+    price: 42,
+    credits: { chat: 100, vision: 9, image: 3, tts: 8, live_audio: 4, video: 2 }
+  }]);
+  process.env.STARS_FREE_CHAT_DAILY = '12';
+  process.env.STARS_FREE_VISION_DAILY = '2';
+  process.env.STARS_FREE_VIDEO_DAILY = '0';
+  process.env.STARS_USAGE_RESERVATION_TTL_MINUTES = '9';
+  delete process.env.ENABLE_VIDEO;
+
+  const config = loadConfig();
+  assert.equal(config.starsProducts[0].price, 42);
+  assert.deepEqual(config.starsProducts[0].credits, {
+    chat: 100,
+    vision: 9,
+    image_generation: 3,
+    tts: 8,
+    live_voice: 4,
+    video: 2
+  });
+  assert.equal(config.starsFreeQuota.chat, 12);
+  assert.equal(config.starsFreeQuota.vision, 2);
+  assert.equal(config.starsFreeQuota.video, 0);
+  assert.equal(config.starsUsageReservationTtlMinutes, 9);
+  assert.equal(config.enableVideo, false);
+});
+
+test('loadConfig rejects invalid Telegram Stars prices instead of hardcoding a fallback', () => {
+  resetEnv();
+  process.env.STARS_PRODUCTS_JSON = JSON.stringify([{
+    id: 'bad',
+    title: 'Bad pack',
+    description: 'Bad price',
+    price: 0,
+    credits: { chat: 1 }
+  }]);
+
+  assert.throws(() => loadConfig(), /price must be a positive integer/i);
+});
+
 test('loadConfig defaults to SQLite storage and streaming replies', () => {
   resetEnv();
   delete process.env.DATABASE_FILE;
@@ -171,8 +241,10 @@ test('loadConfig exposes safe Telegram platform mode defaults', () => {
   delete process.env.GUARD_DEFAULT_ACTION;
   delete process.env.BOT_COLLABORATION_COOLDOWN_MS;
   delete process.env.INLINE_QUERY_DEBOUNCE_MS;
+  delete process.env.INLINE_QUERY_MIN_CHARS;
   delete process.env.INLINE_QUERY_RESPONSE_TIMEOUT_MS;
   delete process.env.INLINE_QUERY_SEARCH_TIMEOUT_MS;
+  delete process.env.INLINE_QUERY_AI_ATTEMPT_TIMEOUT_MS;
   delete process.env.INLINE_QUERY_CACHE_TTL_MS;
   delete process.env.NEWS_REGION;
   delete process.env.NEWS_LANGUAGE;
@@ -182,8 +254,10 @@ test('loadConfig exposes safe Telegram platform mode defaults', () => {
   assert.equal(config.guardDefaultAction, 'queue');
   assert.equal(config.botCollaborationCooldownMs, 5000);
   assert.equal(config.inlineQueryDebounceMs, 1200);
+  assert.equal(config.inlineQueryMinChars, 2);
   assert.equal(config.inlineQueryResponseTimeoutMs, 7000);
   assert.equal(config.inlineQuerySearchTimeoutMs, 2500);
+  assert.equal(config.inlineQueryAiAttemptTimeoutMs, 1400);
   assert.equal(config.inlineQueryCacheTtlMs, 60000);
   assert.equal(config.newsRegion, 'MY');
   assert.equal(config.newsLanguage, 'auto');
@@ -193,8 +267,10 @@ test('loadConfig exposes safe Telegram platform mode defaults', () => {
   process.env.GUARD_DEFAULT_ACTION = 'decline';
   process.env.BOT_COLLABORATION_COOLDOWN_MS = '9000';
   process.env.INLINE_QUERY_DEBOUNCE_MS = '900';
+  process.env.INLINE_QUERY_MIN_CHARS = '3';
   process.env.INLINE_QUERY_RESPONSE_TIMEOUT_MS = '6500';
   process.env.INLINE_QUERY_SEARCH_TIMEOUT_MS = '1800';
+  process.env.INLINE_QUERY_AI_ATTEMPT_TIMEOUT_MS = '900';
   process.env.INLINE_QUERY_CACHE_TTL_MS = '120000';
   process.env.NEWS_REGION = 'sg';
   process.env.NEWS_LANGUAGE = 'en-SG';
@@ -204,8 +280,10 @@ test('loadConfig exposes safe Telegram platform mode defaults', () => {
   assert.equal(config.guardDefaultAction, 'decline');
   assert.equal(config.botCollaborationCooldownMs, 9000);
   assert.equal(config.inlineQueryDebounceMs, 900);
+  assert.equal(config.inlineQueryMinChars, 3);
   assert.equal(config.inlineQueryResponseTimeoutMs, 6500);
   assert.equal(config.inlineQuerySearchTimeoutMs, 1800);
+  assert.equal(config.inlineQueryAiAttemptTimeoutMs, 900);
   assert.equal(config.inlineQueryCacheTtlMs, 120000);
   assert.equal(config.newsRegion, 'SG');
   assert.equal(config.newsLanguage, 'en-SG');

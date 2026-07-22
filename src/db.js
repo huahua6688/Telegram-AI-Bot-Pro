@@ -11,7 +11,31 @@ import { normalizeLanguageCode } from './utils/telegram.js';
 // v4: Long-term memory, topic states, active context
 // v5: Per-user AI provider/model settings and provider fallback preference
 // v6: Per-user daily quota overrides
-const CURRENT_SCHEMA_VERSION = 6;
+// v7: Telegram Stars orders, per-capability balances, usage reservations, and refunds
+// v8: Single-owner leases for Telegram Stars refund attempts
+const CURRENT_SCHEMA_VERSION = 8;
+
+export const BILLING_CREDIT_TYPES = Object.freeze([
+  'chat',
+  'vision',
+  'image_generation',
+  'tts',
+  'live_voice',
+  'video'
+]);
+
+const BILLING_CREDIT_TYPE_SET = new Set(BILLING_CREDIT_TYPES);
+const BILLING_CREDIT_TYPE_ALIASES = new Map([
+  ['image', 'image_generation'],
+  ['image_edit', 'image_generation'],
+  ['image_editing', 'image_generation'],
+  ['image_understanding', 'vision'],
+  ['image_recognition', 'vision'],
+  ['voice', 'live_voice'],
+  ['realtime_voice', 'live_voice'],
+  ['speech_transcription', 'live_voice'],
+  ['speech_synthesis', 'tts']
+]);
 
 const defaultData = {
   meta: {
@@ -73,6 +97,152 @@ function toBoolean(value) {
 
 function toIntegerBoolean(value) {
   return value ? 1 : 0;
+}
+
+function parseJsonObject(value, fallback = {}) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  try {
+    const parsed = JSON.parse(String(value || ''));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeBillingCreditType(value = '') {
+  const normalized = String(value || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  const resolved = BILLING_CREDIT_TYPE_ALIASES.get(normalized) || normalized;
+  if (!BILLING_CREDIT_TYPE_SET.has(resolved)) {
+    throw new RangeError(`Unsupported billing credit type: ${String(value || '')}`);
+  }
+  return resolved;
+}
+
+function normalizeBillingUnits(value, { allowZero = false, label = 'Billing units' } = {}) {
+  const units = Number(value);
+  if (!Number.isSafeInteger(units) || units < (allowZero ? 0 : 1)) {
+    throw new RangeError(`${label} must be a ${allowZero ? 'non-negative' : 'positive'} safe integer.`);
+  }
+  return units;
+}
+
+function normalizeCreditGrants(grants = {}) {
+  const normalized = {};
+  for (const [rawType, rawUnits] of Object.entries(parseJsonObject(grants))) {
+    const creditType = normalizeBillingCreditType(rawType);
+    const units = normalizeBillingUnits(rawUnits, { allowZero: true, label: `Grant for ${creditType}` });
+    if (units > 0) normalized[creditType] = (normalized[creditType] || 0) + units;
+  }
+  return normalized;
+}
+
+function createCreditBalanceError(code, message) {
+  const error = new RangeError(message);
+  error.code = code;
+  return error;
+}
+
+function normalizeCreditBalanceValues(values, { allowNegative = false, requireAll = false } = {}) {
+  if (!values || typeof values !== 'object' || Array.isArray(values)) {
+    throw createCreditBalanceError(
+      'INVALID_CREDIT_BALANCES',
+      'Credit balances must be provided as an object.'
+    );
+  }
+
+  const normalized = {};
+  for (const [rawType, rawValue] of Object.entries(values)) {
+    const creditType = normalizeBillingCreditType(rawType);
+    if (Object.prototype.hasOwnProperty.call(normalized, creditType)) {
+      throw createCreditBalanceError(
+        'DUPLICATE_CREDIT_TYPE',
+        `Credit type ${creditType} was provided more than once.`
+      );
+    }
+    if (
+      typeof rawValue !== 'number' ||
+      !Number.isSafeInteger(rawValue) ||
+      (!allowNegative && rawValue < 0)
+    ) {
+      throw createCreditBalanceError(
+        'INVALID_CREDIT_BALANCE',
+        `${creditType} must be ${allowNegative ? 'a safe integer' : 'a non-negative safe integer'}.`
+      );
+    }
+    normalized[creditType] = rawValue;
+  }
+
+  if (Object.keys(normalized).length === 0) {
+    throw createCreditBalanceError(
+      'INVALID_CREDIT_BALANCES',
+      'At least one credit balance is required.'
+    );
+  }
+  if (requireAll && BILLING_CREDIT_TYPES.some((creditType) => !(creditType in normalized))) {
+    throw createCreditBalanceError(
+      'INCOMPLETE_CREDIT_BALANCES',
+      'All billing credit types are required.'
+    );
+  }
+  return normalized;
+}
+
+function rowToStarOrder(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    invoicePayload: row.invoice_payload,
+    userId: row.user_id,
+    productId: row.product_id,
+    currency: row.currency,
+    amount: Number(row.amount || 0),
+    grants: normalizeCreditGrants(row.grants_json),
+    status: row.status,
+    telegramPaymentChargeId: row.telegram_payment_charge_id || '',
+    providerPaymentChargeId: row.provider_payment_charge_id || '',
+    createdAt: row.created_at || '',
+    expiresAt: row.expires_at || '',
+    paidAt: row.paid_at || '',
+    refundedAt: row.refunded_at || '',
+    updatedAt: row.updated_at || ''
+  };
+}
+
+function rowToUsageRecord(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    requestKey: row.request_key,
+    userId: row.user_id,
+    creditType: row.credit_type,
+    units: Number(row.units || 0),
+    source: row.source,
+    status: row.status,
+    balanceBefore: Number(row.balance_before || 0),
+    balanceAfter: Number(row.balance_after || 0),
+    usageDate: row.usage_date || '',
+    metadata: parseJsonObject(row.metadata_json),
+    createdAt: row.created_at || '',
+    updatedAt: row.updated_at || ''
+  };
+}
+
+function rowToStarRefund(row) {
+  if (!row) return null;
+  return {
+    id: row.id,
+    orderId: row.order_id,
+    telegramPaymentChargeId: row.telegram_payment_charge_id,
+    status: row.status,
+    requestedBy: row.requested_by || '',
+    reason: row.reason || '',
+    error: row.error || '',
+    revokedGrants: normalizeCreditGrants(row.revoked_grants_json),
+    leaseToken: row.lease_token || '',
+    leaseExpiresAt: row.lease_expires_at || '',
+    createdAt: row.created_at || '',
+    updatedAt: row.updated_at || ''
+  };
 }
 
 function rowToUser(row) {
@@ -256,6 +426,12 @@ export class BotDatabase {
       }
       if (version === 6) {
         this.applySchemaV6();
+      }
+      if (version === 7) {
+        this.applySchemaV7();
+      }
+      if (version === 8) {
+        this.applySchemaV8();
       }
       this.setMeta('schemaVersion', String(version));
     }
@@ -570,6 +746,112 @@ export class BotDatabase {
     `);
   }
 
+  applySchemaV7() {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS star_orders (
+        id TEXT PRIMARY KEY,
+        invoice_payload TEXT NOT NULL UNIQUE,
+        user_id TEXT NOT NULL,
+        product_id TEXT NOT NULL,
+        currency TEXT NOT NULL DEFAULT 'XTR' CHECK(currency = 'XTR'),
+        amount INTEGER NOT NULL CHECK(amount > 0),
+        grants_json TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'pending'
+          CHECK(status IN ('pending', 'paid', 'refund_pending', 'refunded', 'expired', 'failed')),
+        telegram_payment_charge_id TEXT UNIQUE,
+        provider_payment_charge_id TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL DEFAULT '',
+        paid_at TEXT NOT NULL DEFAULT '',
+        refunded_at TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE RESTRICT
+      );
+
+      CREATE TABLE IF NOT EXISTS user_credit_balances (
+        user_id TEXT NOT NULL,
+        credit_type TEXT NOT NULL
+          CHECK(credit_type IN ('chat', 'vision', 'image_generation', 'tts', 'live_voice', 'video')),
+        balance INTEGER NOT NULL DEFAULT 0 CHECK(balance >= 0),
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(user_id, credit_type),
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS daily_credit_usage (
+        user_id TEXT NOT NULL,
+        credit_type TEXT NOT NULL
+          CHECK(credit_type IN ('chat', 'vision', 'image_generation', 'tts', 'live_voice', 'video')),
+        usage_date TEXT NOT NULL,
+        used INTEGER NOT NULL DEFAULT 0 CHECK(used >= 0),
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY(user_id, credit_type, usage_date),
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS usage_records (
+        id TEXT PRIMARY KEY,
+        request_key TEXT NOT NULL UNIQUE,
+        user_id TEXT NOT NULL,
+        credit_type TEXT NOT NULL
+          CHECK(credit_type IN ('chat', 'vision', 'image_generation', 'tts', 'live_voice', 'video')),
+        units INTEGER NOT NULL CHECK(units > 0),
+        source TEXT NOT NULL CHECK(source IN ('admin', 'daily_free', 'paid')),
+        status TEXT NOT NULL DEFAULT 'reserved'
+          CHECK(status IN ('reserved', 'consumed', 'refunded')),
+        balance_before INTEGER NOT NULL DEFAULT 0 CHECK(balance_before >= 0),
+        balance_after INTEGER NOT NULL DEFAULT 0 CHECK(balance_after >= 0),
+        usage_date TEXT NOT NULL DEFAULT '',
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE RESTRICT
+      );
+
+      CREATE TABLE IF NOT EXISTS star_refunds (
+        id TEXT PRIMARY KEY,
+        order_id TEXT NOT NULL UNIQUE,
+        telegram_payment_charge_id TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL DEFAULT 'pending'
+          CHECK(status IN ('pending', 'succeeded', 'failed')),
+        requested_by TEXT NOT NULL DEFAULT '',
+        reason TEXT NOT NULL DEFAULT '',
+        error TEXT NOT NULL DEFAULT '',
+        revoked_grants_json TEXT NOT NULL DEFAULT '{}',
+        lease_token TEXT NOT NULL DEFAULT '',
+        lease_expires_at TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(order_id) REFERENCES star_orders(id) ON DELETE RESTRICT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_star_orders_user_created
+        ON star_orders(user_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_star_orders_status_updated
+        ON star_orders(status, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_credit_balances_updated
+        ON user_credit_balances(updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_daily_credit_usage_date
+        ON daily_credit_usage(usage_date, credit_type, used DESC);
+      CREATE INDEX IF NOT EXISTS idx_usage_records_user_created
+        ON usage_records(user_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_usage_records_type_status
+        ON usage_records(credit_type, status, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_star_refunds_status_updated
+        ON star_refunds(status, updated_at DESC);
+    `);
+  }
+
+  applySchemaV8() {
+    const columns = new Set(this.db.prepare('PRAGMA table_info(star_refunds)').all().map((column) => column.name));
+    if (!columns.has('lease_token')) {
+      this.db.exec("ALTER TABLE star_refunds ADD COLUMN lease_token TEXT NOT NULL DEFAULT ''");
+    }
+    if (!columns.has('lease_expires_at')) {
+      this.db.exec("ALTER TABLE star_refunds ADD COLUMN lease_expires_at TEXT NOT NULL DEFAULT ''");
+    }
+  }
+
   ensureFavoritesV2Columns() {
     const columns = this.db.prepare('PRAGMA table_info(favorites)').all();
     const existing = new Set(columns.map((column) => column.name));
@@ -760,6 +1042,22 @@ export class BotDatabase {
 
   async write() {
     this.setMeta('updatedAt', now());
+  }
+
+  runImmediateTransaction(callback) {
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const result = callback();
+      this.db.exec('COMMIT');
+      return result;
+    } catch (error) {
+      try {
+        this.db.exec('ROLLBACK');
+      } catch {
+        // Preserve the original database error.
+      }
+      throw error;
+    }
   }
 
   findUser(userId) {
@@ -2148,6 +2446,15 @@ export class BotDatabase {
          WHERE id = ?`
       )
       .run(today, now(), String(userId));
+    this.db
+      .prepare(
+        `INSERT INTO daily_credit_usage(user_id, credit_type, usage_date, used, updated_at)
+         VALUES (?, 'chat', ?, ?, ?)
+         ON CONFLICT(user_id, credit_type, usage_date) DO UPDATE SET
+           used = excluded.used,
+           updated_at = excluded.updated_at`
+      )
+      .run(String(userId), today, dailyUsageCount + 1, now());
     return {
       allowed: true,
       remaining: effectiveQuota > 0 ? Math.max(0, effectiveQuota - dailyUsageCount - 1) : Infinity,
@@ -2219,13 +2526,37 @@ export class BotDatabase {
          WHERE id = ? AND daily_usage_date = ?`
       )
       .run(normalizedCount, normalizedCount, now(), String(userId), today);
-    return this.findUser(userId);
+    const user = this.findUser(userId);
+    if (user) {
+      this.db
+        .prepare(
+          `INSERT INTO daily_credit_usage(user_id, credit_type, usage_date, used, updated_at)
+           VALUES (?, 'chat', ?, ?, ?)
+           ON CONFLICT(user_id, credit_type, usage_date) DO UPDATE SET
+             used = excluded.used,
+             updated_at = excluded.updated_at`
+        )
+        .run(String(userId), today, Number(user.dailyUsageCount || 0), now());
+    }
+    return user;
   }
 
   setUserDailyUsage(userId, count = 0, date = new Date().toISOString().slice(0, 10)) {
+    const normalizedCount = Math.max(0, Number(count) || 0);
     this.db
       .prepare('UPDATE users SET daily_usage_date = ?, daily_usage_count = ?, updated_at = ? WHERE id = ?')
-      .run(String(date), Math.max(0, Number(count) || 0), now(), String(userId));
+      .run(String(date), normalizedCount, now(), String(userId));
+    if (this.findUser(userId)) {
+      this.db
+        .prepare(
+          `INSERT INTO daily_credit_usage(user_id, credit_type, usage_date, used, updated_at)
+           VALUES (?, 'chat', ?, ?, ?)
+           ON CONFLICT(user_id, credit_type, usage_date) DO UPDATE SET
+             used = excluded.used,
+             updated_at = excluded.updated_at`
+        )
+        .run(String(userId), String(date), normalizedCount, now());
+    }
     this.setMeta('updatedAt', now());
     return this.findUser(userId);
   }
@@ -2234,7 +2565,995 @@ export class BotDatabase {
     this.db
       .prepare('UPDATE users SET daily_usage_date = ?, daily_usage_count = 0, updated_at = ?')
       .run(String(date), now());
+    this.db
+      .prepare("DELETE FROM daily_credit_usage WHERE credit_type = 'chat' AND usage_date = ?")
+      .run(String(date));
     this.setMeta('updatedAt', now());
+  }
+
+  createStarOrder({
+    id = '',
+    invoicePayload = '',
+    userId,
+    productId,
+    currency = 'XTR',
+    amount,
+    grants = {},
+    expiresAt = ''
+  } = {}) {
+    const normalizedUserId = String(userId || '').trim();
+    if (!normalizedUserId || !this.findUser(normalizedUserId)) {
+      throw new RangeError('A persisted user is required to create a Stars order.');
+    }
+
+    const normalizedProductId = String(productId || '').trim();
+    if (!normalizedProductId) throw new RangeError('A product ID is required to create a Stars order.');
+
+    const normalizedCurrency = String(currency || '').trim().toUpperCase();
+    if (normalizedCurrency !== 'XTR') throw new RangeError('Telegram digital goods must use XTR currency.');
+
+    const normalizedAmount = normalizeBillingUnits(amount, { label: 'Stars order amount' });
+    const normalizedGrants = normalizeCreditGrants(grants);
+    if (Object.keys(normalizedGrants).length === 0) {
+      throw new RangeError('A Stars order must grant at least one credit.');
+    }
+
+    const orderId = String(id || randomUUID()).trim();
+    const payload = String(invoicePayload || `stars:${orderId}`).trim();
+    const payloadBytes = Buffer.byteLength(payload, 'utf8');
+    if (payloadBytes < 1 || payloadBytes > 128) {
+      throw new RangeError('Invoice payload must be between 1 and 128 UTF-8 bytes.');
+    }
+
+    const timestamp = now();
+    this.db
+      .prepare(
+        `INSERT INTO star_orders(
+           id, invoice_payload, user_id, product_id, currency, amount, grants_json, status,
+           telegram_payment_charge_id, provider_payment_charge_id,
+           created_at, expires_at, paid_at, refunded_at, updated_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', NULL, '', ?, ?, '', '', ?)`
+      )
+      .run(
+        orderId,
+        payload,
+        normalizedUserId,
+        normalizedProductId,
+        normalizedCurrency,
+        normalizedAmount,
+        JSON.stringify(normalizedGrants),
+        timestamp,
+        String(expiresAt || ''),
+        timestamp
+      );
+    this.setMeta('updatedAt', timestamp);
+    return this.getStarOrder(orderId);
+  }
+
+  getStarOrder(orderId) {
+    return rowToStarOrder(
+      this.db.prepare('SELECT * FROM star_orders WHERE id = ?').get(String(orderId || ''))
+    );
+  }
+
+  findStarOrderByPayload(invoicePayload) {
+    return rowToStarOrder(
+      this.db.prepare('SELECT * FROM star_orders WHERE invoice_payload = ?').get(String(invoicePayload || ''))
+    );
+  }
+
+  findStarOrderByChargeId(telegramPaymentChargeId) {
+    return rowToStarOrder(
+      this.db
+        .prepare('SELECT * FROM star_orders WHERE telegram_payment_charge_id = ?')
+        .get(String(telegramPaymentChargeId || ''))
+    );
+  }
+
+  markStarOrderFailed(orderId) {
+    const normalizedOrderId = String(orderId || '').trim();
+    if (!normalizedOrderId) return { failed: false, order: null };
+    const timestamp = now();
+    const update = this.db
+      .prepare("UPDATE star_orders SET status = 'failed', updated_at = ? WHERE id = ? AND status = 'pending'")
+      .run(timestamp, normalizedOrderId);
+    if (update.changes > 0) this.setMeta('updatedAt', timestamp);
+    return { failed: update.changes > 0, order: this.getStarOrder(normalizedOrderId) };
+  }
+
+  listStarOrders({ userId = '', status = '', limit = 50, offset = 0 } = {}) {
+    const filters = [];
+    const args = [];
+    if (userId !== '') {
+      filters.push('user_id = ?');
+      args.push(String(userId));
+    }
+    if (status) {
+      filters.push('status = ?');
+      args.push(String(status));
+    }
+    const where = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
+    const safeLimit = Math.max(1, Math.min(500, Math.trunc(Number(limit) || 50)));
+    const safeOffset = Math.max(0, Math.trunc(Number(offset) || 0));
+    return this.db
+      .prepare(`SELECT * FROM star_orders ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+      .all(...args, safeLimit, safeOffset)
+      .map(rowToStarOrder);
+  }
+
+  validateStarOrderForCheckout({
+    invoicePayload,
+    userId,
+    currency,
+    totalAmount,
+    at = now()
+  } = {}) {
+    const order = this.findStarOrderByPayload(invoicePayload);
+    if (!order) return { ok: false, code: 'ORDER_NOT_FOUND', order: null };
+    if (order.status !== 'pending') return { ok: false, code: 'ORDER_NOT_PENDING', order };
+    if (order.userId !== String(userId || '')) return { ok: false, code: 'ORDER_USER_MISMATCH', order };
+    if (String(currency || '').toUpperCase() !== 'XTR' || order.currency !== 'XTR') {
+      return { ok: false, code: 'ORDER_CURRENCY_MISMATCH', order };
+    }
+    if (!Number.isSafeInteger(Number(totalAmount)) || order.amount !== Number(totalAmount)) {
+      return { ok: false, code: 'ORDER_AMOUNT_MISMATCH', order };
+    }
+    if (order.expiresAt) {
+      const expiresAt = Date.parse(order.expiresAt);
+      const checkedAt = Date.parse(String(at || ''));
+      if (Number.isFinite(expiresAt) && Number.isFinite(checkedAt) && expiresAt <= checkedAt) {
+        return { ok: false, code: 'ORDER_EXPIRED', order };
+      }
+    }
+    return { ok: true, code: 'OK', order };
+  }
+
+  applySuccessfulStarPayment({
+    invoicePayload,
+    userId,
+    currency,
+    totalAmount,
+    telegramPaymentChargeId,
+    providerPaymentChargeId = ''
+  } = {}) {
+    const normalizedPayload = String(invoicePayload || '').trim();
+    const normalizedUserId = String(userId || '').trim();
+    const normalizedCurrency = String(currency || '').trim().toUpperCase();
+    const normalizedAmount = normalizeBillingUnits(totalAmount, { label: 'Successful payment amount' });
+    const chargeId = String(telegramPaymentChargeId || '').trim();
+    if (!normalizedPayload) throw new RangeError('Successful payment invoice payload is required.');
+    if (!normalizedUserId) throw new RangeError('Successful payment user ID is required.');
+    if (normalizedCurrency !== 'XTR') throw new RangeError('Successful payment currency must be XTR.');
+    if (!chargeId) throw new RangeError('telegram_payment_charge_id is required.');
+
+    return this.runImmediateTransaction(() => {
+      const chargedOrder = rowToStarOrder(
+        this.db.prepare('SELECT * FROM star_orders WHERE telegram_payment_charge_id = ?').get(chargeId)
+      );
+      if (chargedOrder) {
+        const samePayment =
+          chargedOrder.invoicePayload === normalizedPayload &&
+          chargedOrder.userId === normalizedUserId &&
+          chargedOrder.currency === normalizedCurrency &&
+          chargedOrder.amount === normalizedAmount;
+        return {
+          credited: false,
+          duplicate: samePayment,
+          reason: samePayment ? 'PAYMENT_ALREADY_APPLIED' : 'PAYMENT_CHARGE_CONFLICT',
+          order: chargedOrder,
+          balances: this.getUserCreditBalances(chargedOrder.userId)
+        };
+      }
+
+      const order = rowToStarOrder(
+        this.db.prepare('SELECT * FROM star_orders WHERE invoice_payload = ?').get(normalizedPayload)
+      );
+      if (!order) {
+        return { credited: false, duplicate: false, reason: 'ORDER_NOT_FOUND', order: null, balances: null };
+      }
+      if (order.userId !== normalizedUserId) {
+        return { credited: false, duplicate: false, reason: 'ORDER_USER_MISMATCH', order, balances: null };
+      }
+      if (order.currency !== normalizedCurrency) {
+        return { credited: false, duplicate: false, reason: 'ORDER_CURRENCY_MISMATCH', order, balances: null };
+      }
+      if (order.amount !== normalizedAmount) {
+        return { credited: false, duplicate: false, reason: 'ORDER_AMOUNT_MISMATCH', order, balances: null };
+      }
+      if (!['pending', 'failed'].includes(order.status)) {
+        return {
+          credited: false,
+          duplicate: false,
+          reason: 'ORDER_NOT_PENDING',
+          order,
+          balances: this.getUserCreditBalances(order.userId)
+        };
+      }
+
+      const timestamp = now();
+      const update = this.db
+        .prepare(
+          `UPDATE star_orders
+           SET status = 'paid', telegram_payment_charge_id = ?, provider_payment_charge_id = ?,
+               paid_at = ?, updated_at = ?
+           WHERE id = ? AND status IN ('pending', 'failed') AND telegram_payment_charge_id IS NULL`
+        )
+        .run(chargeId, String(providerPaymentChargeId || ''), timestamp, timestamp, order.id);
+      if (update.changes !== 1) {
+        throw new Error('Stars order changed while payment was being applied.');
+      }
+
+      for (const [creditType, units] of Object.entries(order.grants)) {
+        this.db
+          .prepare(
+            `INSERT INTO user_credit_balances(user_id, credit_type, balance, updated_at)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(user_id, credit_type) DO UPDATE SET
+               balance = user_credit_balances.balance + excluded.balance,
+               updated_at = excluded.updated_at`
+          )
+          .run(order.userId, creditType, units, timestamp);
+      }
+
+      this.setMeta('updatedAt', timestamp);
+      const paidOrder = rowToStarOrder(this.db.prepare('SELECT * FROM star_orders WHERE id = ?').get(order.id));
+      return {
+        credited: true,
+        duplicate: false,
+        reason: 'PAYMENT_APPLIED',
+        order: paidOrder,
+        balances: this.getUserCreditBalances(order.userId)
+      };
+    });
+  }
+
+  getCreditBalance(userId, creditType) {
+    const normalizedType = normalizeBillingCreditType(creditType);
+    const row = this.db
+      .prepare('SELECT balance, updated_at FROM user_credit_balances WHERE user_id = ? AND credit_type = ?')
+      .get(String(userId || ''), normalizedType);
+    return {
+      userId: String(userId || ''),
+      creditType: normalizedType,
+      balance: Number(row?.balance || 0),
+      updatedAt: row?.updated_at || ''
+    };
+  }
+
+  getUserCreditBalances(userId) {
+    const normalizedUserId = String(userId || '');
+    const rows = this.db
+      .prepare('SELECT credit_type, balance, updated_at FROM user_credit_balances WHERE user_id = ?')
+      .all(normalizedUserId);
+    const balances = Object.fromEntries(BILLING_CREDIT_TYPES.map((creditType) => [creditType, 0]));
+    let updatedAt = '';
+    for (const row of rows) {
+      balances[row.credit_type] = Number(row.balance || 0);
+      if (String(row.updated_at || '') > updatedAt) updatedAt = row.updated_at;
+    }
+    return { userId: normalizedUserId, ...balances, balances, updatedAt };
+  }
+
+  getCreditBalances(userId) {
+    return this.getUserCreditBalances(userId);
+  }
+
+  logCreditBalanceAudit(audit, { userId, operation, beforeBalances, afterBalances, changes }) {
+    if (!audit || typeof audit !== 'object') return;
+    this.logAudit({
+      actorId: audit.actorId || '',
+      actorType: audit.actorType || 'system',
+      action: audit.action || `users.credits.${operation}`,
+      targetType: 'user',
+      targetId: String(userId),
+      result: audit.result || 'allow',
+      requestId: audit.requestId || '',
+      ip: audit.ip || '',
+      userAgent: audit.userAgent || '',
+      details: {
+        ...(audit.details && typeof audit.details === 'object' && !Array.isArray(audit.details)
+          ? audit.details
+          : {}),
+        operation,
+        beforeBalances,
+        afterBalances,
+        changes
+      }
+    });
+  }
+
+  setUserCreditBalances(userId, balances = {}, { audit = null, requireAll = false } = {}) {
+    const normalizedUserId = String(userId || '').trim();
+    if (!normalizedUserId) {
+      throw createCreditBalanceError('USER_NOT_FOUND', 'A persisted user is required.');
+    }
+    const normalizedBalances = normalizeCreditBalanceValues(balances, { requireAll });
+
+    return this.runImmediateTransaction(() => {
+      if (!this.findUser(normalizedUserId)) {
+        throw createCreditBalanceError('USER_NOT_FOUND', 'A persisted user is required.');
+      }
+
+      const beforeBalances = this.getUserCreditBalances(normalizedUserId).balances;
+      const timestamp = now();
+      const upsert = this.db.prepare(
+        `INSERT INTO user_credit_balances(user_id, credit_type, balance, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(user_id, credit_type) DO UPDATE SET
+           balance = excluded.balance,
+           updated_at = excluded.updated_at`
+      );
+      for (const [creditType, balance] of Object.entries(normalizedBalances)) {
+        upsert.run(normalizedUserId, creditType, balance, timestamp);
+      }
+
+      const after = this.getUserCreditBalances(normalizedUserId);
+      const changes = {};
+      for (const creditType of Object.keys(normalizedBalances)) {
+        const previous = beforeBalances[creditType];
+        const next = after.balances[creditType];
+        if (previous !== next) changes[creditType] = { before: previous, after: next, delta: next - previous };
+      }
+      this.setMeta('updatedAt', timestamp);
+      this.logCreditBalanceAudit(audit, {
+        userId: normalizedUserId,
+        operation: 'set',
+        beforeBalances,
+        afterBalances: after.balances,
+        changes
+      });
+      return {
+        userId: normalizedUserId,
+        operation: 'set',
+        beforeBalances,
+        balances: after.balances,
+        changes,
+        updatedAt: after.updatedAt
+      };
+    });
+  }
+
+  adjustUserCreditBalances(userId, adjustments = {}, { audit = null } = {}) {
+    const normalizedUserId = String(userId || '').trim();
+    if (!normalizedUserId) {
+      throw createCreditBalanceError('USER_NOT_FOUND', 'A persisted user is required.');
+    }
+    const normalizedAdjustments = normalizeCreditBalanceValues(adjustments, { allowNegative: true });
+
+    return this.runImmediateTransaction(() => {
+      if (!this.findUser(normalizedUserId)) {
+        throw createCreditBalanceError('USER_NOT_FOUND', 'A persisted user is required.');
+      }
+
+      const beforeBalances = this.getUserCreditBalances(normalizedUserId).balances;
+      const nextBalances = {};
+      for (const [creditType, delta] of Object.entries(normalizedAdjustments)) {
+        const next = beforeBalances[creditType] + delta;
+        if (!Number.isSafeInteger(next)) {
+          throw createCreditBalanceError(
+            'CREDIT_BALANCE_OVERFLOW',
+            `The ${creditType} balance would exceed the safe integer range.`
+          );
+        }
+        if (next < 0) {
+          throw createCreditBalanceError(
+            'CREDIT_BALANCE_BELOW_ZERO',
+            `The ${creditType} balance cannot be adjusted below zero.`
+          );
+        }
+        nextBalances[creditType] = next;
+      }
+
+      const timestamp = now();
+      const upsert = this.db.prepare(
+        `INSERT INTO user_credit_balances(user_id, credit_type, balance, updated_at)
+         VALUES (?, ?, ?, ?)
+         ON CONFLICT(user_id, credit_type) DO UPDATE SET
+           balance = excluded.balance,
+           updated_at = excluded.updated_at`
+      );
+      for (const [creditType, balance] of Object.entries(nextBalances)) {
+        upsert.run(normalizedUserId, creditType, balance, timestamp);
+      }
+
+      const after = this.getUserCreditBalances(normalizedUserId);
+      const changes = {};
+      for (const [creditType, delta] of Object.entries(normalizedAdjustments)) {
+        if (delta !== 0) {
+          changes[creditType] = {
+            before: beforeBalances[creditType],
+            after: after.balances[creditType],
+            delta
+          };
+        }
+      }
+      this.setMeta('updatedAt', timestamp);
+      this.logCreditBalanceAudit(audit, {
+        userId: normalizedUserId,
+        operation: 'adjust',
+        beforeBalances,
+        afterBalances: after.balances,
+        changes
+      });
+      return {
+        userId: normalizedUserId,
+        operation: 'adjust',
+        beforeBalances,
+        balances: after.balances,
+        changes,
+        updatedAt: after.updatedAt
+      };
+    });
+  }
+
+  getDailyCreditUsage(userId, creditType, date = new Date().toISOString().slice(0, 10)) {
+    const normalizedUserId = String(userId || '');
+    const normalizedType = normalizeBillingCreditType(creditType);
+    const normalizedDate = String(date || '');
+    const row = this.db
+      .prepare(
+        'SELECT used, updated_at FROM daily_credit_usage WHERE user_id = ? AND credit_type = ? AND usage_date = ?'
+      )
+      .get(normalizedUserId, normalizedType, normalizedDate);
+    const user = normalizedType === 'chat' ? this.findUser(normalizedUserId) : null;
+    const legacyChatUsage = user?.dailyUsageDate === normalizedDate ? Number(user.dailyUsageCount || 0) : 0;
+    return {
+      userId: normalizedUserId,
+      creditType: normalizedType,
+      date: normalizedDate,
+      used: Math.max(Number(row?.used || 0), legacyChatUsage),
+      updatedAt: row?.updated_at || ''
+    };
+  }
+
+  getUsageRecord(idOrRequestKey) {
+    const identifier = String(idOrRequestKey || '');
+    return rowToUsageRecord(
+      this.db
+        .prepare('SELECT * FROM usage_records WHERE id = ? OR request_key = ? ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END LIMIT 1')
+        .get(identifier, identifier, identifier)
+    );
+  }
+
+  listUsageRecords({ userId = '', creditType = '', status = '', limit = 50, offset = 0 } = {}) {
+    const filters = [];
+    const args = [];
+    if (userId !== '') {
+      filters.push('user_id = ?');
+      args.push(String(userId));
+    }
+    if (creditType) {
+      filters.push('credit_type = ?');
+      args.push(normalizeBillingCreditType(creditType));
+    }
+    if (status) {
+      filters.push('status = ?');
+      args.push(String(status));
+    }
+    const where = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
+    const safeLimit = Math.max(1, Math.min(500, Math.trunc(Number(limit) || 50)));
+    const safeOffset = Math.max(0, Math.trunc(Number(offset) || 0));
+    return this.db
+      .prepare(`SELECT * FROM usage_records ${where} ORDER BY created_at DESC LIMIT ? OFFSET ?`)
+      .all(...args, safeLimit, safeOffset)
+      .map(rowToUsageRecord);
+  }
+
+  reserveUsage({
+    userId,
+    creditType = 'chat',
+    units = 1,
+    requestKey = '',
+    dailyFreeQuota = 0,
+    isAdmin = false,
+    usageDate = new Date().toISOString().slice(0, 10),
+    metadata = {},
+    zeroFreeQuotaMeansUnlimited = false
+  } = {}) {
+    const normalizedUserId = String(userId || '').trim();
+    const normalizedType = normalizeBillingCreditType(creditType);
+    const normalizedUnits = normalizeBillingUnits(units);
+    const normalizedRequestKey = String(requestKey || `usage:${randomUUID()}`).trim();
+    const normalizedDate = String(usageDate || '').trim();
+    const normalizedFreeQuota = normalizeBillingUnits(dailyFreeQuota, {
+      allowZero: true,
+      label: 'Daily free quota'
+    });
+    const metadataJson = JSON.stringify(parseJsonObject(metadata));
+    if (!normalizedUserId) throw new RangeError('Usage reservation user ID is required.');
+    if (!normalizedRequestKey) throw new RangeError('Usage reservation request key is required.');
+    if (!normalizedDate) throw new RangeError('Usage reservation date is required.');
+
+    return this.runImmediateTransaction(() => {
+      const existing = rowToUsageRecord(
+        this.db.prepare('SELECT * FROM usage_records WHERE request_key = ?').get(normalizedRequestKey)
+      );
+      if (existing) {
+        return {
+          // One request key has exactly one owner. Concurrent/retried Telegram
+          // updates are suppressed instead of running a second paid action.
+          // The specific state lets callers avoid misreporting this as an
+          // insufficient-balance error.
+          allowed: false,
+          duplicate: true,
+          inProgress: existing.status === 'reserved',
+          completed: existing.status === 'consumed',
+          reason: existing.status === 'consumed'
+            ? 'USAGE_ALREADY_COMMITTED'
+            : existing.status === 'reserved'
+              ? 'USAGE_ALREADY_RESERVED'
+              : 'USAGE_ALREADY_REFUNDED',
+          record: existing,
+          balance: this.getCreditBalance(existing.userId, existing.creditType).balance,
+          freeRemaining: null
+        };
+      }
+
+      const user = this.findUser(normalizedUserId);
+      if (!user) {
+        return {
+          allowed: false,
+          duplicate: false,
+          reason: 'USER_NOT_FOUND',
+          record: null,
+          balance: 0,
+          freeRemaining: 0
+        };
+      }
+
+      const balanceState = this.getCreditBalance(normalizedUserId, normalizedType);
+      const timestamp = now();
+      let freeQuota = normalizedFreeQuota;
+      let unlimitedFree = Boolean(zeroFreeQuotaMeansUnlimited && freeQuota === 0);
+      if (normalizedType === 'chat') {
+        const quota = this.getUserDailyQuota(normalizedUserId, normalizedFreeQuota);
+        if (quota?.dailyQuotaOverride != null) {
+          freeQuota = quota.dailyQuotaOverride;
+          unlimitedFree = freeQuota === 0;
+        }
+      }
+
+      const daily = this.getDailyCreditUsage(normalizedUserId, normalizedType, normalizedDate);
+      const canUseDailyFree = unlimitedFree || (freeQuota > 0 && daily.used + normalizedUnits <= freeQuota);
+      let source = '';
+      let balanceAfter = balanceState.balance;
+      let freeRemaining = unlimitedFree ? Infinity : Math.max(0, freeQuota - daily.used);
+
+      if (isAdmin) {
+        source = 'admin';
+        freeRemaining = Infinity;
+      } else if (canUseDailyFree) {
+        source = 'daily_free';
+        const nextUsed = daily.used + normalizedUnits;
+        this.db
+          .prepare(
+            `INSERT INTO daily_credit_usage(user_id, credit_type, usage_date, used, updated_at)
+             VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(user_id, credit_type, usage_date) DO UPDATE SET
+               used = excluded.used,
+               updated_at = excluded.updated_at`
+          )
+          .run(normalizedUserId, normalizedType, normalizedDate, nextUsed, timestamp);
+        if (normalizedType === 'chat') {
+          this.db
+            .prepare(
+              `UPDATE users
+               SET daily_usage_date = ?, daily_usage_count = ?,
+                   total_messages = total_messages + ?, updated_at = ?
+               WHERE id = ?`
+            )
+            .run(normalizedDate, nextUsed, normalizedUnits, timestamp, normalizedUserId);
+        }
+        freeRemaining = unlimitedFree ? Infinity : Math.max(0, freeQuota - nextUsed);
+      } else {
+        if (balanceState.balance < normalizedUnits) {
+          return {
+            allowed: false,
+            duplicate: false,
+            reason: 'INSUFFICIENT_CREDITS',
+            record: null,
+            balance: balanceState.balance,
+            freeRemaining
+          };
+        }
+        source = 'paid';
+        balanceAfter = balanceState.balance - normalizedUnits;
+        const debit = this.db
+          .prepare(
+            `UPDATE user_credit_balances
+             SET balance = balance - ?, updated_at = ?
+             WHERE user_id = ? AND credit_type = ? AND balance >= ?`
+          )
+          .run(normalizedUnits, timestamp, normalizedUserId, normalizedType, normalizedUnits);
+        if (debit.changes !== 1) throw new Error('Credit balance changed while usage was being reserved.');
+      }
+
+      const recordId = randomUUID();
+      this.db
+        .prepare(
+          `INSERT INTO usage_records(
+             id, request_key, user_id, credit_type, units, source, status,
+             balance_before, balance_after, usage_date, metadata_json, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, ?, ?, 'reserved', ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          recordId,
+          normalizedRequestKey,
+          normalizedUserId,
+          normalizedType,
+          normalizedUnits,
+          source,
+          balanceState.balance,
+          balanceAfter,
+          normalizedDate,
+          metadataJson,
+          timestamp,
+          timestamp
+        );
+      this.setMeta('updatedAt', timestamp);
+      return {
+        allowed: true,
+        duplicate: false,
+        reason: source === 'admin' ? 'ADMIN_FREE' : source === 'daily_free' ? 'DAILY_FREE' : 'PAID_CREDIT',
+        record: rowToUsageRecord(this.db.prepare('SELECT * FROM usage_records WHERE id = ?').get(recordId)),
+        balance: balanceAfter,
+        freeRemaining
+      };
+    });
+  }
+
+  commitUsage(idOrRequestKey) {
+    const identifier = String(idOrRequestKey || '').trim();
+    if (!identifier) return { committed: false, duplicate: false, reason: 'USAGE_NOT_FOUND', record: null };
+    return this.runImmediateTransaction(() => {
+      const record = this.getUsageRecord(identifier);
+      if (!record) return { committed: false, duplicate: false, reason: 'USAGE_NOT_FOUND', record: null };
+      if (record.status === 'consumed') {
+        return { committed: false, duplicate: true, reason: 'USAGE_ALREADY_COMMITTED', record };
+      }
+      if (record.status === 'refunded') {
+        return { committed: false, duplicate: false, reason: 'USAGE_ALREADY_REFUNDED', record };
+      }
+      const timestamp = now();
+      this.db
+        .prepare("UPDATE usage_records SET status = 'consumed', updated_at = ? WHERE id = ? AND status = 'reserved'")
+        .run(timestamp, record.id);
+      this.setMeta('updatedAt', timestamp);
+      return { committed: true, duplicate: false, reason: 'USAGE_COMMITTED', record: this.getUsageRecord(record.id) };
+    });
+  }
+
+  refundUsage(idOrRequestKey) {
+    const identifier = String(idOrRequestKey || '').trim();
+    if (!identifier) return { refunded: false, duplicate: false, reason: 'USAGE_NOT_FOUND', record: null };
+    return this.runImmediateTransaction(() => {
+      const record = this.getUsageRecord(identifier);
+      if (!record) return { refunded: false, duplicate: false, reason: 'USAGE_NOT_FOUND', record: null };
+      if (record.status === 'refunded') {
+        return { refunded: false, duplicate: true, reason: 'USAGE_ALREADY_REFUNDED', record };
+      }
+      if (record.status === 'consumed') {
+        return { refunded: false, duplicate: false, reason: 'USAGE_ALREADY_COMMITTED', record };
+      }
+
+      const timestamp = now();
+      let restoredBalance = this.getCreditBalance(record.userId, record.creditType).balance;
+      if (record.source === 'paid') {
+        restoredBalance += record.units;
+        this.db
+          .prepare(
+            `INSERT INTO user_credit_balances(user_id, credit_type, balance, updated_at)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(user_id, credit_type) DO UPDATE SET
+               balance = user_credit_balances.balance + excluded.balance,
+               updated_at = excluded.updated_at`
+          )
+          .run(record.userId, record.creditType, record.units, timestamp);
+      } else if (record.source === 'daily_free') {
+        this.db
+          .prepare(
+            `UPDATE daily_credit_usage
+             SET used = MAX(0, used - ?), updated_at = ?
+             WHERE user_id = ? AND credit_type = ? AND usage_date = ?`
+          )
+          .run(record.units, timestamp, record.userId, record.creditType, record.usageDate);
+        if (record.creditType === 'chat') {
+          this.db
+            .prepare(
+              `UPDATE users
+               SET daily_usage_count = MAX(0, daily_usage_count - ?),
+                   total_messages = MAX(0, total_messages - ?), updated_at = ?
+               WHERE id = ? AND daily_usage_date = ?`
+            )
+            .run(record.units, record.units, timestamp, record.userId, record.usageDate);
+        }
+      }
+
+      this.db
+        .prepare(
+          `UPDATE usage_records
+           SET status = 'refunded', balance_after = ?, updated_at = ?
+           WHERE id = ? AND status != 'refunded'`
+        )
+        .run(restoredBalance, timestamp, record.id);
+      this.setMeta('updatedAt', timestamp);
+      return {
+        refunded: true,
+        duplicate: false,
+        reason: 'USAGE_REFUNDED',
+        record: this.getUsageRecord(record.id),
+        balance: restoredBalance
+      };
+    });
+  }
+
+  refundStaleUsageReservations({ olderThanMs = 15 * 60 * 1000, limit = 1000 } = {}) {
+    const safeAgeMs = Math.max(60 * 1000, Number(olderThanMs) || 15 * 60 * 1000);
+    const safeLimit = Math.max(1, Math.min(5000, Math.trunc(Number(limit) || 1000)));
+    const cutoff = new Date(Date.now() - safeAgeMs).toISOString();
+    const stale = this.db
+      .prepare(
+        `SELECT id FROM usage_records
+         WHERE status = 'reserved' AND updated_at <= ?
+         ORDER BY updated_at ASC
+         LIMIT ?`
+      )
+      .all(cutoff, safeLimit);
+    let refunded = 0;
+    for (const row of stale) {
+      if (this.refundUsage(row.id).refunded) refunded += 1;
+    }
+    return { scanned: stale.length, refunded, cutoff };
+  }
+
+  getStarRefund(idOrChargeId) {
+    const identifier = String(idOrChargeId || '');
+    return rowToStarRefund(
+      this.db
+        .prepare(
+          `SELECT * FROM star_refunds
+           WHERE id = ? OR telegram_payment_charge_id = ?
+           ORDER BY CASE WHEN id = ? THEN 0 ELSE 1 END
+           LIMIT 1`
+        )
+        .get(identifier, identifier, identifier)
+    );
+  }
+
+  beginStarRefund({
+    telegramPaymentChargeId,
+    requestedBy = '',
+    reason = '',
+    leaseDurationMs = 5 * 60 * 1000,
+    at = now()
+  } = {}) {
+    const chargeId = String(telegramPaymentChargeId || '').trim();
+    if (!chargeId) throw new RangeError('telegram_payment_charge_id is required for a Stars refund.');
+    const timestamp = String(at || now());
+    const timestampMs = Number.isFinite(Date.parse(timestamp)) ? Date.parse(timestamp) : Date.now();
+    const safeLeaseDurationMs = Math.max(30_000, Number(leaseDurationMs) || 5 * 60 * 1000);
+    const leaseToken = randomUUID();
+    const leaseExpiresAt = new Date(timestampMs + safeLeaseDurationMs).toISOString();
+
+    return this.runImmediateTransaction(() => {
+      const order = rowToStarOrder(
+        this.db.prepare('SELECT * FROM star_orders WHERE telegram_payment_charge_id = ?').get(chargeId)
+      );
+      if (!order) {
+        return { ok: false, allowed: false, duplicate: false, reason: 'ORDER_NOT_FOUND', order: null, refund: null };
+      }
+
+      const existing = this.getStarRefund(chargeId);
+      if (existing?.status === 'pending') {
+        const currentLeaseExpiresAt = Date.parse(existing.leaseExpiresAt || '');
+        if (existing.leaseToken && Number.isFinite(currentLeaseExpiresAt) && currentLeaseExpiresAt > timestampMs) {
+          return {
+            ok: true,
+            allowed: false,
+            id: existing.id,
+            duplicate: true,
+            inProgress: true,
+            reason: 'REFUND_IN_PROGRESS',
+            order,
+            refund: existing
+          };
+        }
+        this.db
+          .prepare(
+            `UPDATE star_refunds
+             SET lease_token = ?, lease_expires_at = ?, requested_by = ?, updated_at = ?
+             WHERE id = ? AND status = 'pending'`
+          )
+          .run(leaseToken, leaseExpiresAt, String(requestedBy || ''), timestamp, existing.id);
+        return {
+          ok: true,
+          allowed: true,
+          id: existing.id,
+          duplicate: true,
+          leaseToken,
+          reason: 'REFUND_RETRY_PENDING',
+          order,
+          refund: this.getStarRefund(existing.id)
+        };
+      }
+      if (existing?.status === 'succeeded' || order.status === 'refunded') {
+        return {
+          ok: true,
+          allowed: true,
+          id: existing?.id || '',
+          duplicate: true,
+          reason: 'REFUND_ALREADY_COMPLETED',
+          order,
+          refund: existing
+        };
+      }
+      if (order.status !== 'paid') {
+        return {
+          ok: false,
+          allowed: false,
+          duplicate: false,
+          reason: 'ORDER_NOT_REFUNDABLE',
+          order,
+          refund: existing
+        };
+      }
+
+      for (const [creditType, units] of Object.entries(order.grants)) {
+        const balance = this.getCreditBalance(order.userId, creditType).balance;
+        if (balance < units) {
+          return {
+            ok: false,
+            allowed: false,
+            duplicate: false,
+            reason: 'ORDER_CREDITS_ALREADY_USED',
+            order,
+            refund: existing,
+            creditType,
+            required: units,
+            available: balance
+          };
+        }
+      }
+
+      for (const [creditType, units] of Object.entries(order.grants)) {
+        const debit = this.db
+          .prepare(
+            `UPDATE user_credit_balances
+             SET balance = balance - ?, updated_at = ?
+             WHERE user_id = ? AND credit_type = ? AND balance >= ?`
+          )
+          .run(units, timestamp, order.userId, creditType, units);
+        if (debit.changes !== 1) throw new Error('Credit balance changed while refund was being prepared.');
+      }
+
+      const refundId = existing?.id || randomUUID();
+      this.db
+        .prepare(
+          `INSERT INTO star_refunds(
+             id, order_id, telegram_payment_charge_id, status, requested_by, reason, error,
+             revoked_grants_json, lease_token, lease_expires_at, created_at, updated_at
+           ) VALUES (?, ?, ?, 'pending', ?, ?, '', ?, ?, ?, ?, ?)
+           ON CONFLICT(order_id) DO UPDATE SET
+             status = 'pending',
+             requested_by = excluded.requested_by,
+             reason = excluded.reason,
+             error = '',
+             revoked_grants_json = excluded.revoked_grants_json,
+             lease_token = excluded.lease_token,
+             lease_expires_at = excluded.lease_expires_at,
+             updated_at = excluded.updated_at`
+        )
+        .run(
+          refundId,
+          order.id,
+          chargeId,
+          String(requestedBy || ''),
+          String(reason || ''),
+          JSON.stringify(order.grants),
+          leaseToken,
+          leaseExpiresAt,
+          existing?.createdAt || timestamp,
+          timestamp
+        );
+      this.db
+        .prepare("UPDATE star_orders SET status = 'refund_pending', updated_at = ? WHERE id = ? AND status = 'paid'")
+        .run(timestamp, order.id);
+      this.setMeta('updatedAt', timestamp);
+      return {
+        ok: true,
+        allowed: true,
+        id: refundId,
+        leaseToken,
+        duplicate: false,
+        reason: 'REFUND_PENDING',
+        order: rowToStarOrder(this.db.prepare('SELECT * FROM star_orders WHERE id = ?').get(order.id)),
+        refund: this.getStarRefund(refundId),
+        balances: this.getUserCreditBalances(order.userId)
+      };
+    });
+  }
+
+  completeStarRefund(idOrChargeId, leaseToken = '') {
+    const identifier = String(idOrChargeId || '').trim();
+    if (!identifier) return { completed: false, duplicate: false, reason: 'REFUND_NOT_FOUND', refund: null };
+    return this.runImmediateTransaction(() => {
+      const refund = this.getStarRefund(identifier);
+      if (!refund) return { completed: false, duplicate: false, reason: 'REFUND_NOT_FOUND', refund: null };
+      if (refund.status === 'succeeded') {
+        return { completed: false, duplicate: true, reason: 'REFUND_ALREADY_COMPLETED', refund };
+      }
+      if (refund.status !== 'pending') {
+        return { completed: false, duplicate: false, reason: 'REFUND_NOT_PENDING', refund };
+      }
+      if (!refund.leaseToken || refund.leaseToken !== String(leaseToken || '')) {
+        return { completed: false, duplicate: false, reason: 'REFUND_LEASE_MISMATCH', refund };
+      }
+      const timestamp = now();
+      this.db
+        .prepare("UPDATE star_refunds SET status = 'succeeded', error = '', lease_token = '', lease_expires_at = '', updated_at = ? WHERE id = ? AND status = 'pending'")
+        .run(timestamp, refund.id);
+      this.db
+        .prepare(
+          `UPDATE star_orders
+           SET status = 'refunded', refunded_at = ?, updated_at = ?
+           WHERE id = ? AND status = 'refund_pending'`
+        )
+        .run(timestamp, timestamp, refund.orderId);
+      this.setMeta('updatedAt', timestamp);
+      return {
+        completed: true,
+        duplicate: false,
+        reason: 'REFUND_COMPLETED',
+        refund: this.getStarRefund(refund.id),
+        order: this.getStarOrder(refund.orderId)
+      };
+    });
+  }
+
+  failStarRefund(idOrChargeId, error = '', leaseToken = '') {
+    const identifier = String(idOrChargeId || '').trim();
+    if (!identifier) return { failed: false, duplicate: false, reason: 'REFUND_NOT_FOUND', refund: null };
+    return this.runImmediateTransaction(() => {
+      const refund = this.getStarRefund(identifier);
+      if (!refund) return { failed: false, duplicate: false, reason: 'REFUND_NOT_FOUND', refund: null };
+      if (refund.status === 'failed') {
+        return { failed: false, duplicate: true, reason: 'REFUND_ALREADY_FAILED', refund };
+      }
+      if (refund.status !== 'pending') {
+        return { failed: false, duplicate: false, reason: 'REFUND_NOT_PENDING', refund };
+      }
+      if (!refund.leaseToken || refund.leaseToken !== String(leaseToken || '')) {
+        return { failed: false, duplicate: false, reason: 'REFUND_LEASE_MISMATCH', refund };
+      }
+      const order = this.getStarOrder(refund.orderId);
+      const timestamp = now();
+      for (const [creditType, units] of Object.entries(refund.revokedGrants)) {
+        this.db
+          .prepare(
+            `INSERT INTO user_credit_balances(user_id, credit_type, balance, updated_at)
+             VALUES (?, ?, ?, ?)
+             ON CONFLICT(user_id, credit_type) DO UPDATE SET
+               balance = user_credit_balances.balance + excluded.balance,
+               updated_at = excluded.updated_at`
+          )
+          .run(order.userId, creditType, units, timestamp);
+      }
+      this.db
+        .prepare("UPDATE star_refunds SET status = 'failed', error = ?, lease_token = '', lease_expires_at = '', updated_at = ? WHERE id = ? AND status = 'pending'")
+        .run(String(error || ''), timestamp, refund.id);
+      this.db
+        .prepare("UPDATE star_orders SET status = 'paid', updated_at = ? WHERE id = ? AND status = 'refund_pending'")
+        .run(timestamp, refund.orderId);
+      this.setMeta('updatedAt', timestamp);
+      return {
+        failed: true,
+        duplicate: false,
+        reason: 'REFUND_FAILED_AND_CREDITS_RESTORED',
+        refund: this.getStarRefund(refund.id),
+        order: this.getStarOrder(refund.orderId),
+        balances: this.getUserCreditBalances(order.userId)
+      };
+    });
   }
 
   getOperationsMetrics() {

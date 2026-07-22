@@ -32,9 +32,12 @@
     GUARD_DEFAULT_ACTION=queue          Guard 初始模式：queue 审核 / approve 开放 / decline 严格
     BOT_COLLABORATION_COOLDOWN_MS=5000  同一 Bot 在同一群的最短回复间隔
     INLINE_QUERY_DEBOUNCE_MS=1200        停止输入多久后处理最后一条 Inline Query
+    INLINE_QUERY_MIN_CHARS=2             少于此字符数只提示继续输入，不调用搜索或 AI
     INLINE_QUERY_RESPONSE_TIMEOUT_MS=7000 Inline Query 从收到到回复 Telegram 的总预算
     INLINE_QUERY_SEARCH_TIMEOUT_MS=2500   Inline 联网预取的最大等待时间
+    INLINE_QUERY_AI_ATTEMPT_TIMEOUT_MS=1400 单个 AI 模型尝试的最大等待时间
     INLINE_QUERY_CACHE_TTL_MS=60000     相同 Inline 问题的个人缓存时间
+    BRAVE_SEARCH_API_KEY=               可选；稳定实时搜索，失败时自动回退免密搜索
 
 Guest、Inline 和 Secretary 收到的第三方原文不会写入普通聊天记录或长期记忆。Guard 默认采用安全策略：黑名单拒绝、白名单/管理员通过、其他请求排队人工审核。
 

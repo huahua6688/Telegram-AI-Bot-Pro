@@ -90,7 +90,7 @@ test('Mini App securely exposes settings without chat input actions', async (t) 
   assert.equal(removedAction.status, 404);
 });
 
-test('Mini App administrators can set and reset per-user daily quota overrides', async (t) => {
+test('Mini App administrators can manage per-user daily quota and paid credit balances', async (t) => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-mini-app-admin-quota-'));
   const db = new BotDatabase(path.join(tempDir, 'bot-data.db'));
   await db.init();
@@ -146,11 +146,19 @@ test('Mini App administrators can set and reset per-user daily quota overrides',
   assert.match(appHtml, /全局默认额度/);
   assert.match(appHtml, /保存个人额度/);
   assert.match(appHtml, /恢复全局默认/);
+  assert.match(appHtml, /已购额度余额/);
+  assert.match(appHtml, /保存已购额度/);
+  assert.match(appHtml, /不影响每日免费额度/);
 
   const forbidden = await fetch(`${base}/api/miniapp/admin/users`, {
     headers: userHeaders
   });
   assert.equal(forbidden.status, 403);
+  const forbiddenCredits = await fetch(
+    `${base}/api/miniapp/admin/users/${targetUser.id}/credits`,
+    { headers: userHeaders }
+  );
+  assert.equal(forbiddenCredits.status, 403);
 
   const usersResponse = await fetch(`${base}/api/miniapp/admin/users?q=99002`, {
     headers: adminHeaders
@@ -163,6 +171,14 @@ test('Mini App administrators can set and reset per-user daily quota overrides',
   assert.equal(target.dailyQuota, 25);
   assert.equal(target.dailyQuotaOverride, null);
   assert.equal(target.usesGlobalQuota, true);
+  assert.deepEqual(target.creditBalances, {
+    chat: 0,
+    vision: 0,
+    image_generation: 0,
+    tts: 0,
+    live_voice: 0,
+    video: 0
+  });
 
   const setResponse = await fetch(`${base}/api/miniapp/admin/users/${targetUser.id}`, {
     method: 'PATCH',
@@ -180,6 +196,90 @@ test('Mini App administrators can set and reset per-user daily quota overrides',
     dailyQuotaOverride: 7,
     usesGlobalQuota: false
   });
+
+  const emptyCreditsResponse = await fetch(
+    `${base}/api/miniapp/admin/users/${targetUser.id}/credits`,
+    { headers: adminHeaders }
+  );
+  assert.equal(emptyCreditsResponse.status, 200);
+  assert.deepEqual((await emptyCreditsResponse.json()).balances, {
+    chat: 0,
+    vision: 0,
+    image_generation: 0,
+    tts: 0,
+    live_voice: 0,
+    video: 0
+  });
+
+  const paidBalances = {
+    chat: 50,
+    vision: 12,
+    image_generation: 8,
+    tts: 9,
+    live_voice: 4,
+    video: 1
+  };
+  const setCreditsResponse = await fetch(
+    `${base}/api/miniapp/admin/users/${targetUser.id}/credits`,
+    {
+      method: 'PATCH',
+      headers: { ...adminHeaders, 'X-Request-Id': 'miniapp-credit-set' },
+      body: JSON.stringify({ operation: 'set', balances: paidBalances })
+    }
+  );
+  assert.equal(setCreditsResponse.status, 200);
+  const setCredits = await setCreditsResponse.json();
+  assert.deepEqual(setCredits.balances, paidBalances);
+  assert.deepEqual(db.getUserCreditBalances(targetUser.id).balances, paidBalances);
+  assert.equal(db.findUser(targetUser.id).dailyUsageCount, 3);
+  assert.equal(db.getUserDailyQuota(targetUser.id, config.dailyQuota).dailyQuota, 7);
+
+  const incompleteCreditsResponse = await fetch(
+    `${base}/api/miniapp/admin/users/${targetUser.id}/credits`,
+    {
+      method: 'PATCH',
+      headers: adminHeaders,
+      body: JSON.stringify({ operation: 'set', balances: { chat: 999 } })
+    }
+  );
+  assert.equal(incompleteCreditsResponse.status, 400);
+  assert.equal((await incompleteCreditsResponse.json()).error, 'INCOMPLETE_CREDIT_BALANCES');
+  assert.deepEqual(db.getUserCreditBalances(targetUser.id).balances, paidBalances);
+
+  const adjustCreditsResponse = await fetch(
+    `${base}/api/miniapp/admin/users/${targetUser.id}/credits`,
+    {
+      method: 'PATCH',
+      headers: { ...adminHeaders, 'X-Request-Id': 'miniapp-credit-adjust' },
+      body: JSON.stringify({ operation: 'adjust', adjustments: { chat: -2, video: 3 } })
+    }
+  );
+  assert.equal(adjustCreditsResponse.status, 200);
+  const adjustedCredits = await adjustCreditsResponse.json();
+  assert.deepEqual(adjustedCredits.balances, {
+    ...paidBalances,
+    chat: 48,
+    video: 4
+  });
+
+  const rejectedAdjustmentResponse = await fetch(
+    `${base}/api/miniapp/admin/users/${targetUser.id}/credits`,
+    {
+      method: 'PATCH',
+      headers: adminHeaders,
+      body: JSON.stringify({ operation: 'adjust', adjustments: { video: -5, tts: 20 } })
+    }
+  );
+  assert.equal(rejectedAdjustmentResponse.status, 409);
+  assert.equal((await rejectedAdjustmentResponse.json()).error, 'CREDIT_BALANCE_BELOW_ZERO');
+  assert.deepEqual(db.getUserCreditBalances(targetUser.id).balances, adjustedCredits.balances);
+  assert.equal(db.findUser(targetUser.id).dailyUsageCount, 3);
+
+  const creditAudit = db.listAuditLogs({ action: 'users.credits.set' })[0];
+  assert.equal(creditAudit.actorId, String(adminUser.id));
+  assert.equal(creditAudit.targetId, String(targetUser.id));
+  assert.equal(creditAudit.requestId, 'miniapp-credit-set');
+  assert.deepEqual(creditAudit.details.afterBalances, paidBalances);
 
   const invalidResponse = await fetch(`${base}/api/miniapp/admin/users/${targetUser.id}`, {
     method: 'PATCH',

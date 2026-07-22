@@ -245,7 +245,7 @@ npm run verify
 
 代码部署后，还需要在 BotFather 的 Bot Settings 中为当前 Bot 开启对应平台模式。按钮详情页会根据 `getMe` 返回值显示 Inline、Guest、Guard、Secretary 的实际启用状态。访客、Inline 和 Secretary 的第三方消息不写入普通聊天记录或长期记忆。
 
-Inline Query 会在用户输入变化时不断产生 Telegram 更新。程序默认等待用户停止输入 1200ms 后只处理最后一次，并为同一用户的相同问题缓存 60 秒，避免一句话重复消耗多次 AI 调用。每次查询最多占用 7 秒，其中联网预取最多等待 2.5 秒；超时或新输入会立即取消旧任务，避免回复已经失效的 Telegram Query ID。可通过 `INLINE_QUERY_DEBOUNCE_MS`、`INLINE_QUERY_RESPONSE_TIMEOUT_MS`、`INLINE_QUERY_SEARCH_TIMEOUT_MS` 和 `INLINE_QUERY_CACHE_TTL_MS` 调整。
+Inline Query 会在用户输入变化时不断产生 Telegram 更新。程序默认至少输入 2 个字符，并等待用户停止输入 1200ms 后只处理最后一次；空白或过短内容只显示输入提示，不调用搜索、AI 或额度。同一用户的相同问题缓存 60 秒，避免一句话重复消耗多次 AI 调用。每次查询最多占用 7 秒，其中联网预取最多等待 2.5 秒、单个 AI 模型最多等待 1.4 秒，并为 Telegram 回传结果保留时间；超时、模型 429/503 或新输入会立即切换/取消，避免回复已经失效的 Query ID。实时搜索优先使用 `BRAVE_SEARCH_API_KEY`，未配置或失败时会在剩余时限内回退到免密搜索。可通过 `INLINE_QUERY_MIN_CHARS`、`INLINE_QUERY_DEBOUNCE_MS`、`INLINE_QUERY_RESPONSE_TIMEOUT_MS`、`INLINE_QUERY_SEARCH_TIMEOUT_MS`、`INLINE_QUERY_AI_ATTEMPT_TIMEOUT_MS` 和 `INLINE_QUERY_CACHE_TTL_MS` 调整。
 
 ## English
 

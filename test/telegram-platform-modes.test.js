@@ -102,6 +102,42 @@ test('inline mode returns a personal AI article with short Telegram caching', as
   assert.deepEqual(answers[0].extra, { cache_time: 30, is_personal: true });
 });
 
+test('short inline input only prompts for more text without quota, search, or AI work', async () => {
+  let quotaCalls = 0;
+  let searchCalls = 0;
+  let aiCalls = 0;
+  const answers = [];
+  const bot = createBot({
+    config: { inlineQueryMinChars: 2 },
+    db: { findUser() { return { id: 'short-user' }; } },
+    methods: {
+      async reserveUsageForUser() {
+        quotaCalls += 1;
+        return { allowed: true, reserved: true };
+      },
+      async getInlineSearchContext() {
+        searchCalls += 1;
+        return '';
+      },
+      async completePlatformRequest() {
+        aiCalls += 1;
+        return 'must not run';
+      }
+    }
+  });
+
+  await bot.handleInlineQuery({
+    update: { inline_query: { id: 'short-input', query: 'a', from: { id: 701, language_code: 'en' } } },
+    answerInlineQuery: async (results, extra) => answers.push({ results, extra })
+  });
+
+  assert.equal(quotaCalls, 0);
+  assert.equal(searchCalls, 0);
+  assert.equal(aiCalls, 0);
+  assert.match(answers[0].results[0].input_message_content.message_text, /Keep typing/i);
+  assert.deepEqual(answers[0].extra, { cache_time: 1, is_personal: true });
+});
+
 test('/ask is an unambiguous human group entry and preserves bot-to-bot behavior', async () => {
   const calls = [];
   const bot = createBot({
@@ -789,6 +825,34 @@ test('inline news search uses dated RSS without starting undated web search', as
   assert.match(raw, /Fresh headline/);
 });
 
+test('inline work reserves time to deliver its Telegram response', async () => {
+  const deliveries = [];
+  const bot = createBot({
+    config: { inlineQueryDebounceMs: 1, inlineQueryResponseTimeoutMs: 700 },
+    methods: {
+      async completePlatformRequest() {
+        await new Promise((resolve) => setTimeout(resolve, 600));
+        return 'too late';
+      }
+    }
+  });
+  const startedAt = Date.now();
+
+  await bot.handleInlineQuery({
+    update: { inline_query: { id: 'delivery-reserve', query: 'hello', from: { id: 772, language_code: 'en' } } },
+    telegram: {
+      async callApi(_method, payload) {
+        deliveries.push({ payload, startedAt: Date.now() });
+        await new Promise((resolve) => setTimeout(resolve, 130));
+      }
+    }
+  });
+
+  assert.equal(deliveries.length, 1);
+  assert.ok(deliveries[0].startedAt - startedAt < 600, 'delivery must start before the response budget is exhausted');
+  assert.match(deliveries[0].payload.results[0].input_message_content.message_text, /took too long/i);
+});
+
 test('general news never starts an undated web search when dated RSS is available', async () => {
   const originalNewsFallback = naturalAgentInternals.fetchNewsFallback;
   const bot = createBot({ config: { inlineQuerySearchTimeoutMs: 500 } });
@@ -986,6 +1050,57 @@ test('exhausted inline quota stops before web search or AI', async () => {
   assert.match(answers[0][0].input_message_content.message_text, /额度/);
 });
 
+test('duplicate inline quota reservation returns an empty answer without search, AI, or a false quota warning', async () => {
+  let quotaCalls = 0;
+  let searchCalls = 0;
+  let aiCalls = 0;
+  const answers = [];
+  const bot = createBot({
+    db: {
+      findUser() { return { id: '7791' }; }
+    },
+    methods: {
+      async reserveUsageForUser(_userId, _creditType, options) {
+        quotaCalls += 1;
+        assert.equal(options.requestKey, 'telegram:inline:inline-duplicate:chat');
+        return {
+          allowed: false,
+          duplicate: true,
+          inProgress: true,
+          reason: 'USAGE_ALREADY_RESERVED'
+        };
+      },
+      async getInlineSearchContext() {
+        searchCalls += 1;
+        return '{"results":[{"title":"must not run"}]}';
+      },
+      async completePlatformRequest() {
+        aiCalls += 1;
+        return 'must not run';
+      }
+    }
+  });
+
+  await bot.handleInlineQuery({
+    update: {
+      inline_query: {
+        id: 'inline-duplicate',
+        query: 'latest news',
+        from: { id: 7791, language_code: 'en' }
+      }
+    },
+    answerInlineQuery: async (results, extra) => answers.push({ results, extra })
+  });
+
+  assert.equal(quotaCalls, 1);
+  assert.equal(searchCalls, 0);
+  assert.equal(aiCalls, 0);
+  assert.deepEqual(answers, [{
+    results: [],
+    extra: { cache_time: 1, is_personal: true }
+  }]);
+});
+
 test('superseded inline work refunds immediately even when provider ignores abort', async () => {
   let usage = 0;
   const answers = [];
@@ -1066,7 +1181,6 @@ test('failed platform AI work refunds its reserved quota', async () => {
 
 test('a quota-refund persistence error never suppresses the prepared inline reply', async () => {
   let usage = 0;
-  let writes = 0;
   const warnings = [];
   const answers = [];
   const bot = createBot({
@@ -1078,10 +1192,7 @@ test('a quota-refund persistence error never suppresses the prepared inline repl
       },
       refundDailyQuota() {
         usage = Math.max(0, usage - 1);
-      },
-      async write() {
-        writes += 1;
-        if (writes > 1) throw new Error('injected refund persistence failure');
+        throw new Error('injected refund persistence failure');
       }
     },
     methods: {
@@ -1185,7 +1296,7 @@ test('inline current-information query prefetches web results and forces provide
   assert.equal(calls[1].options.fallbackEnabled, true);
   assert.ok(calls[1].options.signal instanceof AbortSignal);
   assert.ok(calls[1].options.requestTimeoutMs > 0);
-  assert.ok(calls[1].options.requestTimeoutMs <= 7000);
+  assert.ok(calls[1].options.requestTimeoutMs <= 1400, 'one slow model must leave time for inline fallback');
   assert.match(calls[1].options.retrievedContext, /example\.com\/news/);
   assert.match(calls[1].options.role, /live-search/);
   assert.equal(answers[0].length, 5, 'digest plus four individual news results should be returned');
@@ -1503,7 +1614,7 @@ test('platform modes refund reserved quota when Telegram delivery fails', async 
       methods: {
         async ensurePlatformUser() {},
         async completePlatformRequest({ quotaReservation }) {
-          Object.assign(quotaReservation, { userId: '12', reserved: true });
+          Object.assign(quotaReservation, { userId: '12', reserved: true, legacy: true });
           return 'answer';
         }
       }
@@ -1539,7 +1650,7 @@ test('platform modes refund reserved quota when Telegram delivery fails', async 
       methods: {
         async ensurePlatformUser() {},
         async completePlatformRequest({ quotaReservation }) {
-          Object.assign(quotaReservation, { userId: '42', reserved: true });
+          Object.assign(quotaReservation, { userId: '42', reserved: true, legacy: true });
           return 'answer';
         }
       }
@@ -1576,7 +1687,7 @@ test('platform modes refund reserved quota when Telegram delivery fails', async 
       },
       methods: {
         async completePlatformRequest({ quotaReservation }) {
-          Object.assign(quotaReservation, { userId: '600', reserved: true });
+          Object.assign(quotaReservation, { userId: '600', reserved: true, legacy: true });
           return 'answer';
         }
       }
@@ -1590,6 +1701,268 @@ test('platform modes refund reserved quota when Telegram delivery fails', async 
     }, 'question'), /delivery failed/);
     assert.equal(upserts, 1);
     assert.equal(refunds, 1);
+  });
+});
+
+test('platform delivery errors survive a failed quota-refund write', async (t) => {
+  const reservation = { userId: '12', reserved: true, legacy: true };
+
+  await t.test('guest', async () => {
+    let refundCalls = 0;
+    const warnings = [];
+    const bot = createBot({
+      bot: {
+        telegram: {
+          async callApi() {
+            throw new Error('guest delivery failed');
+          }
+        }
+      },
+      db: {
+        refundDailyQuota() {
+          refundCalls += 1;
+          throw new Error('refund write failed');
+        }
+      },
+      methods: {
+        async ensurePlatformUser() {},
+        async completePlatformRequest({ quotaReservation }) {
+          Object.assign(quotaReservation, reservation);
+          return 'answer';
+        }
+      }
+    });
+    bot.logger.warn = (message) => warnings.push(message);
+
+    await assert.rejects(() => bot.handleGuestMessage({
+      update: {
+        guest_message: {
+          guest_query_id: 'guest-refund-write-fail',
+          text: 'question',
+          chat: { id: -1001 },
+          guest_bot_caller_user: { id: 12, language_code: 'en' }
+        }
+      }
+    }), /guest delivery failed/);
+
+    assert.equal(refundCalls, 1);
+    assert.ok(warnings.includes('Failed to persist platform quota refund'));
+    assert.ok(warnings.includes('Guest query failed'));
+  });
+
+  await t.test('secretary', async () => {
+    let refundCalls = 0;
+    const warnings = [];
+    const bot = createBot({
+      bot: {
+        telegram: {
+          async callApi(method) {
+            if (method === 'sendMessage') throw new Error('secretary delivery failed');
+          }
+        }
+      },
+      db: {
+        refundDailyQuota() {
+          refundCalls += 1;
+          throw new Error('refund write failed');
+        }
+      },
+      methods: {
+        async ensurePlatformUser() {},
+        async completePlatformRequest({ quotaReservation }) {
+          Object.assign(quotaReservation, reservation);
+          return 'answer';
+        }
+      }
+    });
+    bot.logger.warn = (message) => warnings.push(message);
+    bot.businessConnections.set('biz-refund-write-fail', {
+      id: 'biz-refund-write-fail',
+      is_enabled: true,
+      rights: { can_reply: true },
+      user: { id: 42, language_code: 'en' }
+    });
+
+    await bot.handleBusinessMessage({
+      update: {
+        business_message: {
+          business_connection_id: 'biz-refund-write-fail',
+          message_id: 8,
+          text: 'question',
+          from: { id: 88 },
+          chat: { id: 88 }
+        }
+      }
+    });
+
+    assert.equal(refundCalls, 1);
+    assert.ok(warnings.includes('Failed to persist platform quota refund'));
+    assert.ok(warnings.includes('Secretary reply failed'));
+  });
+
+  await t.test('bot-to-bot', async () => {
+    let refundCalls = 0;
+    const warnings = [];
+    const bot = createBot({
+      db: {
+        refundDailyQuota() {
+          refundCalls += 1;
+          throw new Error('refund write failed');
+        }
+      },
+      methods: {
+        async ensurePlatformUser() {},
+        async completePlatformRequest({ quotaReservation }) {
+          Object.assign(quotaReservation, reservation);
+          return 'answer';
+        }
+      }
+    });
+    bot.logger.warn = (message) => warnings.push(message);
+
+    await assert.rejects(() => bot.answerBotMessage({
+      from: { id: 600, is_bot: true },
+      chat: { id: -1003 },
+      message: { message_id: 12 },
+      reply: async () => { throw new Error('bot delivery failed'); }
+    }, 'question'), /bot delivery failed/);
+
+    assert.equal(refundCalls, 1);
+    assert.ok(warnings.includes('Failed to persist platform quota refund'));
+  });
+});
+
+test('duplicate guest, secretary, and bot-to-bot reservations are silent single-owner no-ops', async (t) => {
+  const duplicate = {
+    allowed: false,
+    duplicate: true,
+    inProgress: true,
+    reason: 'USAGE_ALREADY_RESERVED'
+  };
+
+  await t.test('guest', async () => {
+    const requestKeys = [];
+    const apiCalls = [];
+    let aiCalls = 0;
+    let warnings = 0;
+    const bot = createBot({
+      bot: {
+        telegram: {
+          async callApi(method, payload) {
+            apiCalls.push({ method, payload });
+          }
+        }
+      },
+      db: { findUser() { return { id: '12' }; } },
+      methods: {
+        async reserveUsageForUser(_userId, _creditType, options) {
+          requestKeys.push(options.requestKey);
+          return duplicate;
+        },
+        async completeWithAiFallback() {
+          aiCalls += 1;
+          return { result: { text: 'must not run' } };
+        }
+      }
+    });
+    bot.logger.warn = () => { warnings += 1; };
+
+    await bot.handleGuestMessage({
+      update: {
+        guest_message: {
+          guest_query_id: 'guest-duplicate',
+          text: 'question',
+          chat: { id: -1001 },
+          guest_bot_caller_user: { id: 12, language_code: 'en' }
+        }
+      }
+    });
+
+    assert.deepEqual(requestKeys, ['telegram:guest:guest-duplicate:chat']);
+    assert.equal(aiCalls, 0);
+    assert.equal(warnings, 0);
+    assert.deepEqual(apiCalls, []);
+  });
+
+  await t.test('secretary', async () => {
+    const requestKeys = [];
+    const apiCalls = [];
+    let aiCalls = 0;
+    let warnings = 0;
+    const bot = createBot({
+      bot: {
+        telegram: {
+          async callApi(method, payload) {
+            apiCalls.push({ method, payload });
+          }
+        }
+      },
+      db: { findUser() { return { id: '42' }; } },
+      methods: {
+        async reserveUsageForUser(_userId, _creditType, options) {
+          requestKeys.push(options.requestKey);
+          return duplicate;
+        },
+        async completeWithAiFallback() {
+          aiCalls += 1;
+          return { result: { text: 'must not run' } };
+        }
+      }
+    });
+    bot.logger.warn = () => { warnings += 1; };
+    bot.businessConnections.set('biz-duplicate', {
+      id: 'biz-duplicate',
+      is_enabled: true,
+      rights: { can_reply: true },
+      user: { id: 42, language_code: 'en' }
+    });
+
+    await bot.handleBusinessMessage({
+      update: {
+        business_message: {
+          business_connection_id: 'biz-duplicate',
+          message_id: 8,
+          text: 'question',
+          from: { id: 88 },
+          chat: { id: 88 }
+        }
+      }
+    });
+
+    assert.deepEqual(requestKeys, ['telegram:secretary:biz-duplicate:88:8:chat']);
+    assert.equal(aiCalls, 0);
+    assert.equal(warnings, 0);
+    assert.deepEqual(apiCalls, []);
+  });
+
+  await t.test('bot-to-bot', async () => {
+    const requestKeys = [];
+    let aiCalls = 0;
+    let replyCalls = 0;
+    const bot = createBot({
+      db: { findUser() { return { id: '600' }; } },
+      methods: {
+        async reserveUsageForUser(_userId, _creditType, options) {
+          requestKeys.push(options.requestKey);
+          return duplicate;
+        },
+        async completeWithAiFallback() {
+          aiCalls += 1;
+          return { result: { text: 'must not run' } };
+        }
+      }
+    });
+
+    await bot.answerBotMessage({
+      from: { id: 600, is_bot: true },
+      chat: { id: -1003 },
+      message: { message_id: 12 },
+      reply: async () => { replyCalls += 1; }
+    }, 'question');
+
+    assert.deepEqual(requestKeys, ['telegram:bot_collaboration:-1003:12:chat']);
+    assert.equal(aiCalls, 0);
+    assert.equal(replyCalls, 0);
   });
 });
 

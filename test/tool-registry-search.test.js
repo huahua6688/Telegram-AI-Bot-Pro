@@ -32,7 +32,14 @@ function createRegistry(overrides = {}, logger = { info() {}, warn() {}, debug()
 
 function rejectWhenAborted(signal, callback = () => undefined) {
   return new Promise((resolve, reject) => {
+    // A real pending fetch keeps the process alive. AbortSignal.timeout() uses
+    // an unref'ed timer on Linux/Node 24, so this mock needs one referenced
+    // safety timer or node:test may cancel the test before the abort fires.
+    const safetyTimer = setTimeout(() => {
+      reject(new Error('Mock fetch did not receive an abort before its deadline.'));
+    }, 1500);
     const abort = () => {
+      clearTimeout(safetyTimer);
       callback();
       reject(signal?.reason || new DOMException('Aborted', 'AbortError'));
     };
@@ -62,6 +69,93 @@ test('web search races DuckDuckGo paths and cancels the slower request', async (
   assert.equal(parsed.results[0].title, 'Fresh result');
   assert.equal(instantStarted, true);
   assert.equal(instantAborted, true);
+});
+
+test('web search prefers configured Brave Search and preserves multiple sourced results', async () => {
+  let subscriptionToken = '';
+  globalThis.fetch = async (url, options = {}) => {
+    assert.match(String(url), /api\.search\.brave\.com/);
+    subscriptionToken = options.headers['X-Subscription-Token'];
+    return new Response(JSON.stringify({
+      web: {
+        results: [
+          { title: 'Fresh story one', url: 'https://example.com/one', description: 'First source', page_age: '2026-07-21T01:00:00Z' },
+          { title: 'Fresh story two', url: 'https://example.org/two', description: 'Second source', page_age: '2026-07-21T02:00:00Z' }
+        ]
+      }
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+
+  const raw = await toolRegistryInternals.searchWeb('today topic', {
+    timeoutMs: 1000,
+    braveApiKey: 'brave-test-key'
+  });
+  const parsed = JSON.parse(raw);
+
+  assert.equal(subscriptionToken, 'brave-test-key');
+  assert.equal(parsed.provider, 'brave');
+  assert.equal(parsed.results.length, 2);
+  assert.equal(parsed.results[0].url, 'https://example.com/one');
+  assert.equal(parsed.results[0].publishedAt, '2026-07-21T01:00:00Z');
+});
+
+test('web search falls back to DuckDuckGo when configured Brave Search fails', async () => {
+  let braveCalls = 0;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('api.search.brave.com')) {
+      braveCalls += 1;
+      return new Response('unavailable', { status: 503 });
+    }
+    if (String(url).includes('html.duckduckgo.com')) {
+      return new Response(
+        '<a class="result__a" href="https://example.com/fallback">Fallback result</a>' +
+        '<div class="result__snippet">Fallback summary</div>',
+        { status: 200, headers: { 'content-type': 'text/html' } }
+      );
+    }
+    return new Response(JSON.stringify({ Heading: '', AbstractText: '', Answer: '', RelatedTopics: [] }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' }
+    });
+  };
+
+  const raw = await toolRegistryInternals.searchWeb('fallback topic', {
+    timeoutMs: 1000,
+    braveApiKey: 'brave-test-key'
+  });
+  const parsed = JSON.parse(raw);
+
+  assert.equal(braveCalls, 1);
+  assert.equal(parsed.provider, 'duckduckgo');
+  assert.equal(parsed.results[0].title, 'Fallback result');
+});
+
+test('slow Brave leaves shared search time for DuckDuckGo fallback', async () => {
+  globalThis.fetch = async (url, options = {}) => {
+    if (String(url).includes('api.search.brave.com')) {
+      return rejectWhenAborted(options.signal);
+    }
+    if (String(url).includes('html.duckduckgo.com')) {
+      await new Promise((resolve) => setTimeout(resolve, 80));
+      return new Response(
+        '<a class="result__a" href="https://example.com/after-brave">Fallback after slow Brave</a>' +
+        '<div class="result__snippet">Fresh fallback</div>',
+        { status: 200, headers: { 'content-type': 'text/html' } }
+      );
+    }
+    return rejectWhenAborted(options.signal);
+  };
+
+  const startedAt = Date.now();
+  const raw = await toolRegistryInternals.searchWeb('slow brave topic', {
+    timeoutMs: 1000,
+    braveApiKey: 'brave-test-key'
+  });
+  const parsed = JSON.parse(raw);
+
+  assert.equal(parsed.provider, 'duckduckgo');
+  assert.equal(parsed.results[0].title, 'Fallback after slow Brave');
+  assert.ok(Date.now() - startedAt < 800, 'Brave must leave time for the fallback inside one shared budget');
 });
 
 test('web search prefers fresh HTML links over a slightly faster Instant Answer', async () => {
