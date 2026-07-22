@@ -48,6 +48,90 @@ function parseList(value) {
     .filter(Boolean);
 }
 
+const STAR_CREDIT_TYPES = Object.freeze([
+  'chat',
+  'vision',
+  'image_generation',
+  'tts',
+  'live_voice',
+  'video'
+]);
+
+function parseNonNegativeInteger(value, fallback = 0) {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+export function parseStarsProducts(value = '') {
+  const raw = String(value || '').trim();
+  if (!raw) return [];
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`STARS_PRODUCTS_JSON must be valid JSON: ${error.message}`);
+  }
+
+  if (!Array.isArray(parsed)) {
+    throw new Error('STARS_PRODUCTS_JSON must be a JSON array.');
+  }
+
+  const seenIds = new Set();
+  return parsed.map((item, index) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      throw new Error(`STARS_PRODUCTS_JSON[${index}] must be an object.`);
+    }
+
+    const id = String(item.id || '').trim().toLowerCase();
+    if (!/^[a-z0-9][a-z0-9_-]{0,39}$/.test(id)) {
+      throw new Error(`STARS_PRODUCTS_JSON[${index}].id is invalid.`);
+    }
+    if (seenIds.has(id)) {
+      throw new Error(`STARS_PRODUCTS_JSON contains duplicate product id "${id}".`);
+    }
+    seenIds.add(id);
+
+    const title = String(item.title || '').trim();
+    const titleEn = String(item.titleEn || item.title_en || title).trim();
+    const description = String(item.description || '').trim();
+    const descriptionEn = String(item.descriptionEn || item.description_en || description).trim();
+    const price = Number(item.priceXtr ?? item.price_xtr ?? item.price);
+    if (!title || title.length > 32 || !titleEn || titleEn.length > 32) {
+      throw new Error(`STARS_PRODUCTS_JSON[${index}] titles must contain 1-32 characters.`);
+    }
+    if (!description || description.length > 255 || !descriptionEn || descriptionEn.length > 255) {
+      throw new Error(`STARS_PRODUCTS_JSON[${index}] descriptions must contain 1-255 characters.`);
+    }
+    if (!Number.isSafeInteger(price) || price <= 0) {
+      throw new Error(`STARS_PRODUCTS_JSON[${index}].price must be a positive integer number of Stars.`);
+    }
+
+    const sourceCredits = item.credits && typeof item.credits === 'object' ? item.credits : {};
+    const aliases = {
+      chat: sourceCredits.chat,
+      vision: sourceCredits.vision,
+      image_generation: sourceCredits.image_generation ?? sourceCredits.image,
+      tts: sourceCredits.tts,
+      live_voice: sourceCredits.live_voice ?? sourceCredits.live_audio,
+      video: sourceCredits.video
+    };
+    const credits = {};
+    for (const type of STAR_CREDIT_TYPES) {
+      const amount = Number(aliases[type] ?? 0);
+      if (!Number.isSafeInteger(amount) || amount < 0) {
+        throw new Error(`STARS_PRODUCTS_JSON[${index}].credits.${type} must be a non-negative integer.`);
+      }
+      credits[type] = amount;
+    }
+    if (!Object.values(credits).some((amount) => amount > 0)) {
+      throw new Error(`STARS_PRODUCTS_JSON[${index}] must grant at least one credit.`);
+    }
+
+    return Object.freeze({ id, title, titleEn, description, descriptionEn, price, credits: Object.freeze(credits) });
+  });
+}
+
 function normalizeNewsRegion(value = '') {
   const region = String(value || '').trim().toUpperCase();
   return /^[A-Z]{2}$/.test(region) ? region : 'MY';
@@ -111,6 +195,7 @@ export function loadConfig() {
     gemini: ['gemini-2.5-flash-lite']
   };
   const legacyModelFor = (providerId) => (aiProvider === providerId ? process.env.AI_MODEL : '');
+  const legacyApiKeyFor = (providerId) => (aiProvider === providerId ? process.env.AI_API_KEY || '' : '');
   const providerModels = {
     'openai-compatible': compactList(process.env.AI_MODEL, configuredFallbackModels),
     openai: compactList(process.env.OPENAI_MODEL, legacyModelFor('openai'), parseList(process.env.OPENAI_FALLBACK_MODELS)),
@@ -168,12 +253,12 @@ export function loadConfig() {
     defaultAIProvider: aiProvider,
     aiApiKey: process.env.AI_API_KEY || '',
     aiBaseUrl: (process.env.AI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, ''),
-    openaiApiKey: process.env.OPENAI_API_KEY || process.env.AI_API_KEY || '',
+    openaiApiKey: process.env.OPENAI_API_KEY || legacyApiKeyFor('openai'),
     openaiBaseUrl: (process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/$/, ''),
-    anthropicApiKey: process.env.ANTHROPIC_API_KEY || process.env.AI_API_KEY || '',
+    anthropicApiKey: process.env.ANTHROPIC_API_KEY || legacyApiKeyFor('anthropic'),
     anthropicBaseUrl: (process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/$/, ''),
     anthropicApiVersion: process.env.ANTHROPIC_API_VERSION || '2023-06-01',
-    geminiApiKey: process.env.GEMINI_API_KEY || process.env.AI_API_KEY || '',
+    geminiApiKey: process.env.GEMINI_API_KEY || legacyApiKeyFor('gemini'),
     geminiBaseUrl: (process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, ''),
     geminiLiveApiKey: process.env.GEMINI_LIVE_API_KEY || '',
     geminiLiveBaseUrl: (process.env.GEMINI_LIVE_BASE_URL || process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, ''),
@@ -189,19 +274,19 @@ export function loadConfig() {
     huggingfaceBaseUrl: (process.env.HUGGINGFACE_BASE_URL || 'https://router.huggingface.co/v1').replace(/\/$/, ''),
     mistralApiKey: process.env.MISTRAL_API_KEY || '',
     mistralBaseUrl: (process.env.MISTRAL_BASE_URL || 'https://api.mistral.ai/v1').replace(/\/$/, ''),
-    qwenApiKey: process.env.QWEN_API_KEY || process.env.AI_API_KEY || '',
+    qwenApiKey: process.env.QWEN_API_KEY || legacyApiKeyFor('qwen'),
     qwenBaseUrl: (process.env.QWEN_BASE_URL || 'https://dashscope.aliyuncs.com/compatible-mode/v1').replace(/\/$/, ''),
     qwenApiVersion: process.env.QWEN_API_VERSION || '',
-    grokApiKey: process.env.GROK_API_KEY || process.env.AI_API_KEY || '',
+    grokApiKey: process.env.GROK_API_KEY || legacyApiKeyFor('grok'),
     grokBaseUrl: (process.env.GROK_BASE_URL || 'https://api.x.ai/v1').replace(/\/$/, ''),
     grokApiVersion: process.env.GROK_API_VERSION || '',
-    deepseekApiKey: process.env.DEEPSEEK_API_KEY || process.env.AI_API_KEY || '',
+    deepseekApiKey: process.env.DEEPSEEK_API_KEY || legacyApiKeyFor('deepseek'),
     deepseekBaseUrl: (process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com/v1').replace(/\/$/, ''),
     deepseekApiVersion: process.env.DEEPSEEK_API_VERSION || '',
-    glmApiKey: process.env.GLM_API_KEY || process.env.AI_API_KEY || '',
+    glmApiKey: process.env.GLM_API_KEY || legacyApiKeyFor('glm'),
     glmBaseUrl: (process.env.GLM_BASE_URL || 'https://open.bigmodel.cn/api/paas/v4').replace(/\/$/, ''),
     glmApiVersion: process.env.GLM_API_VERSION || '',
-    doubaoApiKey: process.env.DOUBAO_API_KEY || process.env.AI_API_KEY || '',
+    doubaoApiKey: process.env.DOUBAO_API_KEY || legacyApiKeyFor('doubao'),
     doubaoBaseUrl: (process.env.DOUBAO_BASE_URL || 'https://ark.cn-beijing.volces.com/api/v3').replace(/\/$/, ''),
     doubaoApiVersion: process.env.DOUBAO_API_VERSION || '',
     defaultModel,
@@ -260,6 +345,7 @@ export function loadConfig() {
     networkToolAllowedChatIds: new Set(parseList(process.env.NETWORK_TOOL_ALLOWED_CHAT_IDS).map(String)),
     enableLiveAudio: parseBoolean(process.env.ENABLE_LIVE_AUDIO, true),
     enableLiveTranslate: parseBoolean(process.env.ENABLE_LIVE_TRANSLATE, true),
+    enableVideo: parseBoolean(process.env.ENABLE_VIDEO, false),
     maxHistoryMessages: parseInteger(process.env.MAX_HISTORY_MESSAGES, 32),
     maxContextChars: parseInteger(process.env.MAX_CONTEXT_CHARS, 48000),
     maxInputChars: parseInteger(process.env.MAX_INPUT_CHARS, 12000),
@@ -268,6 +354,23 @@ export function loadConfig() {
     rateLimitWindowMs: parseInteger(process.env.RATE_LIMIT_WINDOW_MS, 60000),
     rateLimitMaxRequests: parseInteger(process.env.RATE_LIMIT_MAX_REQUESTS, 12),
     dailyQuota: parseInteger(process.env.DAILY_QUOTA, 200),
+    starsPaymentsEnabled: parseBoolean(process.env.STARS_PAYMENTS_ENABLED, true),
+    starsProducts: parseStarsProducts(process.env.STARS_PRODUCTS_JSON),
+    starsFreeQuota: Object.freeze({
+      chat: parseNonNegativeInteger(process.env.STARS_FREE_CHAT_DAILY, parseNonNegativeInteger(process.env.DAILY_QUOTA, 200)),
+      vision: parseNonNegativeInteger(process.env.STARS_FREE_VISION_DAILY, 5),
+      image_generation: parseNonNegativeInteger(process.env.STARS_FREE_IMAGE_DAILY, 1),
+      tts: parseNonNegativeInteger(process.env.STARS_FREE_TTS_DAILY, 3),
+      live_voice: parseNonNegativeInteger(process.env.STARS_FREE_LIVE_VOICE_DAILY, 3),
+      video: parseNonNegativeInteger(process.env.STARS_FREE_VIDEO_DAILY, 0)
+    }),
+    starsFreeChatZeroMeansUnlimited: process.env.STARS_FREE_CHAT_DAILY === undefined
+      && parseNonNegativeInteger(process.env.DAILY_QUOTA, 200) === 0,
+    starsOrderTtlMinutes: Math.max(5, parseInteger(process.env.STARS_ORDER_TTL_MINUTES, 60)),
+    starsUsageReservationTtlMinutes: Math.max(2, parseInteger(process.env.STARS_USAGE_RESERVATION_TTL_MINUTES, 15)),
+    starsRefundLeaseSeconds: Math.max(30, parseInteger(process.env.STARS_REFUND_LEASE_SECONDS, 300)),
+    starsTermsText: process.env.STARS_TERMS_TEXT || '',
+    starsSupportText: process.env.STARS_SUPPORT_TEXT || '',
     healthPort: parseInteger(process.env.HEALTH_PORT || process.env.PORT, 3000),
     adminApiPort: parseInteger(process.env.ADMIN_API_PORT, 3001),
     adminApiPrefix: process.env.ADMIN_API_PREFIX || '/admin/api/v1',
@@ -281,9 +384,12 @@ export function loadConfig() {
       : 'queue',
     botCollaborationCooldownMs: parseInteger(process.env.BOT_COLLABORATION_COOLDOWN_MS, 5000),
     inlineQueryDebounceMs: parseInteger(process.env.INLINE_QUERY_DEBOUNCE_MS, 1200),
+    inlineQueryMinChars: Math.max(1, parseInteger(process.env.INLINE_QUERY_MIN_CHARS, 2)),
     inlineQueryResponseTimeoutMs: parseInteger(process.env.INLINE_QUERY_RESPONSE_TIMEOUT_MS, 7000),
     inlineQuerySearchTimeoutMs: parseInteger(process.env.INLINE_QUERY_SEARCH_TIMEOUT_MS, 2500),
+    inlineQueryAiAttemptTimeoutMs: parseInteger(process.env.INLINE_QUERY_AI_ATTEMPT_TIMEOUT_MS, 1400),
     inlineQueryCacheTtlMs: parseInteger(process.env.INLINE_QUERY_CACHE_TTL_MS, 60000),
+    braveSearchApiKey: process.env.BRAVE_SEARCH_API_KEY || '',
     newsRegion: normalizeNewsRegion(process.env.NEWS_REGION),
     newsLanguage: normalizeNewsLanguage(process.env.NEWS_LANGUAGE),
     newsTimeZone: normalizeNewsTimeZone(process.env.NEWS_TIME_ZONE),

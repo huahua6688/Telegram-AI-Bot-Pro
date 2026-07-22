@@ -153,12 +153,81 @@ async function searchDuckDuckGoInstant(query, options = {}) {
   };
 }
 
-async function searchWeb(query, { signal, timeoutMs } = {}) {
+async function searchBrave(query, apiKey, options = {}) {
+  const token = String(apiKey || '').trim();
+  if (!token) return [];
+
+  const url = new URL('https://api.search.brave.com/res/v1/web/search');
+  url.searchParams.set('q', query);
+  url.searchParams.set('count', '8');
+  url.searchParams.set('safesearch', 'moderate');
+  url.searchParams.set('text_decorations', 'false');
+
+  const response = await fetchWithTimeout(url, {
+    headers: {
+      Accept: 'application/json',
+      'Accept-Encoding': 'gzip',
+      'X-Subscription-Token': token,
+      'User-Agent': USER_AGENT
+    }
+  }, options);
+  if (!response.ok) {
+    throw new Error(`Brave Search request failed (${response.status})`);
+  }
+
+  const data = await response.json();
+  return (data.web?.results || [])
+    .map((item) => ({
+      title: String(item.title || '').trim(),
+      url: String(item.url || '').trim(),
+      snippet: decodeSearchText(item.description || ''),
+      publishedAt: String(item.page_age || item.age || '').trim()
+    }))
+    .filter((item) => item.title && /^https?:\/\//i.test(item.url))
+    .slice(0, 8);
+}
+
+async function searchWeb(query, { signal, timeoutMs, braveApiKey } = {}) {
+  const totalBudgetMs = boundedTimeoutMs(timeoutMs);
+  const deadlineAt = Date.now() + totalBudgetMs;
+  const remainingBudgetMs = () => Math.max(0, deadlineAt - Date.now());
+  const requireRemainingBudget = () => {
+    const remaining = remainingBudgetMs();
+    if (remaining < 50) {
+      const error = new Error('Search request timed out.');
+      error.name = 'TimeoutError';
+      throw error;
+    }
+    return remaining;
+  };
+  const configuredBraveKey = String(braveApiKey || '').trim();
+  if (configuredBraveKey) {
+    try {
+      // Keep a meaningful portion of the shared request budget for the
+      // keyless fallback. Inline mode has a short hard Telegram deadline.
+      const braveBudgetMs = Math.max(
+        50,
+        Math.min(800, Math.floor(totalBudgetMs / 2), totalBudgetMs - 50)
+      );
+      const braveResults = await searchBrave(query, configuredBraveKey, {
+        signal,
+        timeoutMs: Math.min(requireRemainingBudget(), braveBudgetMs)
+      });
+      if (braveResults.length > 0) {
+        return truncateText(JSON.stringify({ provider: 'brave', query, results: braveResults }, null, 2), 6000);
+      }
+    } catch (error) {
+      if (signal?.aborted || error?.name === 'AbortError') throw error;
+      // Fall back to the keyless search paths when Brave is unavailable.
+    }
+  }
+
   const cancelPending = new AbortController();
   const searchSignal = combineSignals([signal, cancelPending.signal]);
   const requestOptions = {
     signal: searchSignal,
-    timeoutMs: boundedTimeoutMs(timeoutMs)
+    // Do not allow DuckDuckGo to exceed time already spent waiting for Brave.
+    timeoutMs: requireRemainingBudget()
   };
   const htmlAttempt = searchDuckDuckGoHtml(query, requestOptions).then((results) => {
     if (results.length === 0) throw new Error('HTML search returned no useful results.');
@@ -437,7 +506,8 @@ export class ToolRegistry {
           usage.count += 1;
           return await searchWeb(args.query, {
             signal: context.signal,
-            timeoutMs: boundedTimeoutMs(context.requestTimeoutMs ?? this.config.requestTimeoutMs)
+            timeoutMs: boundedTimeoutMs(context.requestTimeoutMs ?? this.config.requestTimeoutMs),
+            braveApiKey: this.config.braveSearchApiKey
           });
         case 'get_weather':
           usage.count += 1;
@@ -476,5 +546,6 @@ export const toolRegistryInternals = {
   fetchWithTimeout,
   searchDuckDuckGoHtml,
   searchDuckDuckGoInstant,
+  searchBrave,
   searchWeb
 };

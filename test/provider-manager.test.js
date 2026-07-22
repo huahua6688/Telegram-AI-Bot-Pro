@@ -114,7 +114,11 @@ test('AIProviderManager still switches Gemini models for model-scoped quota fail
     logger,
     clientFactory: fakeFactory({
       gemini: [
-        new Error('AI request failed (429): free_tier_input_token_count limit: 0, model: gemini-model'),
+        new Error([
+          'AI request failed (429): You exceeded your current quota, please check your plan and billing details.',
+          'Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count,',
+          'limit: 0, model: gemini-model'
+        ].join(' ')),
         { text: 'gemini fallback ok', messages: [{ role: 'assistant', content: 'gemini fallback ok' }] }
       ]
     }, calls)
@@ -133,6 +137,86 @@ test('AIProviderManager still switches Gemini models for model-scoped quota fail
   assert.deepEqual(calls.map((item) => `${item.providerId}/${item.model}`), [
     'gemini/gemini-model',
     'gemini/gemini-second-model'
+  ]);
+  assert.equal(manager.getCooldown('gemini', 'chat'), null, 'a model-scoped quota error must not cool every Gemini model');
+});
+
+test('AIProviderManager tries a backup model after a per-attempt inline timeout', async () => {
+  const calls = [];
+  const manager = new AIProviderManager({
+    config: baseConfig({
+      providerModels: {
+        gemini: ['gemini-model', 'gemini-second-model'],
+        groq: ['groq-model'],
+        openrouter: ['openrouter-model'],
+        huggingface: ['hf-model']
+      }
+    }),
+    logger,
+    clientFactory: (providerConfig) => ({
+      getProviderName: () => providerConfig.aiProvider,
+      getCapabilities: () => ({ chat: true, toolCalls: false }),
+      async completeWithTools(request) {
+        calls.push(`${providerConfig.aiProvider}/${request.model}`);
+        if (request.model === 'gemini-model') {
+          await new Promise((resolve) => setTimeout(resolve, Number(request.requestTimeoutMs) || 1));
+          throw new Error('AI provider request timeout.');
+        }
+        return { text: 'backup model ok', messages: [{ role: 'assistant', content: 'backup model ok' }] };
+      }
+    })
+  });
+
+  const result = await manager.execute({
+    capability: 'chat',
+    preferredProvider: 'gemini',
+    preferredModel: 'gemini-model',
+    fallbackEnabled: true,
+    request: {
+      messages: [{ role: 'user', content: 'hello' }],
+      tools: [],
+      requestTimeoutMs: 20,
+      suppressTimeoutCooldown: true
+    }
+  });
+
+  assert.equal(result.model, 'gemini-second-model');
+  assert.deepEqual(calls, ['gemini/gemini-model', 'gemini/gemini-second-model']);
+});
+
+test('AIProviderManager treats a disabled billing account as provider-wide', async () => {
+  const calls = [];
+  const manager = new AIProviderManager({
+    config: baseConfig({
+      providerModels: {
+        gemini: ['gemini-model', 'gemini-second-model'],
+        groq: ['groq-model'],
+        openrouter: ['openrouter-model'],
+        huggingface: ['hf-model']
+      }
+    }),
+    logger,
+    clientFactory: fakeFactory({
+      gemini: [
+        new Error('AI request failed (429): billing account is disabled'),
+        { text: 'must not try another Gemini model', messages: [] }
+      ],
+      groq: [{ text: 'groq ok', messages: [{ role: 'assistant', content: 'groq ok' }] }]
+    }, calls)
+  });
+
+  const result = await manager.execute({
+    capability: 'chat',
+    preferredProvider: 'gemini',
+    preferredModel: 'gemini-model',
+    fallbackEnabled: true,
+    request: { messages: [{ role: 'user', content: 'hello' }], tools: [] }
+  });
+
+  assert.equal(result.providerId, 'groq');
+  assert.deepEqual(calls.map((item) => `${item.providerId}/${item.model}`), [
+    'gemini/gemini-model',
+    'groq/groq-model'
   ]);
 });
 

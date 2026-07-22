@@ -50,6 +50,21 @@ function localText(locale, zh, en) {
   return String(locale || '').toLowerCase().startsWith('zh') ? zh : en;
 }
 
+function inlineResponseBudgetMs(config = {}) {
+  return Math.max(250, Number(config.inlineQueryResponseTimeoutMs) || 7000);
+}
+
+function inlineDeliveryBudgetMs(config = {}) {
+  // Telegram answers are only useful if there is still network time left to
+  // deliver them. Keep the normal delivery cap short and reserve it before
+  // starting debounce/search/model work.
+  return Math.max(250, Math.min(1200, Math.floor(inlineResponseBudgetMs(config) / 3)));
+}
+
+function inlineMinimumChars(config = {}) {
+  return Math.max(1, Number(config.inlineQueryMinChars) || 2);
+}
+
 function groupTriggerHelp(locale = 'zh', botUsername = '') {
   const mention = botUsername ? `@${String(botUsername).replace(/^@/, '')}` : '@botusername';
   return localText(
@@ -75,6 +90,15 @@ function groupTriggerHelp(locale = 'zh', botUsername = '') {
 
 function safeText(value = '', maxChars = 3500) {
   return truncateText(String(value || '').replace(/\u0000/g, '').trim(), maxChars);
+}
+
+function platformUsageError(quota = {}) {
+  const duplicate = Boolean(quota?.duplicate);
+  const error = new Error(duplicate
+    ? 'Telegram platform request is already being processed.'
+    : 'Telegram platform mode credit quota exceeded.');
+  error.code = duplicate ? 'USAGE_DUPLICATE' : 'PLATFORM_USAGE_QUOTA';
+  return error;
 }
 
 function addBounded(set, value, limit = 500) {
@@ -579,13 +603,14 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     let ownsQuotaReservation = false;
     if (normalizedUserId) {
       if (!accessAlreadyChecked) this.assertPlatformRequestAllowed(normalizedUserId, normalizedChatId);
-      if (!quotaAlreadyReserved && this.db.consumeDailyQuota && this.db.findUser?.(normalizedUserId)) {
-        const quota = this.db.consumeDailyQuota(normalizedUserId, this.config.dailyQuota);
-        if (!quota.allowed) throw new Error('Telegram platform mode daily quota exceeded.');
+      if (!quotaAlreadyReserved && this.db.findUser?.(normalizedUserId)) {
+        const quota = await this.reserveUsageForUser(normalizedUserId, 'chat', {
+          requestKey: reservationState.requestKey || `telegram:${scope}:${randomUUID()}:chat`,
+          metadata: { chatId: normalizedChatId, scope }
+        });
+        if (!quota.allowed) throw platformUsageError(quota);
         ownsQuotaReservation = true;
-        reservationState.userId = normalizedUserId;
-        reservationState.reserved = true;
-        await this.db.write?.();
+        Object.assign(reservationState, quota);
       }
     }
 
@@ -732,12 +757,16 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
   }
 
   async refundPlatformQuotaReservation(reservation = {}) {
-    const userId = String(reservation.userId || '');
-    if (!reservation.reserved || !userId || typeof this.db.refundDailyQuota !== 'function') return false;
-    reservation.reserved = false;
-    this.db.refundDailyQuota(userId);
-    await this.db.write?.();
-    return true;
+    try {
+      return await this.refundUsageReservation(reservation);
+    } catch (error) {
+      this.logger?.warn?.('Failed to persist platform quota refund', {
+        recordId: reservation?.recordId,
+        requestKey: reservation?.requestKey,
+        error: this.formatLogError(error)
+      });
+      return false;
+    }
   }
 
   async ensurePlatformUser(user = {}) {
@@ -839,10 +868,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     if (normalizedQueryId && this.answeredInlineQueryIds.has(normalizedQueryId)) return false;
     if (normalizedQueryId) addBounded(this.answeredInlineQueryIds, normalizedQueryId, 1000);
 
-    const deliveryTimeoutMs = Math.max(
-      250,
-      Math.min(2500, Number(this.config.inlineQueryResponseTimeoutMs) || 7000)
-    );
+    const deliveryTimeoutMs = inlineDeliveryBudgetMs(this.config);
     const abortController = new AbortController();
     let deliveryTimedOut = false;
     let timeout;
@@ -1064,9 +1090,10 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     state.version += 1;
     state.latestQueryId = queryId;
     const version = state.version;
+    const responseBudgetMs = inlineResponseBudgetMs(this.config);
     const deadlineAt = Date.now() + Math.max(
-      250,
-      Number(this.config.inlineQueryResponseTimeoutMs) || 7000
+      1,
+      responseBudgetMs - inlineDeliveryBudgetMs(this.config)
     );
     const remainingMs = () => Math.max(1, deadlineAt - Date.now());
     const runToken = { version, queryId, query };
@@ -1081,6 +1108,19 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
         queryId,
         [],
         { cache_time: 30, is_personal: true }
+      );
+    }
+
+    if (Array.from(query).length < inlineMinimumChars(this.config)) {
+      if (state.abortController === abortController) state.abortController = null;
+      return this.answerInlineQuerySafely(
+        ctx,
+        queryId,
+        [inlineArticle(
+          localText(locale, '请继续输入至少两个字符后再发送。', 'Keep typing a little more before sending.'),
+          localText(locale, '继续输入', 'Continue typing')
+        )],
+        { cache_time: 1, is_personal: true }
       );
     }
 
@@ -1104,24 +1144,17 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     state.running = runToken;
     let response;
     let quotaReserved = false;
+    let inlineQuotaReservation = null;
     let quotaShouldCommit = false;
     let quotaRefunded = false;
     let cacheFingerprint = '';
     const refundInlineQuota = async () => {
-      if (!quotaReserved || quotaRefunded || typeof this.db.refundDailyQuota !== 'function') return;
+      if (!quotaReserved || quotaRefunded || !inlineQuotaReservation) return;
       try {
-        this.db.refundDailyQuota(userId);
+        await this.refundUsageReservation(inlineQuotaReservation);
         quotaRefunded = true;
-        try {
-          await this.db.write?.();
-        } catch (error) {
-          this.logger?.warn?.('Failed to persist inline quota refund', {
-            userId,
-            error: this.formatLogError(error)
-          });
-        }
       } catch (error) {
-        this.logger?.warn?.('Failed to refund inline quota', {
+        this.logger?.warn?.('Failed to persist inline quota refund', {
           userId,
           error: this.formatLogError(error)
         });
@@ -1171,13 +1204,19 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
       if (!response) {
         await this.runInlineWork(async () => {
           this.assertPlatformRequestAllowed(userId, '');
-          if (this.db.consumeDailyQuota && this.db.findUser?.(userId)) {
-            const quota = this.db.consumeDailyQuota(userId, this.config.dailyQuota);
-            if (!quota.allowed) {
-              throw inlineWorkError('INLINE_QUERY_QUOTA', 'Inline query daily quota exceeded.');
+          if (this.db.findUser?.(userId)) {
+            const quota = await this.reserveUsageForUser(userId, 'chat', {
+              requestKey: `telegram:inline:${queryId}:chat`,
+              metadata: { scope: 'telegram_inline', queryId }
+            });
+            if (quota.duplicate) {
+              throw inlineWorkError('INLINE_QUERY_SUPERSEDED', 'Inline query is already being processed.');
             }
-            quotaReserved = true;
-            await this.db.write?.();
+            if (!quota.allowed) {
+              throw inlineWorkError('INLINE_QUERY_QUOTA', 'Inline query credit quota exceeded.');
+            }
+            inlineQuotaReservation = quota;
+            quotaReserved = Boolean(quota.reserved || quota.admin);
           }
         }, { deadlineAt, signal: abortController.signal });
         const retrievedContext = translationRequest
@@ -1228,7 +1267,10 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
                     text: translationRequest.text,
                     targetLanguage: translationRequest.targetLanguage,
                     locale,
-                    requestTimeoutMs: remainingMs(),
+                    requestTimeoutMs: Math.min(
+                      remainingMs(),
+                      Math.max(250, Number(this.config.inlineQueryAiAttemptTimeoutMs) || 1400)
+                    ),
                     signal: abortController.signal
                   })
                 : this.completePlatformRequest({
@@ -1240,7 +1282,10 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
                     fallbackEnabled: true,
                     retrievedContext,
                     retrievedContextIsNews: searchIsNews,
-                    requestTimeoutMs: remainingMs(),
+                    requestTimeoutMs: Math.min(
+                      remainingMs(),
+                      Math.max(250, Number(this.config.inlineQueryAiAttemptTimeoutMs) || 1400)
+                    ),
                     signal: abortController.signal,
                     accessAlreadyChecked: true,
                     quotaAlreadyReserved: quotaReserved
@@ -1320,8 +1365,15 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
         };
       } else if (error?.code === 'INLINE_QUERY_QUOTA') {
         response = {
-          results: [inlineArticle(this.t(locale, 'quotaExceeded'), PLATFORM_MODE_NAMES.inline)],
-          extra: { cache_time: 5, is_personal: true }
+          results: [inlineArticle(
+            localText(locale, '聊天额度不足。打开机器人即可查看余额或购买额度。', 'Not enough chat credits. Open the bot to view your balance or buy credits.'),
+            PLATFORM_MODE_NAMES.inline
+          )],
+          extra: {
+            cache_time: 5,
+            is_personal: true,
+            button: { text: localText(locale, '⭐ 购买额度', '⭐ Buy credits'), start_parameter: 'buy' }
+          }
         };
       } else {
         this.logger?.warn?.('Inline query failed', { error: this.formatLogError(error) });
@@ -1342,6 +1394,9 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     let delivered = false;
     try {
       delivered = await this.answerInlineQuerySafely(ctx, queryId, response.results, response.extra);
+      if (delivered && quotaShouldCommit && inlineQuotaReservation) {
+        await this.commitUsageReservation(inlineQuotaReservation);
+      }
       return delivered;
     } finally {
       if (!delivered) await refundInlineQuota();
@@ -1360,7 +1415,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
       message,
       this.config.maxInputChars || 12000
     );
-    const quotaReservation = {};
+    const quotaReservation = { requestKey: `telegram:guest:${queryId}:chat` };
 
     try {
       await this.ensurePlatformUser(caller);
@@ -1377,7 +1432,9 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
         guest_query_id: queryId,
         result: inlineArticle(answer, 'AI assistant')
       });
+      await this.commitUsageReservation(quotaReservation);
     } catch (error) {
+      if (error?.code === 'USAGE_DUPLICATE') return;
       await this.refundPlatformQuotaReservation(quotaReservation);
       this.logger?.warn?.('Guest query failed', { error: this.formatLogError(error) });
       await this.bot.telegram.callApi('answerGuestQuery', {
@@ -1623,10 +1680,26 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     if (!input) return;
     const owner = connection.user || {};
     const locale = String(owner.language_code || '').startsWith('en') ? 'en' : 'zh';
-    const quotaReservation = {};
+    const quotaReservation = {
+      requestKey: `telegram:secretary:${connectionId}:${message.chat?.id || ''}:${message.message_id || ''}:chat`
+    };
 
     try {
       await this.ensurePlatformUser(owner);
+      this.assertPlatformRequestAllowed(String(owner.id || ''), String(message.chat?.id || ''));
+      let quotaAlreadyReserved = false;
+      if (this.db.findUser?.(String(owner.id || ''))) {
+        const quota = await this.reserveUsageForUser(String(owner.id || ''), 'chat', {
+          requestKey: quotaReservation.requestKey,
+          metadata: {
+            chatId: String(message.chat?.id || ''),
+            scope: 'telegram_secretary'
+          }
+        });
+        if (!quota.allowed) throw platformUsageError(quota);
+        Object.assign(quotaReservation, quota);
+        quotaAlreadyReserved = true;
+      }
       await this.bot.telegram.callApi('sendChatAction', {
         business_connection_id: connectionId,
         chat_id: message.chat.id,
@@ -1639,7 +1712,9 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
         locale,
         scope: 'telegram_secretary',
         role: 'business secretary replying on behalf of the connected account; never make binding commitments, payments, or disclosures without explicit owner approval',
-        quotaReservation
+        quotaReservation,
+        accessAlreadyChecked: true,
+        quotaAlreadyReserved
       });
       await this.bot.telegram.callApi('sendMessage', {
         business_connection_id: connectionId,
@@ -1647,7 +1722,9 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
         text: answer,
         reply_parameters: message.message_id ? { message_id: message.message_id } : undefined
       });
+      await this.commitUsageReservation(quotaReservation);
     } catch (error) {
+      if (error?.code === 'USAGE_DUPLICATE') return;
       await this.refundPlatformQuotaReservation(quotaReservation);
       this.logger?.warn?.('Secretary reply failed', {
         connectionId,
@@ -1675,7 +1752,9 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     const key = `${ctx.chat?.id || ''}:${ctx.message?.message_id || ''}`;
     if (this.processedPlatformMessages.has(key) || this.botPairIsCoolingDown(ctx)) return;
     addBounded(this.processedPlatformMessages, key);
-    const quotaReservation = {};
+    const quotaReservation = {
+      requestKey: `telegram:bot_collaboration:${ctx.chat?.id || ''}:${ctx.message?.message_id || ''}:chat`
+    };
     try {
       await this.ensurePlatformUser(ctx.from || {});
       const answer = await this.completePlatformRequest({
@@ -1690,8 +1769,10 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
       const sent = await ctx.reply(answer, {
         reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined
       });
+      await this.commitUsageReservation(quotaReservation);
       addBounded(this.terminalBotReplyIds, `${ctx.chat?.id || ''}:${sent?.message_id || ''}`);
     } catch (error) {
+      if (error?.code === 'USAGE_DUPLICATE') return;
       await this.refundPlatformQuotaReservation(quotaReservation);
       throw error;
     }

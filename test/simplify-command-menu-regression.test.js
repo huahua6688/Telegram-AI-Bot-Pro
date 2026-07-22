@@ -93,7 +93,8 @@ test("Telegram slash command menu exposes user-facing essentials", () => {
 });
 
 test("internal command handlers can still exist without showing in slash menu", () => {
-  const register = extractMethod("registerCommands()");
+  // Match the method declaration, not the earlier invocation inside init().
+  const register = extractMethod("registerCommands() {");
 
   assert.match(register, /this\.bot\.command\('models'/);
   assert.match(register, /this\.bot\.command\('web'/);

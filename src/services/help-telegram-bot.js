@@ -21,6 +21,7 @@ function buildHiddenFeatureHelp(locale = 'zh') {
       '- Files: send PDF, DOCX, XLSX, TXT, MD, JSON, CSV, or XML and ask for a summary, key points, or translation.',
       '- Memory and topics: say “show memory”, “show current topic”, “show topic list”, “clear memory”, or “clear topics”.',
       '- Private chat: use the “🔒 Private chat” button below. Private chat content is not written to the chat database.',
+      '- Credits: use “⭐ Buy credits” and “💰 My balance” below. Daily free allowances are used before purchased credits; failed requests are restored automatically.',
       '',
       'Open Console beside the message box for provider/model settings, persona, language, chat history, and administration.'
     ].join('\n');
@@ -41,6 +42,7 @@ function buildHiddenFeatureHelp(locale = 'zh') {
     '- 文件：发送 PDF、DOCX、XLSX、TXT、MD、JSON、CSV 或 XML，可要求总结、提取重点或翻译。',
     '- 记忆与话题：可说“查看记忆”“查看当前话题”“查看话题列表”“清空长期记忆”或“清空话题状态”。',
     '- 隐私聊天：使用下方“🔒 隐私聊天”按钮；隐私内容不写入聊天数据库。',
+    '- 用量额度：使用下方“⭐ 购买额度”和“💰 我的余额”；系统先使用每日免费额度，再使用已购额度，失败请求会自动归还。',
     '',
     'Provider/模型、人格、语言、聊天记录和管理员功能在输入框旁的“控制台”。'
   ].join('\n');

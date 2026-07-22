@@ -1,8 +1,10 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
+import { BILLING_CREDIT_TYPES } from '../db.js';
 
 const TELEGRAM_AUTH_MAX_AGE_SECONDS = 60 * 60;
 const MAX_JSON_BODY_BYTES = 32 * 1024;
+const MAX_ADMIN_CREDIT_BALANCE = 1_000_000_000;
 
 const PROVIDER_LABELS = {
   auto: '自动选择',
@@ -489,6 +491,54 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       min-height: 40px;
     }
 
+    .credit-editor {
+      margin-top: 11px;
+      padding-top: 11px;
+      border-top: 1px solid rgba(127, 127, 127, .16);
+    }
+
+    .credit-editor-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+
+    .credit-editor-title {
+      font-size: 13px;
+      font-weight: 800;
+    }
+
+    .credit-editor-note {
+      color: var(--tg-theme-hint-color, #6b7280);
+      font-size: 11px;
+    }
+
+    .credit-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .credit-field {
+      display: grid;
+      gap: 5px;
+      color: var(--tg-theme-hint-color, #6b7280);
+      font-size: 12px;
+    }
+
+    .credit-field input {
+      width: 100%;
+      min-height: 40px;
+    }
+
+    .credit-actions {
+      display: flex;
+      justify-content: flex-end;
+      margin-top: 8px;
+    }
+
     @media (max-width: 520px) {
       .quota-editor {
         grid-template-columns: 1fr 1fr;
@@ -496,6 +546,10 @@ const MINI_APP_HTML = String.raw`<!doctype html>
 
       .quota-field {
         grid-column: 1 / -1;
+      }
+
+      .credit-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
       }
     }
 
@@ -763,6 +817,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       <div class="subsection">
         <h3 class="subsection-title">用户管理</h3>
         <p class="small">全局额度是账号的默认值；可以在下方为每个账号单独覆盖，0 表示不限。</p>
+        <p class="small">六类已购额度余额可按账号独立修改，与每日免费额度分开计算；管理员使用仍然免费。</p>
         <div class="admin-toolbar">
           <input id="adminUserSearch" type="search" placeholder="搜索 ID、用户名或姓名" />
           <button class="secondary compact-button" id="adminSearchButton" type="button">搜索</button>
@@ -798,6 +853,15 @@ const MINI_APP_HTML = String.raw`<!doctype html>
     const tg = window.Telegram && window.Telegram.WebApp
       ? window.Telegram.WebApp
       : null;
+    const creditDefinitions = [
+      { id: 'chat', label: '聊天' },
+      { id: 'vision', label: '识图' },
+      { id: 'image_generation', label: '画图' },
+      { id: 'tts', label: 'TTS' },
+      { id: 'live_voice', label: '实时语音' },
+      { id: 'video', label: '视频' }
+    ];
+    const maxAdminCreditBalance = 1000000000;
 
     const state = {
       catalog: [],
@@ -1453,6 +1517,55 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         quotaEditor.appendChild(saveQuota);
         quotaEditor.appendChild(resetQuota);
         item.appendChild(quotaEditor);
+
+        const creditEditor = document.createElement('div');
+        creditEditor.className = 'credit-editor';
+
+        const creditHead = document.createElement('div');
+        creditHead.className = 'credit-editor-head';
+        const creditTitle = document.createElement('span');
+        creditTitle.className = 'credit-editor-title';
+        creditTitle.textContent = '已购额度余额';
+        const creditNote = document.createElement('span');
+        creditNote.className = 'credit-editor-note';
+        creditNote.textContent = '不影响每日免费额度';
+        creditHead.appendChild(creditTitle);
+        creditHead.appendChild(creditNote);
+        creditEditor.appendChild(creditHead);
+
+        const creditGrid = document.createElement('div');
+        creditGrid.className = 'credit-grid';
+        const balances = user.creditBalances || {};
+        creditDefinitions.forEach(function (credit) {
+          const field = document.createElement('label');
+          field.className = 'credit-field';
+          field.textContent = credit.label;
+
+          const input = document.createElement('input');
+          input.type = 'number';
+          input.min = '0';
+          input.max = String(maxAdminCreditBalance);
+          input.step = '1';
+          input.inputMode = 'numeric';
+          input.value = String(Number(balances[credit.id] || 0));
+          input.dataset.userCreditInput = String(user.id);
+          input.dataset.creditType = credit.id;
+          field.appendChild(input);
+          creditGrid.appendChild(field);
+        });
+        creditEditor.appendChild(creditGrid);
+
+        const creditActions = document.createElement('div');
+        creditActions.className = 'credit-actions';
+        const saveCredits = document.createElement('button');
+        saveCredits.type = 'button';
+        saveCredits.className = 'primary compact-button';
+        saveCredits.textContent = '保存已购额度';
+        saveCredits.dataset.userId = String(user.id);
+        saveCredits.dataset.userAction = 'save-credits';
+        creditActions.appendChild(saveCredits);
+        creditEditor.appendChild(creditActions);
+        item.appendChild(creditEditor);
         elements.adminUserList.appendChild(item);
       });
 
@@ -1612,6 +1725,66 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         }
       } catch (error) {
         showAdminNotice(error.message || '额度保存失败。', 'failure');
+        if (tg && tg.HapticFeedback) {
+          tg.HapticFeedback.notificationOccurred('error');
+        }
+      }
+    }
+
+    async function updateUserCredits(userId) {
+      const inputs = Array.from(
+        elements.adminUserList.querySelectorAll('input[data-user-credit-input]')
+      ).filter(function (candidate) {
+        return candidate.dataset.userCreditInput === String(userId);
+      });
+      const balances = {};
+
+      for (const credit of creditDefinitions) {
+        const input = inputs.find(function (candidate) {
+          return candidate.dataset.creditType === credit.id;
+        });
+        const rawValue = input ? input.value.trim() : '';
+        const value = Number(rawValue);
+        if (
+          !rawValue ||
+          !Number.isSafeInteger(value) ||
+          value < 0 ||
+          value > maxAdminCreditBalance
+        ) {
+          showAdminNotice(
+            credit.label + '额度必须是 0 到 ' + maxAdminCreditBalance + ' 之间的整数。',
+            'failure'
+          );
+          return;
+        }
+        balances[credit.id] = value;
+      }
+
+      const accepted = await askConfirmation('确定保存这个账号的六类已购额度余额吗？');
+      if (!accepted) return;
+      showAdminNotice('正在保存已购额度…', '');
+
+      try {
+        const response = await fetch(
+          '/api/miniapp/admin/users/' + encodeURIComponent(userId) + '/credits',
+          {
+            method: 'PATCH',
+            headers: authHeaders({ 'Content-Type': 'application/json' }),
+            body: JSON.stringify({ operation: 'set', balances: balances })
+          }
+        );
+        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.message || data.error || '已购额度保存失败');
+        }
+
+        await fetchAdminUsers(elements.adminUserSearch.value.trim());
+        showAdminNotice('六类已购额度已保存，每日免费额度未改变。', 'success');
+        if (tg && tg.HapticFeedback) {
+          tg.HapticFeedback.notificationOccurred('success');
+        }
+      } catch (error) {
+        showAdminNotice(error.message || '已购额度保存失败。', 'failure');
         if (tg && tg.HapticFeedback) {
           tg.HapticFeedback.notificationOccurred('error');
         }
@@ -1785,6 +1958,9 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       }
       if (action === 'reset-quota') {
         updateUserQuota(button.dataset.userId, true);
+      }
+      if (action === 'save-credits') {
+        updateUserCredits(button.dataset.userId);
       }
     });
 
@@ -2204,6 +2380,12 @@ function resolveAdminUserQuota(db, userId, defaultQuota) {
 function serializeAdminUser(db, user, defaultQuota = 0) {
   const aiSettings = db.getUserAISettings(user.id);
   const quota = resolveAdminUserQuota(db, user.id, defaultQuota);
+  const storedBalances = typeof db.getUserCreditBalances === 'function'
+    ? db.getUserCreditBalances(user.id)?.balances || {}
+    : {};
+  const creditBalances = Object.fromEntries(
+    BILLING_CREDIT_TYPES.map((creditType) => [creditType, Number(storedBalances[creditType] || 0)])
+  );
 
   return {
     id: String(user.id),
@@ -2223,8 +2405,51 @@ function serializeAdminUser(db, user, defaultQuota = 0) {
     totalMessages: Number(user.totalMessages || 0),
     lastSeenAt: user.lastSeenAt || '',
     aiProvider: aiSettings.providerId || 'auto',
-    aiModel: aiSettings.modelId || ''
+    aiModel: aiSettings.modelId || '',
+    creditBalances
   };
+}
+
+function normalizeAdminCreditMutation(payload) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    throw new Error('INVALID_CREDIT_BALANCES');
+  }
+  const operation = payload.operation == null ? 'set' : String(payload.operation);
+  if (operation !== 'set' && operation !== 'adjust') {
+    throw new Error('INVALID_CREDIT_OPERATION');
+  }
+
+  const field = operation === 'set' ? 'balances' : 'adjustments';
+  const values = payload[field];
+  if (!values || typeof values !== 'object' || Array.isArray(values)) {
+    throw new Error('INVALID_CREDIT_BALANCES');
+  }
+  const keys = Object.keys(values);
+  if (
+    keys.length === 0 ||
+    keys.some((creditType) => !BILLING_CREDIT_TYPES.includes(creditType)) ||
+    (operation === 'set' && (
+      keys.length !== BILLING_CREDIT_TYPES.length ||
+      BILLING_CREDIT_TYPES.some((creditType) => !(creditType in values))
+    ))
+  ) {
+    throw new Error(operation === 'set' ? 'INCOMPLETE_CREDIT_BALANCES' : 'INVALID_CREDIT_BALANCES');
+  }
+
+  const normalized = {};
+  for (const creditType of keys) {
+    const value = values[creditType];
+    if (
+      typeof value !== 'number' ||
+      !Number.isSafeInteger(value) ||
+      (operation === 'set' && value < 0) ||
+      Math.abs(value) > MAX_ADMIN_CREDIT_BALANCE
+    ) {
+      throw new Error('INVALID_CREDIT_BALANCE');
+    }
+    normalized[creditType] = value;
+  }
+  return { operation, values: normalized };
 }
 
 function serializeSession(session, user = null) {
@@ -2543,6 +2768,94 @@ async function handleMiniAppAdminApi(req, res, context, url) {
     return;
   }
 
+  const userCreditsMatch = pathname.match(/^\/api\/miniapp\/admin\/users\/([^/]+)\/credits$/);
+  if (userCreditsMatch) {
+    const targetUserId = decodeURIComponent(userCreditsMatch[1]);
+    const targetUser = context.db.findUser(targetUserId);
+    if (!targetUser) {
+      sendJson(res, 404, {
+        ok: false,
+        error: 'USER_NOT_FOUND',
+        message: '没有找到这个用户。'
+      });
+      return;
+    }
+
+    if (req.method === 'GET') {
+      sendJson(res, 200, {
+        ok: true,
+        userId: String(targetUserId),
+        balances: context.db.getUserCreditBalances(targetUserId).balances
+      });
+      return;
+    }
+
+    if (req.method === 'PATCH') {
+      try {
+        const mutation = normalizeAdminCreditMutation(await readJsonBody(req));
+        if (
+          typeof context.db.setUserCreditBalances !== 'function' ||
+          typeof context.db.adjustUserCreditBalances !== 'function'
+        ) {
+          throw new Error('CREDIT_BALANCES_NOT_SUPPORTED');
+        }
+
+        if (mutation.operation === 'adjust') {
+          const current = context.db.getUserCreditBalances(targetUserId).balances;
+          for (const [creditType, delta] of Object.entries(mutation.values)) {
+            const next = current[creditType] + delta;
+            if (next < 0 || next > MAX_ADMIN_CREDIT_BALANCE) {
+              throw new Error(next < 0 ? 'CREDIT_BALANCE_BELOW_ZERO' : 'INVALID_CREDIT_BALANCE');
+            }
+          }
+        }
+
+        const audit = {
+          actorId: auth.telegramUser.id,
+          actorType: 'telegram_miniapp',
+          action: `users.credits.${mutation.operation}`,
+          targetType: 'user',
+          targetId: String(targetUserId),
+          result: 'allow',
+          requestId: String(req.headers['x-request-id'] || ''),
+          ip: req.socket.remoteAddress || '',
+          userAgent: req.headers['user-agent'] || '',
+          details: { requestedValues: mutation.values }
+        };
+        const result = mutation.operation === 'set'
+          ? context.db.setUserCreditBalances(targetUserId, mutation.values, {
+              audit,
+              requireAll: true
+            })
+          : context.db.adjustUserCreditBalances(targetUserId, mutation.values, { audit });
+
+        sendJson(res, 200, {
+          ok: true,
+          userId: String(targetUserId),
+          operation: result.operation,
+          balances: result.balances,
+          changes: result.changes,
+          user: serializeAdminUser(context.db, context.db.findUser(targetUserId), context.config.dailyQuota)
+        });
+      } catch (error) {
+        const code = String(error?.code || error?.message || 'CREDIT_BALANCE_UPDATE_FAILED');
+        const conflict = code === 'CREDIT_BALANCE_BELOW_ZERO' || code === 'CREDIT_BALANCE_OVERFLOW';
+        sendJson(res, conflict ? 409 : 400, {
+          ok: false,
+          error: code,
+          message: code === 'CREDIT_BALANCE_BELOW_ZERO'
+            ? '已购额度不能调整为负数。'
+            : '六类已购额度必须完整填写为 0 到 1000000000 之间的整数。'
+        });
+      }
+      return;
+    }
+
+    res.setHeader('Allow', 'GET, PATCH');
+    sendJson(res, 405, { ok: false, error: 'METHOD_NOT_ALLOWED' });
+    return;
+  }
+
   const userMatch = pathname.match(/^\/api\/miniapp\/admin\/users\/([^/]+)$/);
   if (userMatch && req.method === 'PATCH') {
     try {
@@ -2819,6 +3132,7 @@ export function startHealthServer({ port, db, config, logger }) {
           '/api/miniapp/sessions/:id',
           '/api/miniapp/admin/overview',
           '/api/miniapp/admin/users',
+          '/api/miniapp/admin/users/:id/credits',
           '/api/miniapp/admin/sessions',
           '/health',
           '/ready'
@@ -2852,6 +3166,7 @@ export function startHealthServer({ port, db, config, logger }) {
         '/api/miniapp/sessions/:id',
         '/api/miniapp/admin/overview',
         '/api/miniapp/admin/users',
+        '/api/miniapp/admin/users/:id/credits',
         '/api/miniapp/admin/sessions',
         '/health',
         '/ready'

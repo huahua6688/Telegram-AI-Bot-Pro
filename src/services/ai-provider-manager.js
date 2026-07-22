@@ -112,9 +112,23 @@ function isProviderWideFailure(errorType, error) {
   if (
     detail.includes('insufficient credits') ||
     detail.includes('insufficient balance') ||
-    detail.includes('billing') ||
-    /(?:account|project)[^\n]{0,80}(?:quota|limit|exhausted)/i.test(detail)
+    /billing(?:\s+account)?[^\n]{0,100}(?:disabled|inactive|suspended|closed|not\s+enabled|must\s+be\s+enabled|required)/i.test(detail)
   ) {
+    return true;
+  }
+
+  // Gemini includes a generic "check your plan and billing details" sentence
+  // in model-scoped 429 responses. Do not mistake that help text for an
+  // account-wide billing failure when the response identifies a model or a
+  // per-model Generative Language quota metric.
+  if (
+    /\bmodel\s*[:=]\s*["']?[a-z0-9][a-z0-9._/-]*/i.test(detail) ||
+    /generativelanguage\.googleapis\.com\/[a-z0-9._/-]*(?:model|free_tier|token)/i.test(detail)
+  ) {
+    return false;
+  }
+
+  if (/(?:account|project|organization)[^\n]{0,100}(?:quota|limit|exhausted)/i.test(detail)) {
     return true;
   }
 
@@ -122,6 +136,15 @@ function isProviderWideFailure(errorType, error) {
   // next configured model is useful unless the response explicitly says the
   // whole account/project is exhausted.
   return false;
+}
+
+function isModelScopedQuotaFailure(errorType, error) {
+  if (errorType !== 'quota') return false;
+  const detail = String(error?.message || error || '').toLowerCase();
+  return (
+    /\bmodel\s*[:=]\s*["']?[a-z0-9][a-z0-9._/-]*/i.test(detail) ||
+    /generativelanguage\.googleapis\.com\/[a-z0-9._/-]*(?:model|free_tier|token)/i.test(detail)
+  );
 }
 
 export class AIProviderManager {
@@ -418,6 +441,7 @@ export class AIProviderManager {
             attempted.push({ providerId, model, attempt, status: errorType, message: error.message });
             const deadlineTimeout = errorType === 'timeout' && request.suppressTimeoutCooldown;
             const providerWideFailure = isProviderWideFailure(errorType, error);
+            const modelScopedQuotaFailure = isModelScopedQuotaFailure(errorType, error);
             const retryable = !providerWideFailure && !deadlineTimeout &&
               ['timeout', 'transient', 'empty', 'unknown'].includes(errorType);
 
@@ -429,7 +453,9 @@ export class AIProviderManager {
             const cooldownMs = errorType === 'model' || errorType === 'auth' || errorType === 'permission'
               ? Math.max(300000, Number(this.config.aiProviderCooldownMs) || 60000)
               : this.config.aiProviderCooldownMs;
-            if (!deadlineTimeout) {
+            // A Gemini model-level 429 must not cool down every configured
+            // Gemini model. The loop below can immediately try the next one.
+            if (!deadlineTimeout && !modelScopedQuotaFailure) {
               this.setCooldown(providerId, capability, error, cooldownMs);
             }
             this.logger.warn?.('AI provider failed, trying next candidate', {

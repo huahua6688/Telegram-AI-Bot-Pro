@@ -103,7 +103,13 @@ export class PrivacyTelegramAIBot extends TelegramAIBot {
     if (this.config?.miniAppEnabled !== false) {
       return {
         reply_markup: {
-          keyboard: [[this.getPrivacyLabel(locale)]],
+          keyboard: [
+            [this.getPrivacyLabel(locale)],
+            [
+              localText(locale, '⭐ 购买额度', '⭐ Buy credits'),
+              localText(locale, '💰 我的余额', '💰 My balance')
+            ]
+          ],
           resize_keyboard: true,
           is_persistent: true,
           input_field_placeholder: localText(locale, '直接输入需求，我会自动判断…', 'Ask naturally; I will route it automatically…')

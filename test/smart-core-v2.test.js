@@ -447,13 +447,16 @@ test('Mini App mode does not duplicate the BotFather Console entry', () => {
   assert.match(bot.handleIncomingMessage.toString(), /miniAppEnabled === false/);
 });
 
-test('Mini App mode keeps only private chat in the bottom keyboard', async () => {
+test('Mini App mode keeps private chat plus the two required billing entries in the bottom keyboard', async () => {
   const bot = Object.create(PrivacyTelegramAIBot.prototype);
   bot.config = { miniAppEnabled: true, maxOutputChars: 3500 };
   bot.getLocale = () => 'zh';
 
   const keyboard = bot.createBottomKeyboard('zh');
-  assert.deepEqual(keyboard.reply_markup.keyboard, [['🔒 隐私聊天']]);
+  assert.deepEqual(keyboard.reply_markup.keyboard, [
+    [bot.getPrivacyLabel('zh')],
+    ['⭐ 购买额度', '💰 我的余额']
+  ]);
   assert.equal(keyboard.reply_markup.is_persistent, true);
   assert.equal(bot.createEssentialMenuKeyboard('zh'), undefined);
   assert.equal(bot.createToolboxKeyboard('zh'), undefined);
@@ -470,8 +473,8 @@ test('Mini App mode keeps only private chat in the bottom keyboard', async () =>
   await bot.handleHelp(ctx);
 
   assert.equal(replies.length, 2);
-  assert.deepEqual(replies[0].extra.reply_markup.keyboard, [['🔒 隐私聊天']]);
-  assert.deepEqual(replies[1].extra.reply_markup.keyboard, [['🔒 隐私聊天']]);
+  assert.deepEqual(replies[0].extra.reply_markup.keyboard, keyboard.reply_markup.keyboard);
+  assert.deepEqual(replies[1].extra.reply_markup.keyboard, keyboard.reply_markup.keyboard);
   assert.doesNotMatch(replies.map((item) => item.message).join('\n'), /工具箱|联网搜索、翻译、图片/);
   assert.match(replies[1].message, /\/whoami/);
   assert.match(replies[1].message, /局部引用/);
@@ -600,6 +603,46 @@ test('assistant translate and regenerate actions refund empty AI results', async
       assert.equal(refunds, 1);
     });
   }
+});
+
+test('assistant actions refund a reserved credit when Telegram cannot edit the delivered message', async () => {
+  const bot = Object.create(TelegramAIBot.prototype);
+  bot.config = { defaultModel: 'test-model', translationModel: 'translation-model' };
+  bot.logger = logger();
+  bot.getLocale = () => 'en';
+  bot.getAssistantActionStateByToken = () => ({
+    userId: 1,
+    locale: 'en',
+    model: 'test-model',
+    replyText: 'original'
+  });
+  bot.getAiCooldown = () => null;
+  bot.consumeQuotaForContext = async () => true;
+  let refunds = 0;
+  bot.refundQuotaForContext = async () => {
+    refunds += 1;
+    return true;
+  };
+  bot.translateAssistantReply = async () => 'translated';
+  bot.createAssistantActionKeyboard = () => undefined;
+  bot.editAssistantMessageText = async () => {
+    throw new Error('message is not editable');
+  };
+  bot.isAiQuotaError = () => false;
+  bot.formatLogError = (error) => ({ detail: error.message });
+  bot.formatUserFacingError = (error) => error.message;
+  bot.t = (_locale, key) => key;
+
+  const answers = [];
+  await bot.handleAssistantActionCallback({
+    callbackQuery: { data: 'act:translate_pick:token:en' },
+    from: { id: 1 },
+    answerCbQuery: async (message) => answers.push(message),
+    reply: async () => undefined
+  });
+
+  assert.equal(refunds, 1);
+  assert.deepEqual(answers, ['actionWorking', 'message is not editable']);
 });
 
 test('natural weather tool failures are visible and do not consume quota', async () => {

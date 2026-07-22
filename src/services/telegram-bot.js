@@ -56,6 +56,15 @@ const BOT_COMMAND_NAMES = [
   'whoami'
 ];
 
+const BILLING_CREDIT_TYPES = Object.freeze([
+  'chat',
+  'vision',
+  'image_generation',
+  'tts',
+  'live_voice',
+  'video'
+]);
+
 const KNOWN_TRANSLATION_TARGETS = new Set([
   'simplified chinese',
   'traditional chinese',
@@ -838,6 +847,39 @@ export class TelegramAIBot {
     this.botUsername = '';
     this.botUserId = '';
     this.botInfo = null;
+    this.usageReservationSweepTimer = null;
+    // This middleware is registered before every command/action handler,
+    // including constructor-time callback handlers. It turns a debit into a
+    // consumed usage record only after the handler has delivered successfully.
+    this.bot.use(async (ctx, next) => {
+      try {
+        const result = await next();
+        await this.commitQuotaForContext(ctx);
+        return result;
+      } catch (error) {
+        await this.refundQuotaForContext(ctx);
+        throw error;
+      }
+    });
+    this.bot.use(async (ctx, next) => {
+      if (ctx.from && typeof this.db.upsertUser === 'function') {
+        const isAdmin = this.config.adminUserIds?.has(String(ctx.from.id)) || false;
+        await this.db.upsertUser(ctx.from, { isAdmin });
+      }
+      if (ctx.chat && typeof this.db.upsertChat === 'function') {
+        const chat = await this.db.upsertChat(ctx.chat, {
+          triggerMode: this.config.groupTriggerMode,
+          keyword: this.config.groupTriggerKeyword
+        });
+        if (!chat.keyword && typeof this.db.setChatSettings === 'function') {
+          await this.db.setChatSettings(ctx.chat.id, {
+            keyword: this.config.groupTriggerKeyword,
+            triggerMode: this.config.groupTriggerMode
+          });
+        }
+      }
+      return next();
+    });
     this.bot.action(/^memory_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleMemoryTargetCallback(ctx)));
     this.bot.action(/^clear_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleClearTargetCallback(ctx)));
     this.bot.action(/^translate_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleTranslateTargetCallback(ctx)));
@@ -845,6 +887,8 @@ export class TelegramAIBot {
     this.bot.action(/^voice_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleVoiceActionCallback(ctx)));
     this.bot.action(/^image_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleImageActionCallback(ctx)));
     this.bot.action(/^ai:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleAISettingsCallback(ctx)));
+    this.bot.action(/^billing:(store|balance|terms|support)$/, (ctx) => this.handleBillingCallback(ctx));
+    this.bot.action(/^stars_pkg:([a-z0-9][a-z0-9_-]{0,39})$/, (ctx) => this.handleStarsProductCallback(ctx));
     this.documentParser = new DocumentParser(config, logger);
     this.multimodalActions = new MultimodalActionService({
       aiClient,
@@ -1145,10 +1189,10 @@ export class TelegramAIBot {
 
   isBottomKeyboardActionText(ctx) {
     const normalized = String(ctx.message?.text || '')
-      .replace(/[🆘⚙️🛠❌]/g, '')
+      .replace(/[🆘⚙️🛠❌⭐💫💰]/g, '')
       .trim()
       .toLowerCase();
-    return /^(?:退出模式|退出|结束模式|结束|exit mode|exit|stop|cancel|帮助|help|设置|设置中心|settings?|setting|管理|管理员|后台|admin)$/.test(normalized);
+    return /^(?:退出模式|退出|结束模式|结束|exit mode|exit|stop|cancel|帮助|help|设置|设置中心|settings?|setting|管理|管理员|后台|admin|购买额度|购买|充值|buy credits?|buy|我的余额|余额|balance)$/.test(normalized);
   }
 
   async handleBottomKeyboardAction(ctx) {
@@ -1156,7 +1200,17 @@ export class TelegramAIBot {
     if (!text) return false;
 
     const locale = this.getLocale(ctx);
-    const normalized = text.replace(/[🆘⚙️🛠❌]/g, '').trim().toLowerCase();
+    const normalized = text.replace(/[🆘⚙️🛠❌⭐💫💰]/g, '').trim().toLowerCase();
+
+    if (/^(购买额度|购买|充值|buy credits?|buy)$/.test(normalized)) {
+      await this.handleStarsStore(ctx);
+      return true;
+    }
+
+    if (/^(我的余额|余额|balance)$/.test(normalized)) {
+      await this.handleStarsBalance(ctx);
+      return true;
+    }
 
     if (/^(退出模式|退出|结束模式|结束|exit mode|exit|stop|cancel)$/.test(normalized)) {
       if (typeof this.clearActiveMode === 'function') {
@@ -1235,6 +1289,7 @@ export class TelegramAIBot {
     return {
       reply_markup: {
         keyboard: [
+          [localText(locale, '⭐ 购买额度', '⭐ Buy credits'), localText(locale, '💰 我的余额', '💰 My balance')],
           [this.ui(locale, 'help'), this.ui(locale, 'settings')],
           [this.ui(locale, 'admin'), this.ui(locale, 'exit')]
         ],
@@ -1269,6 +1324,10 @@ export class TelegramAIBot {
 
     const labels = this.getMenuLabels(locale);
     return Markup.inlineKeyboard([
+      [
+        Markup.button.callback(localText(locale, '⭐ 购买额度', '⭐ Buy credits'), 'billing:store'),
+        Markup.button.callback(localText(locale, '💰 我的余额', '💰 My balance'), 'billing:balance')
+      ],
       [
         Markup.button.callback(labels.web, 'menu:web'),
         Markup.button.callback(labels.translate, 'menu:translate')
@@ -1504,23 +1563,641 @@ export class TelegramAIBot {
     return Number(quota) > 0 ? String(Number(quota)) : localText(locale, '不限', 'unlimited');
   }
 
-  async consumeQuotaForContext(ctx) {
+  normalizeBillingCreditType(value = 'chat') {
+    const normalized = String(value || 'chat').trim().toLowerCase();
+    const aliases = {
+      image: 'image_generation',
+      image_generation: 'image_generation',
+      imagegeneration: 'image_generation',
+      voice: 'live_voice',
+      live_audio: 'live_voice',
+      live_voice: 'live_voice',
+      speechtotext: 'live_voice',
+      speechtranscription: 'live_voice',
+      speechsynthesis: 'tts'
+    };
+    const creditType = aliases[normalized] || normalized;
+    return BILLING_CREDIT_TYPES.includes(creditType) ? creditType : 'chat';
+  }
+
+  getBillingCreditLabel(creditType, locale = 'zh') {
+    const labels = isEnglishLocale(locale)
+      ? {
+          chat: 'Chat',
+          vision: 'Image understanding',
+          image_generation: 'Image generation/editing',
+          tts: 'Text to speech',
+          live_voice: 'Live voice/audio',
+          video: 'Video'
+        }
+      : {
+          chat: '聊天',
+          vision: '识图',
+          image_generation: '画图/改图',
+          tts: '文字转语音',
+          live_voice: '实时语音/音频',
+          video: '视频'
+        };
+    return labels[this.normalizeBillingCreditType(creditType)] || String(creditType || '');
+  }
+
+  getBillingFreeQuota(userId, creditType = 'chat') {
+    const type = this.normalizeBillingCreditType(creditType);
+    let dailyFreeQuota = Math.max(0, Number(this.config.starsFreeQuota?.[type]) || 0);
+    let zeroFreeQuotaMeansUnlimited = false;
+
+    if (type === 'chat') {
+      const quota = this.db.getUserDailyQuota?.(userId, dailyFreeQuota);
+      if (quota) {
+        dailyFreeQuota = Math.max(0, Number(quota.dailyQuota) || 0);
+        zeroFreeQuotaMeansUnlimited = quota.dailyQuotaOverride === 0 || (
+          quota.usesGlobalQuota && Boolean(this.config.starsFreeChatZeroMeansUnlimited)
+        );
+      }
+    }
+
+    return { dailyFreeQuota, zeroFreeQuotaMeansUnlimited };
+  }
+
+  isAdminUserId(userId) {
+    const normalized = String(userId || '');
+    if (!normalized) return false;
+    if (this.accessControl?.isAdmin) return this.accessControl.isAdmin(normalized);
+    if (this.config.adminUserIds?.has(normalized)) return true;
+    return Boolean(this.db.findUser?.(normalized)?.isAdmin);
+  }
+
+  createBillingRequestKey(ctx, creditType = 'chat') {
+    const updateId = ctx?.update?.update_id;
+    const callbackId = ctx?.callbackQuery?.id;
+    const messageId = ctx?.message?.message_id;
+    const stableId = updateId ?? callbackId ?? messageId ?? randomUUID();
+    return `telegram:${stableId}:${this.normalizeBillingCreditType(creditType)}`;
+  }
+
+  createQuotaPurchaseKeyboard(locale = 'zh') {
+    return Markup.inlineKeyboard([[
+      Markup.button.callback(localText(locale, '⭐ 购买额度', '⭐ Buy credits'), 'billing:store'),
+      Markup.button.callback(localText(locale, '💰 我的余额', '💰 My balance'), 'billing:balance')
+    ]]);
+  }
+
+  createStarsStoreKeyboard(locale = 'zh') {
+    const rows = (this.config.starsProducts || []).map((product) => [
+      Markup.button.callback(
+        `${isEnglishLocale(locale) ? product.titleEn : product.title} · ${product.price} ⭐`,
+        `stars_pkg:${product.id}`
+      )
+    ]);
+    rows.push([
+      Markup.button.callback(localText(locale, '💰 我的余额', '💰 My balance'), 'billing:balance')
+    ]);
+    rows.push([
+      Markup.button.callback(localText(locale, '📄 服务条款', '📄 Terms'), 'billing:terms'),
+      Markup.button.callback(localText(locale, '🆘 支付支持', '🆘 Payment support'), 'billing:support')
+    ]);
+    return Markup.inlineKeyboard(rows);
+  }
+
+  formatStarsProductCredits(product, locale = 'zh') {
+    return BILLING_CREDIT_TYPES
+      .filter((type) => Number(product?.credits?.[type]) > 0 || type === 'video')
+      .map((type) => {
+        const disabled = type === 'video' && !this.config.enableVideo;
+        const value = Number(product?.credits?.[type]) || 0;
+        return `- ${this.getBillingCreditLabel(type, locale)}: ${value}${disabled ? localText(locale, '（功能默认关闭）', ' (feature disabled by default)') : ''}`;
+      });
+  }
+
+  async handleStarsStore(ctx) {
+    const locale = this.getLocale(ctx);
+    if (this.isAdmin(ctx)) {
+      await ctx.reply(
+        localText(locale, '管理员账号免费使用，所有能力均不扣额度。', 'Administrator accounts use all capabilities for free.'),
+        this.createQuotaPurchaseKeyboard(locale)
+      );
+      return;
+    }
+
+    if (!this.config.starsPaymentsEnabled || !(this.config.starsProducts || []).length) {
+      await ctx.reply(localText(
+        locale,
+        '购买功能暂未开放。管理员需要先配置 STARS_PRODUCTS_JSON。每日免费额度仍可正常使用。',
+        'Purchases are not available yet. The administrator must configure STARS_PRODUCTS_JSON. Daily free credits remain available.'
+      ));
+      return;
+    }
+
+    const lines = [
+      localText(locale, '⭐ 购买额度', '⭐ Buy credits'),
+      '',
+      localText(locale, '请选择额度包。数字服务只通过 Telegram Stars 结算；支付到账后会自动加入余额。', 'Choose a credit pack. Digital services are paid only with Telegram Stars and credits are added after payment confirmation.')
+    ];
+    for (const product of this.config.starsProducts) {
+      lines.push('', `${isEnglishLocale(locale) ? product.titleEn : product.title} · ${product.price} ⭐`);
+      lines.push(...this.formatStarsProductCredits(product, locale));
+    }
+    await ctx.reply(lines.join('\n'), this.createStarsStoreKeyboard(locale));
+  }
+
+  async handleStarsBalance(ctx) {
+    const locale = this.getLocale(ctx);
+    const userId = String(ctx.from?.id || '');
+    if (this.isAdmin(ctx)) {
+      await ctx.reply(localText(
+        locale,
+        '💰 我的余额\n\n管理员账号：全部能力不限额，不扣除免费额度或已购额度。',
+        '💰 My balance\n\nAdministrator account: all capabilities are unlimited and no credits are deducted.'
+      ));
+      return;
+    }
+
+    const balances = this.db.getUserCreditBalances?.(userId) || this.db.getCreditBalances?.(userId) || {};
+    const lines = [localText(locale, '💰 我的余额', '💰 My balance'), ''];
+    for (const type of BILLING_CREDIT_TYPES) {
+      const { dailyFreeQuota, zeroFreeQuotaMeansUnlimited } = this.getBillingFreeQuota(userId, type);
+      const daily = this.db.getDailyCreditUsage?.(userId, type);
+      const used = Math.max(0, Number(daily?.used ?? daily?.units ?? daily ?? 0) || 0);
+      const freeRemaining = zeroFreeQuotaMeansUnlimited
+        ? localText(locale, '不限', 'unlimited')
+        : Math.max(0, dailyFreeQuota - used);
+      const paid = Math.max(0, Number(balances?.[type]?.balance ?? balances?.[type] ?? 0) || 0);
+      const suffix = type === 'video' && !this.config.enableVideo
+        ? localText(locale, '（未启用）', ' (disabled)')
+        : '';
+      lines.push(`${this.getBillingCreditLabel(type, locale)}${suffix}: ${localText(locale, '今日免费剩余', 'daily free')} ${freeRemaining} · ${localText(locale, '已购', 'purchased')} ${paid}`);
+    }
+    await ctx.reply(lines.join('\n'), this.createQuotaPurchaseKeyboard(locale));
+  }
+
+  async handleBillingCallback(ctx) {
+    const action = String(ctx.match?.[1] || '').trim();
+    try {
+      await ctx.answerCbQuery();
+    } catch {
+      // The visible response below is still useful for an expired callback.
+    }
+    if (action === 'store') return this.handleStarsStore(ctx);
+    if (action === 'balance') return this.handleStarsBalance(ctx);
+    if (action === 'terms') return this.handleStarsTerms(ctx);
+    if (action === 'support') return this.handleStarsPaymentSupport(ctx);
+    return undefined;
+  }
+
+  async handleStarsProductCallback(ctx) {
+    const locale = this.getLocale(ctx);
+    const productId = String(ctx.match?.[1] || '').trim().toLowerCase();
+    try {
+      await ctx.answerCbQuery(localText(locale, '正在创建付款单…', 'Creating invoice…'));
+    } catch {
+      // Continue: creating a fresh invoice is more useful than failing silently.
+    }
+
+    if (ctx.chat?.type && ctx.chat.type !== 'private') {
+      const privateUrl = this.botUsername ? `https://t.me/${this.botUsername}?start=buy` : '';
+      const extra = privateUrl
+        ? Markup.inlineKeyboard([[
+            Markup.button.url(localText(locale, '打开私聊购买', 'Open private chat'), privateUrl)
+          ]])
+        : undefined;
+      await ctx.reply(localText(
+        locale,
+        '为了保护付款隐私，请先打开与机器人的私聊，再从主菜单选择“购买额度”。',
+        'For payment privacy, open a private chat with the bot and choose Buy credits from the main menu.'
+      ), extra);
+      return;
+    }
+
+    try {
+      return await this.sendStarsInvoice(ctx, productId);
+    } catch (error) {
+      this.logger?.warn?.('Failed to create Stars invoice', {
+        userId: ctx.from?.id,
+        productId,
+        error: this.formatLogError(error)
+      });
+      await ctx.reply(localText(
+        locale,
+        '付款单创建失败，请稍后重新选择额度包；本次没有扣除 Stars。',
+        'The invoice could not be created. Choose the credit pack again later; no Stars were charged.'
+      ), this.createStarsStoreKeyboard(locale));
+      return;
+    }
+  }
+
+  async handleStarsTerms(ctx) {
+    const locale = this.getLocale(ctx);
+    const configured = String(this.config.starsTermsText || '').trim();
+    const text = configured || localText(
+      locale,
+      [
+        '📄 数字服务条款',
+        '',
+        '额度仅用于本机器人提供的数字服务，不可转让或兑换现金。支付成功后立即到账。',
+        '各能力按实际成功请求扣除；服务失败会自动退回本次额度。',
+        '退款将按原 Telegram Stars 付款记录处理，已消费额度可能影响退款资格。'
+      ].join('\n'),
+      [
+        '📄 Digital service terms',
+        '',
+        'Credits are for digital services in this bot only and cannot be transferred or exchanged for cash. They are added after payment succeeds.',
+        'Credits are charged only for successful requests; failed requests are restored.',
+        'Refunds use the original Telegram Stars charge. Previously consumed credits may affect refund eligibility.'
+      ].join('\n')
+    );
+    await ctx.reply(text, this.createStarsStoreKeyboard(locale));
+  }
+
+  async handleStarsPaymentSupport(ctx) {
+    const locale = this.getLocale(ctx);
+    const configured = String(this.config.starsSupportText || '').trim();
+    const text = configured || localText(
+      locale,
+      '🆘 支付支持\n\n如果 Stars 已扣除但额度未到账，请把付款时间和 Telegram 账号 ID 发给管理员。请勿发送密码、验证码或 API 密钥。',
+      '🆘 Payment support\n\nIf Stars were charged but credits did not arrive, send the payment time and your Telegram account ID to the administrator. Never send passwords, verification codes, or API keys.'
+    );
+    await ctx.reply(text, this.createQuotaPurchaseKeyboard(locale));
+  }
+
+  getStarsProduct(productId = '') {
+    const normalized = String(productId || '').trim().toLowerCase();
+    return (this.config.starsProducts || []).find((item) => item.id === normalized) || null;
+  }
+
+  async sendStarsInvoice(ctx, productId = '') {
+    const locale = this.getLocale(ctx);
+    const userId = String(ctx.from?.id || '');
+    if (!userId) return;
+    if (this.isAdmin(ctx)) {
+      await ctx.reply(localText(locale, '管理员账号无需购买，使用能力不会扣额度。', 'Administrators do not need to purchase credits and are never charged usage credits.'));
+      return;
+    }
+    if (!this.config.starsPaymentsEnabled) {
+      await ctx.reply(localText(locale, '购买功能暂未开放。', 'Purchases are not available right now.'));
+      return;
+    }
+
+    const product = this.getStarsProduct(productId);
+    if (!product) {
+      await ctx.reply(localText(locale, '这个额度包不存在或已下架，请重新选择。', 'This credit pack is unavailable. Please choose again.'), this.createStarsStoreKeyboard(locale));
+      return;
+    }
+    if (typeof this.db.createStarOrder !== 'function') {
+      throw new Error('Stars billing database is not available.');
+    }
+
+    // Constructor-time payment callbacks run before the later command stack;
+    // make a first-time buyer durable before the order foreign key is created.
+    await this.db.upsertUser?.(ctx.from, { isAdmin: false });
+
+    const expiresAt = new Date(Date.now() + Math.max(5, Number(this.config.starsOrderTtlMinutes) || 60) * 60_000).toISOString();
+    const order = this.db.createStarOrder({
+      userId,
+      productId: product.id,
+      currency: 'XTR',
+      amount: product.price,
+      grants: product.credits,
+      expiresAt
+    });
+
+    const title = isEnglishLocale(locale) ? product.titleEn : product.title;
+    const description = isEnglishLocale(locale) ? product.descriptionEn : product.description;
+    try {
+      await ctx.telegram.sendInvoice(userId, {
+        title,
+        description,
+        payload: order.invoicePayload,
+        provider_token: '',
+        currency: 'XTR',
+        prices: [{ label: title, amount: product.price }],
+        start_parameter: `buy_${product.id}`
+      });
+    } catch (error) {
+      this.db.markStarOrderFailed?.(order.id);
+      throw error;
+    }
+  }
+
+  async handleStarsPreCheckout(ctx) {
+    const query = ctx.preCheckoutQuery || ctx.update?.pre_checkout_query || {};
+    try {
+      const result = this.db.validateStarOrderForCheckout?.({
+        invoicePayload: query.invoice_payload,
+        userId: String(query.from?.id || ctx.from?.id || ''),
+        currency: query.currency,
+        totalAmount: query.total_amount
+      });
+      const allowed = Boolean(result?.valid ?? result?.allowed ?? result?.ok);
+      if (!allowed) {
+        const message = String(result?.message || result?.reason || 'This invoice is invalid, expired, or already paid. Please create a new invoice.').slice(0, 180);
+        await ctx.answerPreCheckoutQuery(false, message);
+        return;
+      }
+      await ctx.answerPreCheckoutQuery(true);
+    } catch (error) {
+      this.logger?.warn?.('Stars pre-checkout validation failed', { error: this.formatLogError(error) });
+      try {
+        await ctx.answerPreCheckoutQuery(false, 'Unable to verify this payment. Please create a new invoice.');
+      } catch {
+        // Telegram may already have expired the query; do not leak the exception.
+      }
+    }
+  }
+
+  async handleStarsSuccessfulPayment(ctx) {
+    const locale = this.getLocale(ctx);
+    const payment = ctx.message?.successful_payment || {};
+    let result;
+    try {
+      result = this.db.applySuccessfulStarPayment?.({
+        invoicePayload: payment.invoice_payload,
+        userId: String(ctx.from?.id || ''),
+        currency: payment.currency,
+        totalAmount: payment.total_amount,
+        telegramPaymentChargeId: payment.telegram_payment_charge_id,
+        providerPaymentChargeId: payment.provider_payment_charge_id || ''
+      });
+      if (!result) throw new Error('Stars payment database handler is unavailable.');
+
+      if (result.credited) {
+        await ctx.reply(localText(
+          locale,
+          `✅ 支付成功，${payment.total_amount} Telegram Stars 已到账，额度已经加入账户。`,
+          `✅ Payment successful. ${payment.total_amount} Telegram Stars were received and the credits were added to your account.`
+        ), this.createQuotaPurchaseKeyboard(locale));
+      } else if (result.duplicate) {
+        await ctx.reply(localText(
+          locale,
+          '✅ 这笔付款已处理过，系统没有重复增加额度。你的原有余额保持不变。',
+          '✅ This payment was already processed. No duplicate credits were added and your existing balance is unchanged.'
+        ), this.createQuotaPurchaseKeyboard(locale));
+      } else {
+        throw new Error(result.reason || 'Stars payment could not be credited.');
+      }
+    } catch (error) {
+      if (result?.credited || result?.duplicate) {
+        this.logger?.warn?.('Stars payment was persisted but confirmation delivery failed', {
+          userId: ctx.from?.id,
+          chargeId: payment.telegram_payment_charge_id,
+          error: this.formatLogError(error)
+        });
+        return;
+      }
+      this.logger?.error?.('Failed to credit successful Stars payment', {
+        userId: ctx.from?.id,
+        chargeId: payment.telegram_payment_charge_id,
+        error: this.formatLogError(error)
+      });
+      await ctx.reply(localText(
+        locale,
+        '付款已经由 Telegram 确认，但额度入账出现异常。请使用“支付支持”联系管理员；系统会保留付款单号以便核对。',
+        'Telegram confirmed the payment, but crediting failed. Contact Payment support; the charge ID is retained for reconciliation.'
+      ), Markup.inlineKeyboard([[
+        Markup.button.callback(localText(locale, '🆘 支付支持', '🆘 Payment support'), 'billing:support')
+      ]]));
+    }
+  }
+
+  async handleStarsRefund(ctx) {
+    const locale = this.getLocale(ctx);
+    if (!this.isAdmin(ctx)) {
+      await ctx.reply(this.t(locale, 'adminOnly'));
+      return;
+    }
+    const chargeId = extractCommandArgs(ctx.message?.text || '').trim();
+    if (!chargeId) {
+      await ctx.reply(localText(locale, '用法：/refundstars telegram_payment_charge_id', 'Usage: /refundstars telegram_payment_charge_id'));
+      return;
+    }
+
+    const order = this.db.findStarOrderByChargeId?.(chargeId);
+    if (!order) {
+      await ctx.reply(localText(locale, '找不到这笔付款。', 'Payment not found.'));
+      return;
+    }
+
+    let refund;
+    let telegramRefunded = false;
+    let localRefundCompleted = false;
+    try {
+      refund = this.db.beginStarRefund?.({
+        telegramPaymentChargeId: chargeId,
+        requestedBy: String(ctx.from?.id || ''),
+        reason: 'admin_command',
+        leaseDurationMs: Math.max(30, Number(this.config.starsRefundLeaseSeconds) || 300) * 1000
+      });
+      if (!refund || refund.allowed === false) {
+        if (refund?.reason === 'REFUND_IN_PROGRESS') {
+          await ctx.reply(localText(locale, '这笔退款正在处理中，请稍后重试同一付款单号。', 'This refund is already in progress. Retry the same charge later.'));
+          return;
+        }
+        throw new Error(refund?.reason || 'Refund cannot be started.');
+      }
+      if (refund.reason === 'REFUND_ALREADY_COMPLETED') {
+        await ctx.reply(localText(locale, '✅ 这笔 Stars 付款已经退款，无需重复处理。', '✅ This Stars payment has already been refunded.'));
+        return;
+      }
+      await this.bot.telegram.callApi('refundStarPayment', {
+        user_id: Number(order.userId),
+        telegram_payment_charge_id: chargeId
+      });
+      telegramRefunded = true;
+      const completed = this.db.completeStarRefund?.(refund.id || chargeId, refund.leaseToken || '');
+      if (!completed || (!completed.completed && !completed.duplicate)) {
+        throw new Error(completed?.reason || 'Refund completion could not be persisted.');
+      }
+      localRefundCompleted = true;
+      await ctx.reply(localText(locale, '✅ Stars 已退款，相关已购额度已冲销。', '✅ Stars were refunded and the related purchased credits were reversed.'));
+    } catch (error) {
+      if (localRefundCompleted) {
+        this.logger?.warn?.('Stars refund completed but confirmation delivery failed', {
+          chargeId,
+          error: this.formatLogError(error)
+        });
+        return;
+      }
+      const detail = String(error?.description || error?.message || error);
+      if (/already refunded|charge_already_refunded/i.test(detail)) {
+        const completed = this.db.completeStarRefund?.(
+          refund?.id || chargeId,
+          refund?.leaseToken || ''
+        );
+        if (!completed || (!completed.completed && !completed.duplicate)) {
+          this.logger?.warn?.('Telegram refund exists but local reconciliation failed', {
+            chargeId,
+            reason: completed?.reason || 'Refund reconciliation storage unavailable'
+          });
+          await ctx.reply(localText(
+            locale,
+            'Telegram 显示该付款已经退款，但本地状态暂未同步。请稍后重试同一退款命令完成对账。',
+            'Telegram reports this payment was already refunded, but local reconciliation is still pending. Retry the same refund command later.'
+          ));
+          return;
+        }
+        await ctx.reply(localText(locale, '✅ Telegram 显示该付款已退款，本地记录已同步。', '✅ Telegram reports this payment was already refunded; the local record was synchronized.'));
+        return;
+      }
+      const outcomeUncertain = !telegramRefunded && this.isAiTransientError(error);
+      // Never restore credits after Telegram has accepted the refund. If the
+      // local completion step failed, rerunning this command is safe: Telegram
+      // returns "already refunded" and the pending local record is completed.
+      // Network/5xx timeouts are also left pending because Telegram may have
+      // processed the request even when its response did not reach this bot.
+      let localFailurePersisted = true;
+      if (refund && !telegramRefunded && !outcomeUncertain) {
+        const failed = this.db.failStarRefund?.(refund.id || chargeId, detail, refund.leaseToken || '');
+        localFailurePersisted = Boolean(failed?.failed || failed?.duplicate);
+        if (!localFailurePersisted) {
+          this.logger?.warn?.('Failed to persist Stars refund failure', {
+            chargeId,
+            reason: failed?.reason || 'Refund failure storage unavailable'
+          });
+        }
+      }
+      this.logger?.warn?.('Stars refund failed', { chargeId, error: this.formatLogError(error) });
+      await ctx.reply(!localFailurePersisted
+        ? localText(locale, '退款失败，但本地状态同步也未完成。请稍后重试同一退款命令进行对账。', 'The refund failed and local status synchronization is incomplete. Retry the same refund command later to reconcile it.')
+        : telegramRefunded
+        ? localText(locale, 'Telegram 已退款，但本地状态同步失败。请重试同一退款命令以完成同步。', 'Telegram refunded the payment, but local status synchronization failed. Retry the same refund command to finish reconciliation.')
+        : outcomeUncertain
+          ? localText(locale, '退款请求结果暂时无法确认，额度保持冻结。请重试同一退款命令完成对账。', 'The refund outcome is temporarily unknown, so the credits remain frozen. Retry the same refund command to reconcile it safely.')
+          : localText(locale, `退款失败：${detail}`, `Refund failed: ${detail}`));
+    }
+  }
+
+  async reserveUsageForUser(userId, creditType = 'chat', options = {}) {
+    const normalizedUserId = String(userId || '');
+    const type = this.normalizeBillingCreditType(creditType);
+    if (!normalizedUserId) return { allowed: true, reserved: false, creditType: type };
+    const isAdmin = this.isAdminUserId(normalizedUserId);
+
+    if (typeof this.db.reserveUsage === 'function') {
+      const free = this.getBillingFreeQuota(normalizedUserId, type);
+      const result = this.db.reserveUsage({
+        userId: normalizedUserId,
+        creditType: type,
+        units: 1,
+        requestKey: options.requestKey || `telegram:${randomUUID()}:${type}`,
+        dailyFreeQuota: free.dailyFreeQuota,
+        zeroFreeQuotaMeansUnlimited: free.zeroFreeQuotaMeansUnlimited,
+        isAdmin,
+        metadata: options.metadata || {}
+      });
+      const recordStatus = String(result?.record?.status || 'reserved');
+      return {
+        ...result,
+        reserved: Boolean(result?.allowed && result?.record && recordStatus === 'reserved'),
+        consumed: Boolean(result?.allowed && result?.record && recordStatus === 'consumed'),
+        admin: isAdmin,
+        userId: normalizedUserId,
+        creditType: type,
+        recordId: result?.record?.id,
+        requestKey: result?.record?.requestKey || options.requestKey
+      };
+    }
+
+    if (isAdmin) {
+      return { allowed: true, reserved: false, admin: true, source: 'admin', userId: normalizedUserId, creditType: type };
+    }
+    if (typeof this.db.consumeDailyQuota !== 'function') return { allowed: true, reserved: false, creditType: type };
+    const legacy = this.db.consumeDailyQuota(normalizedUserId, this.config.dailyQuota);
+    return { ...legacy, reserved: Boolean(legacy.allowed), legacy: true, userId: normalizedUserId, creditType: type };
+  }
+
+  async commitUsageReservation(reservation = {}) {
+    if (!reservation?.reserved) return false;
+    if (reservation.legacy) {
+      reservation.reserved = false;
+      reservation.consumed = true;
+      return true;
+    }
+    if (typeof this.db.commitUsage !== 'function') throw new Error('Usage commit storage is unavailable.');
+    const result = this.db.commitUsage(reservation.recordId || reservation.requestKey);
+    const committed = Boolean(
+      result?.committed ||
+      (result?.duplicate && result?.reason === 'USAGE_ALREADY_COMMITTED')
+    );
+    if (!committed) throw new Error(result?.reason || 'Usage reservation could not be committed.');
+    reservation.reserved = false;
+    reservation.consumed = true;
+    return true;
+  }
+
+  async refundUsageReservation(reservation = {}) {
+    if (!reservation?.reserved) return false;
+    if (reservation.legacy || (!reservation.recordId && !reservation.requestKey && typeof this.db.refundDailyQuota === 'function')) {
+      this.db.refundDailyQuota?.(reservation.userId);
+    } else {
+      if (typeof this.db.refundUsage !== 'function') throw new Error('Usage refund storage is unavailable.');
+      const result = this.db.refundUsage(reservation.recordId || reservation.requestKey);
+      const refunded = Boolean(
+        result?.refunded ||
+        (result?.duplicate && result?.reason === 'USAGE_ALREADY_REFUNDED')
+      );
+      if (!refunded) throw new Error(result?.reason || 'Usage reservation could not be refunded.');
+    }
+    reservation.reserved = false;
+    reservation.refunded = true;
+    return true;
+  }
+
+  async commitQuotaForContext(ctx, creditType = '') {
+    const state = ctx?.state;
+    if (!state) return false;
+    const reservations = state.billingReservations || {};
+    const type = creditType ? this.normalizeBillingCreditType(creditType) : '';
+    const targets = type
+      ? [reservations[type]].filter(Boolean)
+      : Object.values(reservations);
+    if (targets.length === 0 && state.dailyQuotaResult) targets.push(state.dailyQuotaResult);
+    let committed = false;
+    for (const reservation of new Set(targets)) {
+      try {
+        committed = await this.commitUsageReservation(reservation) || committed;
+      } catch (error) {
+        this.logger?.warn?.('Failed to commit usage reservation', {
+          recordId: reservation?.recordId,
+          error: this.formatLogError(error)
+        });
+      }
+    }
+    if (type) delete reservations[type];
+    else state.billingReservations = {};
+    delete state.dailyQuotaResult;
+    return committed;
+  }
+
+  async sweepStaleUsageReservations() {
+    if (typeof this.db.refundStaleUsageReservations !== 'function') return { scanned: 0, refunded: 0 };
+    const result = this.db.refundStaleUsageReservations({
+      olderThanMs: Math.max(2, Number(this.config.starsUsageReservationTtlMinutes) || 15) * 60_000
+    });
+    if (result?.refunded > 0) {
+      this.logger?.warn?.('Recovered stale usage reservations', { refunded: result.refunded });
+    }
+    return result;
+  }
+
+  async consumeQuotaForContext(ctx, creditType = 'chat') {
     const userId = ctx?.from?.id;
-    if (!userId || typeof this.db.consumeDailyQuota !== 'function') return true;
+    if (!userId) return true;
+    if (typeof this.db.reserveUsage !== 'function' && typeof this.db.consumeDailyQuota !== 'function') return true;
+
+    const type = this.normalizeBillingCreditType(creditType);
 
     ctx.state ||= {};
     if (ctx.state.costlyActionAllowed === false) return false;
+    ctx.state.billingReservations ||= {};
     const locale = this.getLocale(ctx);
     const notifyDenied = async (message) => {
       if (ctx.callbackQuery && typeof ctx.answerCbQuery === 'function') {
         try {
           await ctx.answerCbQuery(message.slice(0, 180), { show_alert: true });
-          return;
         } catch {
           // Some parent callback handlers acknowledge first; keep a visible fallback.
         }
       }
-      if (typeof ctx.reply === 'function') await ctx.reply(message);
+      if (typeof ctx.reply === 'function') await ctx.reply(message, this.createQuotaPurchaseKeyboard(locale));
     };
 
     if (ctx.state.costlyActionAuthorized !== true) {
@@ -1537,30 +2214,56 @@ export class TelegramAIBot {
       ctx.state.costlyActionAuthorized = true;
     }
 
-    if (ctx.state.dailyQuotaResult) return Boolean(ctx.state.dailyQuotaResult.allowed);
+    if (ctx.state.billingReservations[type]) return Boolean(ctx.state.billingReservations[type].allowed);
 
-    const quota = this.db.consumeDailyQuota(userId, this.config.dailyQuota);
+    const quota = await this.reserveUsageForUser(userId, type, {
+      requestKey: this.createBillingRequestKey(ctx, type),
+      metadata: { chatId: String(ctx.chat?.id || ''), updateId: ctx.update?.update_id ?? null }
+    });
+    ctx.state.billingReservations[type] = quota;
     ctx.state.dailyQuotaResult = quota;
     ctx.state.costlyActionAllowed = Boolean(quota.allowed);
-    await this.db.write?.();
 
     if (quota.allowed) return true;
 
-    await notifyDenied(this.t(locale, 'quotaExceeded'));
+    // A duplicate Telegram delivery is already running, completed, or was
+    // previously refunded. Suppress it quietly; it is not a balance failure
+    // and must never start a second paid action.
+    if (quota.duplicate) return false;
+
+    await notifyDenied(localText(
+      locale,
+      `${this.getBillingCreditLabel(type, locale)}额度不足。你可以使用每日免费额度，或购买额度包继续使用。`,
+      `Not enough ${this.getBillingCreditLabel(type, locale).toLowerCase()} credits. Use the daily free allowance or buy a credit pack to continue.`
+    ));
     return false;
   }
 
-  async refundQuotaForContext(ctx) {
+  async refundQuotaForContext(ctx, creditType = '') {
     const state = ctx?.state;
-    const userId = ctx?.from?.id;
-    if (!state?.dailyQuotaResult?.allowed || !userId) return false;
-    if (typeof this.db.refundDailyQuota !== 'function') return false;
-
+    if (!state) return false;
+    const reservations = state.billingReservations || {};
+    const type = creditType ? this.normalizeBillingCreditType(creditType) : '';
+    const targets = type
+      ? [reservations[type]].filter(Boolean)
+      : Object.values(reservations);
+    if (targets.length === 0 && state.dailyQuotaResult) targets.push(state.dailyQuotaResult);
+    let refunded = false;
+    for (const reservation of new Set(targets)) {
+      try {
+        refunded = await this.refundUsageReservation(reservation) || refunded;
+      } catch (error) {
+        this.logger?.warn?.('Failed to persist usage reservation refund', {
+          recordId: reservation?.recordId,
+          error: this.formatLogError(error)
+        });
+      }
+    }
+    if (type) delete reservations[type];
+    else state.billingReservations = {};
     delete state.dailyQuotaResult;
     delete state.costlyActionAllowed;
-    this.db.refundDailyQuota(userId);
-    await this.db.write?.();
-    return true;
+    return refunded;
   }
 
   getProviderModelsForMenu(providerId = '') {
@@ -2206,7 +2909,7 @@ export class TelegramAIBot {
       return;
     }
 
-    if (!(await this.consumeQuotaForContext(ctx))) return;
+    if (!(await this.consumeQuotaForContext(ctx, 'chat'))) return;
 
     const targetInstruction =
       targetLanguage === 'auto'
@@ -3038,7 +3741,7 @@ export class TelegramAIBot {
 
   async editAssistantMessageText(ctx, text, keyboard = null) {
     const messageId = ctx.callbackQuery?.message?.message_id;
-    if (!messageId) return false;
+    if (!messageId) throw new Error('The Telegram message can no longer be edited.');
     const editableText = splitMessage(String(text || ''), this.config.maxOutputChars)[0] || this.t(this.getLocale(ctx), 'noReply');
     const keyboardOptions = keyboard?.reply_markup ? { reply_markup: keyboard.reply_markup } : keyboard || undefined;
     try {
@@ -3052,7 +3755,7 @@ export class TelegramAIBot {
       return true;
     } catch (error) {
       this.logger.warn('Failed to edit assistant message', { chatId: ctx.chat?.id, error: error.message });
-      return false;
+      throw error;
     }
   }
 
@@ -3210,25 +3913,17 @@ export class TelegramAIBot {
       return next();
     });
 
-    this.bot.use(async (ctx, next) => {
-      if (ctx.from) {
-        const isAdmin = this.config.adminUserIds.has(String(ctx.from.id));
-        await this.db.upsertUser(ctx.from, { isAdmin });
-      }
-      if (ctx.chat) {
-        const chat = await this.db.upsertChat(ctx.chat, {
-          triggerMode: this.config.groupTriggerMode,
-          keyword: this.config.groupTriggerKeyword
-        });
-        if (!chat.keyword) {
-          await this.db.setChatSettings(ctx.chat.id, { keyword: this.config.groupTriggerKeyword, triggerMode: this.config.groupTriggerMode });
-        }
-      }
-      return next();
-    });
-
     this.registerCommands();
     this.bot.on('message', (ctx) => this.handleIncomingMessage(ctx));
+
+    await this.sweepStaleUsageReservations();
+    this.usageReservationSweepTimer = setInterval(
+      () => this.sweepStaleUsageReservations().catch((error) => {
+        this.logger?.warn?.('Failed to recover stale usage reservations', { error: this.formatLogError(error) });
+      }),
+      60_000
+    );
+    this.usageReservationSweepTimer.unref?.();
 
     const me = await this.bot.telegram.getMe();
     this.botInfo = me;
@@ -3260,6 +3955,11 @@ export class TelegramAIBot {
     this.bot.command('unblock', (ctx) => this.handleBlock(ctx, false));
     this.bot.command('allow', (ctx) => this.handleAllow(ctx, true));
     this.bot.command('disallow', (ctx) => this.handleAllow(ctx, false));
+    this.bot.command('terms', (ctx) => this.handleStarsTerms(ctx));
+    this.bot.command('paysupport', (ctx) => this.handleStarsPaymentSupport(ctx));
+    this.bot.command('refundstars', (ctx) => this.handleStarsRefund(ctx));
+    this.bot.on('pre_checkout_query', (ctx) => this.handleStarsPreCheckout(ctx));
+    this.bot.on('successful_payment', (ctx) => this.handleStarsSuccessfulPayment(ctx));
     this.bot.action(/^set_model:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleModelCallback(ctx)));
     this.bot.action(/^set_persona:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handlePersonaCallback(ctx)));
     this.bot.action(/^set_language:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleLanguageCallback(ctx)));
@@ -3339,6 +4039,11 @@ export class TelegramAIBot {
 
   async handleStart(ctx) {
     const locale = this.getLocale(ctx);
+    const startParameter = extractCommandArgs(ctx.message?.text || '').trim().toLowerCase();
+    if (/^buy(?:_|$)/.test(startParameter)) {
+      await this.handleStarsStore(ctx);
+      return;
+    }
 
     if (this.config?.miniAppEnabled !== false) {
       const text = locale === 'en'
@@ -3841,7 +4546,7 @@ export class TelegramAIBot {
       return;
     }
 
-    if (!(await this.consumeQuotaForContext(ctx))) return;
+    if (!(await this.consumeQuotaForContext(ctx, 'chat'))) return;
 
     try {
       await ctx.sendChatAction('typing');
@@ -4050,7 +4755,7 @@ export class TelegramAIBot {
       return;
     }
 
-    if (!(await this.consumeQuotaForContext(ctx))) return;
+    if (!(await this.consumeQuotaForContext(ctx, 'chat'))) return;
 
     try {
       await ctx.sendChatAction('typing');
@@ -4110,7 +4815,7 @@ export class TelegramAIBot {
       return;
     }
 
-    if (!(await this.consumeQuotaForContext(ctx))) return;
+    if (!(await this.consumeQuotaForContext(ctx, 'chat'))) return;
 
     try {
       await ctx.sendChatAction('typing');
@@ -4250,7 +4955,7 @@ export class TelegramAIBot {
       await ctx.reply(this.t(locale, textKey, { provider: this.getProviderName() }));
       return;
     }
-    if (!(await this.consumeQuotaForContext(ctx))) return;
+    if (!(await this.consumeQuotaForContext(ctx, 'image_generation'))) return;
 
     try {
       await ctx.sendChatAction('upload_photo');
@@ -4303,7 +5008,7 @@ export class TelegramAIBot {
       await ctx.reply(this.t(locale, 'imageEditUnsupported', { provider: this.getProviderName() }));
       return;
     }
-    if (!(await this.consumeQuotaForContext(ctx))) return;
+    if (!(await this.consumeQuotaForContext(ctx, 'image_generation'))) return;
 
     try {
       const file = await readTelegramFile(ctx, photo.file_id, 'image.jpg', 'image/jpeg');
@@ -4363,7 +5068,7 @@ export class TelegramAIBot {
       await ctx.reply(this.formatUserFacingError('voice transcription is not supported', locale));
       return;
     }
-    if (!(await this.consumeQuotaForContext(ctx))) return;
+    if (!(await this.consumeQuotaForContext(ctx, 'live_voice'))) return;
 
     try {
       await ctx.sendChatAction('typing');
@@ -4428,7 +5133,7 @@ export class TelegramAIBot {
       return;
     }
 
-    if (!(await this.consumeQuotaForContext(ctx))) return;
+    if (!(await this.consumeQuotaForContext(ctx, 'tts'))) return;
 
     try {
       await ctx.sendChatAction('record_voice');
@@ -6178,6 +6883,10 @@ export class TelegramAIBot {
 
   async handleIncomingMessage(ctx) {
     const { forceRespond = false } = arguments[1] || {};
+    if (ctx.message?.successful_payment) {
+      await this.handleStarsSuccessfulPayment(ctx);
+      return;
+    }
     let text = ctx.message?.text || '';
     let caption = ctx.message?.caption || '';
 
@@ -6229,7 +6938,8 @@ export class TelegramAIBot {
     }
 
     const hasProcessableAttachment = Boolean(
-      ctx.message?.photo?.length || ctx.message?.voice || ctx.message?.audio || ctx.message?.document
+      ctx.message?.photo?.length || ctx.message?.voice || ctx.message?.audio || ctx.message?.document ||
+      ctx.message?.video || ctx.message?.video_note
     );
     const mentionOnlyText = `${text}\n${caption}`.trim();
     const isMentionOnlyPing = hasBotMention && (!mentionOnlyText || /^[\s\p{P}\p{S}]+$/u.test(mentionOnlyText));
@@ -6252,6 +6962,13 @@ export class TelegramAIBot {
     }
 
     if (await this.handleBottomKeyboardAction(ctx)) return;
+
+    if (ctx.message?.video || ctx.message?.video_note) {
+      await ctx.reply(this.config.enableVideo
+        ? localText(locale, '视频额度已启用，但当前模型处理链还不支持直接读取 Telegram 视频，因此本次不会扣额度。', 'Video credits are enabled, but the current model pipeline cannot read Telegram videos yet, so no credit was charged.')
+        : localText(locale, '视频功能当前已关闭，本次不会扣额度。', 'Video is currently disabled, so no credit was charged.'));
+      return;
+    }
 
     // 用户点击功能按钮后的下一条输入必须优先执行，不能被普通聊天代理截走。
     const pendingAction = this.takePendingMenuAction(ctx);
@@ -6280,7 +6997,12 @@ export class TelegramAIBot {
       if (await this.handleMenuAction(ctx, naturalAction, locale)) return;
     }
 
-    if (!(await this.consumeQuotaForContext(ctx))) return;
+    const messageCreditType = ctx.message?.photo?.length
+      ? 'vision'
+      : (ctx.message?.voice || ctx.message?.audio)
+        ? 'live_voice'
+        : 'chat';
+    if (!(await this.consumeQuotaForContext(ctx, messageCreditType))) return;
 
     const telegramReplyContext = getTelegramReplyContext(ctx.message, this.config.maxInputChars);
     const memoryQueryText = [text || caption, telegramReplyContext?.text || ''].filter(Boolean).join('\n');
@@ -6581,6 +7303,8 @@ export class TelegramAIBot {
 
   async stop(reason) {
     this.logger.info(`Stopping Telegram bot: ${reason}`);
+    clearInterval(this.usageReservationSweepTimer);
+    this.usageReservationSweepTimer = null;
     await this.bot.stop(reason);
   }
 

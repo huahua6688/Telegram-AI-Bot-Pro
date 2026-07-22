@@ -71,7 +71,7 @@ test('BotDatabase imports legacy JSON data into SQLite', async (t) => {
   assert.equal(db.findChat('200')?.triggerMode, 'mention');
   assert.deepEqual(db.getConversation('200:100:main'), [{ role: 'user', content: 'hello' }]);
   assert.equal(db.getStats().aiCalls, 4);
-  assert.equal(db.getMeta('schemaVersion'), '6');
+  assert.equal(db.getMeta('schemaVersion'), '8');
 });
 
 test('BotDatabase provides RBAC, feature flags, policy rules and audit logs', async (t) => {
@@ -262,7 +262,7 @@ test('BotDatabase treats a zero user quota override as unlimited and validates i
   assert.equal(db.setUserDailyQuota(999, 5), null);
 });
 
-test('BotDatabase upgrades a v5 database with per-user quota storage', async (t) => {
+test('BotDatabase upgrades a v5 database through quota and Stars billing storage', async (t) => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-ai-bot-pro-db-'));
   const databaseFile = path.join(tempDir, 'bot-data.db');
   const db = new BotDatabase(databaseFile);
@@ -281,7 +281,7 @@ test('BotDatabase upgrades a v5 database with per-user quota storage', async (t)
 
   upgraded = new BotDatabase(databaseFile);
   await upgraded.init();
-  assert.equal(upgraded.getMeta('schemaVersion'), '6');
+  assert.equal(upgraded.getMeta('schemaVersion'), '8');
   assert.equal(upgraded.setUserDailyQuota(12, 9, 3)?.dailyQuota, 9);
   assert.equal(upgraded.findUser(12)?.dailyQuotaOverride, 9);
 });
