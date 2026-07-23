@@ -61,46 +61,293 @@ function providerSupports(providerManager, capability, preferredProvider = '') {
   }
 }
 
-function buildCapabilities({ db, config, bot, providerManager }) {
+const CAPABILITY_STATUS = Object.freeze({
+  READY: 'ready',
+  DEGRADED: 'degraded',
+  UNCONFIGURED: 'unconfigured',
+  UNSUPPORTED: 'unsupported'
+});
+
+function capabilityDetail(status, {
+  available = status === CAPABILITY_STATUS.READY || status === CAPABILITY_STATUS.DEGRADED,
+  enabled = true,
+  provider = '',
+  reason = ''
+} = {}) {
+  return {
+    status,
+    available: Boolean(available),
+    enabled: Boolean(enabled),
+    provider: String(provider || ''),
+    reason: String(reason || '')
+  };
+}
+
+function normalizeProviderId(providerId = '') {
+  return String(providerId || '').trim().toLowerCase();
+}
+
+function listProviderRows(providerManager) {
+  try {
+    if (typeof providerManager?.listProviders !== 'function') return [];
+    const rows = providerManager.listProviders();
+    return Array.isArray(rows) ? rows : [];
+  } catch {
+    return [];
+  }
+}
+
+function selectProvider(providerManager, capability, preferredProvider, fallbackEnabled) {
+  try {
+    if (typeof providerManager?.selectProvider === 'function') {
+      return providerManager.selectProvider({
+        capability,
+        preferredProvider,
+        fallbackEnabled
+      });
+    }
+  } catch {
+    return null;
+  }
+
+  if (fallbackEnabled && providerSupports(providerManager, capability, preferredProvider)) {
+    return { providerId: normalizeProviderId(preferredProvider) };
+  }
+
+  return null;
+}
+
+function providerCapabilityDetail(
+  providerManager,
+  capability,
+  preferredProvider = '',
+  { fallbackEnabled = true } = {}
+) {
+  const preferred = normalizeProviderId(preferredProvider);
+  const selected = selectProvider(
+    providerManager,
+    capability,
+    preferredProvider,
+    fallbackEnabled
+  );
+
+  if (selected) {
+    const selectedProvider = normalizeProviderId(selected.providerId);
+    const usingFallback = Boolean(
+      fallbackEnabled &&
+      preferred &&
+      preferred !== 'auto' &&
+      selectedProvider &&
+      selectedProvider !== preferred
+    );
+    return capabilityDetail(
+      usingFallback ? CAPABILITY_STATUS.DEGRADED : CAPABILITY_STATUS.READY,
+      {
+        available: true,
+        provider: selectedProvider || preferred,
+        reason: usingFallback ? 'fallback_provider' : ''
+      }
+    );
+  }
+
+  const rows = listProviderRows(providerManager);
+  if (rows.length === 0) {
+    return capabilityDetail(CAPABILITY_STATUS.UNCONFIGURED, {
+      available: false,
+      provider: preferred,
+      reason: 'provider_status_unavailable'
+    });
+  }
+
+  const supported = rows.filter((row) => Boolean(row?.capabilities?.[capability]));
+  if (supported.length === 0) {
+    return capabilityDetail(CAPABILITY_STATUS.UNSUPPORTED, {
+      available: false,
+      provider: preferred,
+      reason: 'provider_capability_unsupported'
+    });
+  }
+
+  const configured = supported.filter((row) => row?.configured && row?.enabled !== false);
+  if (configured.length > 0) {
+    return capabilityDetail(CAPABILITY_STATUS.DEGRADED, {
+      available: false,
+      provider: preferred || configured[0]?.id,
+      reason: 'configured_provider_unavailable'
+    });
+  }
+
+  return capabilityDetail(CAPABILITY_STATUS.UNCONFIGURED, {
+    available: false,
+    provider: preferred,
+    reason: supported.some((row) => row?.enabled === false)
+      ? 'provider_disabled'
+      : 'provider_key_missing'
+  });
+}
+
+function toolIsAllowed(config, toolName) {
+  const allowed = config?.toolAllowedNames;
+  if (allowed === undefined || allowed === null) return true;
+  if (typeof allowed.has === 'function') return allowed.has(toolName);
+  if (Array.isArray(allowed)) return allowed.includes(toolName);
+  return String(allowed)
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .includes(toolName);
+}
+
+function supportsGeminiGoogleSearch(model = '') {
+  const normalized = String(model || '').trim().toLowerCase();
+  const major = Number(normalized.match(/^gemini-(\d+)(?:\.|[-_])/)?.[1] || 0);
+  if (major >= 3) return true;
+  if (/^gemini-2\.0-flash(?:$|-)/.test(normalized)) return true;
+  return (
+    /^gemini-2\.5-(?:pro|flash|flash-lite)(?:$|-)/.test(normalized) &&
+    !/(?:image|tts|native-audio|live)/.test(normalized)
+  );
+}
+
+function configuredGeminiSearchModel(config) {
+  const models = [
+    ...(Array.isArray(config?.providerModels?.gemini) ? config.providerModels.gemini : []),
+    config?.providerDefaultModels?.gemini,
+    normalizeProviderId(config?.aiProvider) === 'gemini' ? config?.defaultModel : ''
+  ];
+  return models.find((model) => supportsGeminiGoogleSearch(model)) || '';
+}
+
+function webSearchCapabilityDetail({ config, providerManager }) {
+  const enabled = Boolean(config?.enableToolCalls && config?.enableWebSearch);
+  if (!enabled) {
+    return capabilityDetail(CAPABILITY_STATUS.UNSUPPORTED, {
+      available: false,
+      enabled: false,
+      reason: 'feature_disabled'
+    });
+  }
+
+  if (!toolIsAllowed(config, 'web_search')) {
+    return capabilityDetail(CAPABILITY_STATUS.UNCONFIGURED, {
+      available: false,
+      reason: 'web_search_tool_not_allowed'
+    });
+  }
+
+  if (String(config?.braveSearchApiKey || '').trim()) {
+    return capabilityDetail(CAPABILITY_STATUS.READY, {
+      provider: 'brave'
+    });
+  }
+
+  const geminiModel = configuredGeminiSearchModel(config);
+  if (config?.enableGeminiGoogleSearch && geminiModel) {
+    const gemini = providerCapabilityDetail(
+      providerManager,
+      'chat',
+      'gemini',
+      { fallbackEnabled: false }
+    );
+    if (gemini.status === CAPABILITY_STATUS.READY && gemini.available) {
+      return capabilityDetail(CAPABILITY_STATUS.READY, {
+        provider: 'gemini-google-search'
+      });
+    }
+  }
+
+  // The application has a keyless DuckDuckGo HTML/Instant Answer fallback.
+  // It is usable, but it cannot offer the reliability of a configured search
+  // API and should never be advertised as fully ready.
+  return capabilityDetail(CAPABILITY_STATUS.DEGRADED, {
+    available: true,
+    provider: 'duckduckgo',
+    reason: 'keyless_search_fallback'
+  });
+}
+
+export function buildCapabilityDetails({ config, providerManager }) {
+  return {
+    webSearch: webSearchCapabilityDetail({ config, providerManager }),
+    vision: providerCapabilityDetail(providerManager, 'vision', config?.visionProvider),
+    imageGeneration: providerCapabilityDetail(
+      providerManager,
+      'imageGeneration',
+      config?.imageProvider
+    ),
+    imageEditing: providerCapabilityDetail(
+      providerManager,
+      'imageEditing',
+      config?.imageProvider
+    ),
+    speechTranscription: providerCapabilityDetail(
+      providerManager,
+      'speechTranscription',
+      config?.transcriptionProvider
+    ),
+    speechSynthesis: providerCapabilityDetail(
+      providerManager,
+      'speechSynthesis',
+      config?.ttsProvider
+    ),
+    // Telegram's current "live" entry is a placeholder around transcription
+    // and TTS. It is not an end-to-end, bidirectional live audio session yet.
+    liveAudio: capabilityDetail(CAPABILITY_STATUS.UNSUPPORTED, {
+      available: false,
+      enabled: Boolean(config?.enableLiveAudio),
+      provider: 'gemini-live',
+      reason: 'telegram_live_audio_not_implemented'
+    }),
+    liveTranslate: capabilityDetail(CAPABILITY_STATUS.UNSUPPORTED, {
+      available: false,
+      enabled: Boolean(config?.enableLiveTranslate),
+      provider: 'gemini-live',
+      reason: 'telegram_live_translate_not_implemented'
+    }),
+    // Credits can be sold independently, but Telegram video bytes are not
+    // currently passed to any model pipeline.
+    video: capabilityDetail(CAPABILITY_STATUS.UNSUPPORTED, {
+      available: false,
+      enabled: Boolean(config?.enableVideo),
+      reason: 'telegram_video_pipeline_not_implemented'
+    })
+  };
+}
+
+export function buildCapabilities(
+  { db, config, bot, providerManager },
+  capabilityDetails = buildCapabilityDetails({ config, providerManager })
+) {
   return {
     chat: providerSupports(providerManager, 'chat', config.aiProvider) || Boolean(bot),
     privacyChat: Boolean(bot?.privacyConfig),
     databaseEncryption: Boolean(db?.chatEncryption?.enabled),
     providerFallback: Boolean(config.enableProviderFallback),
     toolCalls: Boolean(config.enableToolCalls),
-    webSearch: Boolean(config.enableToolCalls && config.enableWebSearch),
+    webSearch: capabilityDetails.webSearch.available,
     urlFetch: Boolean(config.enableToolCalls && config.enableUrlFetch),
     memorySummary: Boolean(config.enableMemorySummary),
     fileParsing: true,
-    vision: providerSupports(providerManager, 'vision', config.visionProvider),
-    imageGeneration: providerSupports(providerManager, 'imageGeneration', config.imageProvider),
-    imageEditing: providerSupports(providerManager, 'imageEditing', config.imageProvider),
-    speechTranscription: providerSupports(
-      providerManager,
-      'speechTranscription',
-      config.transcriptionProvider
-    ),
-    speechSynthesis: providerSupports(
-      providerManager,
-      'speechSynthesis',
-      config.ttsProvider
-    ),
-    liveAudio: Boolean(
-      config.enableLiveAudio &&
-      providerSupports(providerManager, 'liveAudio', 'gemini-live')
-    ),
-    liveTranslate: Boolean(
-      config.enableLiveTranslate &&
-      providerSupports(providerManager, 'liveTranslate', 'gemini-live')
-    )
+    vision: capabilityDetails.vision.available,
+    imageGeneration: capabilityDetails.imageGeneration.available,
+    imageEditing: capabilityDetails.imageEditing.available,
+    speechTranscription: capabilityDetails.speechTranscription.available,
+    speechSynthesis: capabilityDetails.speechSynthesis.available,
+    liveAudio: capabilityDetails.liveAudio.available,
+    liveTranslate: capabilityDetails.liveTranslate.available,
+    video: capabilityDetails.video.available
   };
 }
 
-function buildHealthPayload(context) {
+export function buildHealthPayload(context) {
   const { db, config } = context;
   const stats = db.getStats();
   const build = getBuildInfo();
-  const capabilities = buildCapabilities(context);
+  const capabilityDetails = buildCapabilityDetails(context);
+  const capabilityStatuses = Object.fromEntries(
+    Object.entries(capabilityDetails).map(([name, detail]) => [name, detail.status])
+  );
+  const capabilities = buildCapabilities(context, capabilityDetails);
 
   return {
     ok: true,
@@ -122,6 +369,8 @@ function buildHealthPayload(context) {
       version: String(db?.chatEncryption?.version || '')
     },
     capabilities,
+    capabilityStatuses,
+    capabilityDetails,
     enabledCapabilities: Object.entries(capabilities)
       .filter(([, enabled]) => enabled)
       .map(([name]) => name),
@@ -154,6 +403,8 @@ const STATUS_HTML = String.raw`<!doctype html>
     .pill { padding: 4px 8px; border-radius: 999px; font-size: 12px; font-weight: 800; }
     .on { color: #166534; background: #dcfce7; }
     .off { color: #6b7280; background: #e5e7eb; }
+    .degraded { color: #92400e; background: #fef3c7; }
+    .unsupported { color: #991b1b; background: #fee2e2; }
     .wide { grid-column: 1 / -1; }
     button { margin-top: 16px; border: 0; border-radius: 12px; padding: 11px 15px; font: inherit; font-weight: 800; cursor: pointer; color: #fff; background: #2563eb; }
     .error { color: #b91c1c; }
@@ -164,6 +415,8 @@ const STATUS_HTML = String.raw`<!doctype html>
       .row { border-color: #374151; }
       .cap { background: #111827; }
       .off { color: #d1d5db; background: #374151; }
+      .degraded { color: #fde68a; background: #78350f; }
+      .unsupported { color: #fecaca; background: #7f1d1d; }
     }
   </style>
 </head>
@@ -204,7 +457,14 @@ const STATUS_HTML = String.raw`<!doctype html>
       urlFetch: '网页读取', memorySummary: '长期记忆总结', fileParsing: '文件解析',
       vision: '图片识别', imageGeneration: '图片生成', imageEditing: '图片编辑',
       speechTranscription: '语音转文字', speechSynthesis: '文字转语音',
-      liveAudio: '实时语音', liveTranslate: '实时翻译'
+      liveAudio: '实时语音', liveTranslate: '实时翻译', video: '视频理解'
+    };
+
+    const statusLabels = {
+      ready: '就绪',
+      degraded: '服务降级',
+      unconfigured: '未配置',
+      unsupported: '暂不支持'
     };
 
     function formatUptime(seconds) {
@@ -215,17 +475,26 @@ const STATUS_HTML = String.raw`<!doctype html>
       return [days ? days + ' 天' : '', hours ? hours + ' 小时' : '', minutes + ' 分钟'].filter(Boolean).join(' ');
     }
 
-    function renderCapabilities(items) {
+    function renderCapabilities(items, statuses) {
       const root = document.getElementById('capabilities');
       root.innerHTML = '';
       Object.entries(items || {}).forEach(function ([key, enabled]) {
         const item = document.createElement('div');
         const name = document.createElement('span');
         const state = document.createElement('span');
+        const status = statuses?.[key] || (enabled ? 'ready' : 'unconfigured');
         item.className = 'cap';
         name.textContent = labels[key] || key;
-        state.className = 'pill ' + (enabled ? 'on' : 'off');
-        state.textContent = enabled ? '已启用' : '未启用';
+        state.className = 'pill ' + (
+          status === 'ready'
+            ? 'on'
+            : status === 'degraded'
+              ? 'degraded'
+              : status === 'unsupported'
+                ? 'unsupported'
+                : 'off'
+        );
+        state.textContent = statusLabels[status] || status;
         item.appendChild(name);
         item.appendChild(state);
         root.appendChild(item);
@@ -246,7 +515,7 @@ const STATUS_HTML = String.raw`<!doctype html>
         document.getElementById('model').textContent = data.model || '—';
         document.getElementById('messages').textContent = String(data.stats?.messagesHandled || 0);
         document.getElementById('aiCalls').textContent = String(data.stats?.aiCalls || 0);
-        renderCapabilities(data.capabilities || {});
+        renderCapabilities(data.capabilities || {}, data.capabilityStatuses || {});
         updated.className = 'sub';
         updated.textContent = '最后更新：' + new Date().toLocaleString();
       } catch (error) {

@@ -78,33 +78,41 @@ ok(`TRANSLATION_PROVIDER: ${config.translationProvider || '-'}`);
 ok(`ROUTER_PROVIDER: ${config.routerProvider || '-'}`);
 
 const providerChecks = [
-  ['Gemini', 'gemini', ['GEMINI_API_KEY', 'AI_API_KEY']],
-  ['Gemini Live', 'gemini-live', ['GEMINI_LIVE_API_KEY', 'GEMINI_API_KEY', 'AI_API_KEY']],
-  ['Groq', 'groq', ['GROQ_API_KEY']],
-  ['OpenRouter', 'openrouter', ['OPENROUTER_API_KEY']],
-  ['GitHub Models', 'github-models', ['GITHUB_MODELS_API_KEY', 'GITHUB_TOKEN']],
-  ['Hugging Face', 'huggingface', ['HUGGINGFACE_API_KEY', 'HF_TOKEN']],
-  ['Mistral', 'mistral', ['MISTRAL_API_KEY']],
-  ['OpenAI', 'openai', ['OPENAI_API_KEY', 'AI_API_KEY']],
-  ['OpenAI Compatible', 'openai-compatible', ['AI_API_KEY']],
-  ['Anthropic', 'anthropic', ['ANTHROPIC_API_KEY', 'AI_API_KEY']],
-  ['DeepSeek', 'deepseek', ['DEEPSEEK_API_KEY', 'AI_API_KEY']],
-  ['Qwen', 'qwen', ['QWEN_API_KEY', 'AI_API_KEY']],
-  ['Grok', 'grok', ['GROK_API_KEY', 'AI_API_KEY']],
-  ['GLM', 'glm', ['GLM_API_KEY', 'AI_API_KEY']],
-  ['Doubao', 'doubao', ['DOUBAO_API_KEY', 'AI_API_KEY']]
+  ['Gemini', 'gemini', 'geminiApiKey'],
+  // Gemini Live is deliberately separate from the regular Gemini key in the
+  // runtime configuration. Reporting it as configured from GEMINI_API_KEY made
+  // voice/TTS look available when the client could not be created.
+  ['Gemini Live', 'gemini-live', 'geminiLiveApiKey'],
+  ['Groq', 'groq', 'groqApiKey'],
+  ['OpenRouter', 'openrouter', 'openrouterApiKey'],
+  ['GitHub Models', 'github-models', 'githubModelsApiKey'],
+  ['Hugging Face', 'huggingface', 'huggingfaceApiKey'],
+  ['Mistral', 'mistral', 'mistralApiKey'],
+  ['OpenAI', 'openai', 'openaiApiKey'],
+  ['OpenAI Compatible', 'openai-compatible', 'aiApiKey'],
+  ['Anthropic', 'anthropic', 'anthropicApiKey'],
+  ['DeepSeek', 'deepseek', 'deepseekApiKey'],
+  ['Qwen', 'qwen', 'qwenApiKey'],
+  ['Grok', 'grok', 'grokApiKey'],
+  ['GLM', 'glm', 'glmApiKey'],
+  ['Doubao', 'doubao', 'doubaoApiKey']
 ];
 
 console.log('');
 console.log('AI Providers:');
 let configuredProviderCount = 0;
-for (const [label, providerId, envNames] of providerChecks) {
-  const configured = hasEnv(...envNames);
+const configuredProviders = [];
+for (const [label, providerId, configKey] of providerChecks) {
+  const configuredKey = String(config[configKey] || '').trim();
+  const configured = Boolean(configuredKey);
   const models = config.providerModels?.[providerId]?.join(', ') || '';
-  if (configured) configuredProviderCount += 1;
+  if (configured) {
+    configuredProviderCount += 1;
+    configuredProviders.push({ providerId, configuredKey });
+  }
   const summary = `${label}: ${configured ? 'configured' : 'not configured'}${models ? ` / ${models}` : ''}`;
   if (configured) {
-    ok(`${summary} / key ${mask(firstEnv(...envNames))}`);
+    ok(summary);
   } else {
     warn(summary);
   }
@@ -112,6 +120,22 @@ for (const [label, providerId, envNames] of providerChecks) {
 
 if (configuredProviderCount === 0) {
   warnings.push('No AI provider API key is configured. The bot can start, but AI replies will fail until at least one provider key and model are set.');
+}
+const independentChatKeys = new Set(
+  configuredProviders
+    .filter(({ providerId }) => providerId !== 'gemini-live')
+    .map(({ configuredKey }) => configuredKey)
+);
+if (config.enableProviderFallback && independentChatKeys.size < 2) {
+  warnings.push(
+    'Provider fallback is enabled, but fewer than two independent chat providers are configured. ' +
+    'A second Gemini model does not bypass the same Google project quota; configure GROQ_API_KEY, OPENROUTER_API_KEY, or another provider key.'
+  );
+}
+if (config.enableWebSearch && config.enableToolCalls && !hasEnv('BRAVE_SEARCH_API_KEY')) {
+  warnings.push(
+    'Web search has no BRAVE_SEARCH_API_KEY. Keyless DuckDuckGo fallback remains available but may be rate-limited or blocked by the hosting network.'
+  );
 }
 
 checkWritableFileDirectory(config.databaseFile, 'DATABASE_FILE', warnings, errors);
@@ -139,6 +163,27 @@ if (config.aiProvider === 'gemini' && String(config.defaultModel || '').includes
 
 if (String(config.translationModel || '').includes('native-audio') || String(config.routerModel || '').includes('native-audio')) {
   warnings.push('TRANSLATION_MODEL / ROUTER_MODEL should not use native-audio Live models.');
+}
+const configuredModels = Object.values(config.providerModels || {}).flat().map((model) => String(model || ''));
+if (configuredModels.some((model) => model.includes('gemini-3.1-flash-lite'))) {
+  warnings.push('gemini-3.1-flash-lite is retired. Replace it with gemini-2.5-flash-lite or another currently available model.');
+}
+if ((config.enableLiveAudio || config.enableLiveTranslate) && !hasEnv('GEMINI_LIVE_API_KEY')) {
+  warnings.push('Live audio/translation is enabled without GEMINI_LIVE_API_KEY. Disable the flags until a supported live pipeline is configured.');
+}
+if (
+  hasEnv('DEFAULT_AI_PROVIDER') &&
+  hasEnv('AI_PROVIDER') &&
+  firstEnv('DEFAULT_AI_PROVIDER') !== firstEnv('AI_PROVIDER')
+) {
+  warnings.push('DEFAULT_AI_PROVIDER overrides the conflicting legacy AI_PROVIDER value. Remove the legacy variable.');
+}
+if (
+  hasEnv('DEFAULT_AI_MODEL') &&
+  hasEnv('AI_MODEL') &&
+  firstEnv('DEFAULT_AI_MODEL') !== firstEnv('AI_MODEL')
+) {
+  warnings.push('DEFAULT_AI_MODEL overrides the conflicting legacy AI_MODEL value. Remove the legacy variable.');
 }
 
 console.log('');

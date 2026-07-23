@@ -321,8 +321,11 @@ export class AIProviderManager {
       .filter((item) => item.configured && item.enabled)
       .map((item) => item.id);
 
-    if (preferred && preferred !== 'auto' && !fallbackEnabled) {
-      return [preferred];
+    if (!fallbackEnabled && preferred !== 'auto') {
+      const primaryProvider = preferred || (dedicated !== 'auto' ? dedicated : defaultProvider);
+      return compactList(primaryProvider)
+        .filter((providerId) => providerId !== 'auto')
+        .filter((providerId) => this.providerSupports(providerId, normalizedCapability));
     }
 
     const base = preferred && preferred !== 'auto'
@@ -377,10 +380,27 @@ export class AIProviderManager {
     preferredModel = '',
     fallbackEnabled = this.config.enableProviderFallback,
     ignoreCooldown = false,
+    maxRetries,
     request = {},
     scope = 'chat'
   } = {}) {
     const providerOrder = this.buildProviderOrder({ capability, preferredProvider, fallbackEnabled });
+    const normalizedPreferredProvider = normalizeProviderId(preferredProvider);
+    const dedicatedProvider = normalizeProviderId(this.getDedicatedProviderForCapability(capability));
+    const defaultProvider = normalizeProviderId(this.config.aiProvider);
+    const originalProvider = normalizedPreferredProvider && normalizedPreferredProvider !== 'auto'
+      ? normalizedPreferredProvider
+      : dedicatedProvider && dedicatedProvider !== 'auto'
+        ? dedicatedProvider
+        : defaultProvider && defaultProvider !== 'auto'
+          ? defaultProvider
+          : providerOrder[0] || '';
+    const originalModel = originalProvider
+      ? this.getCandidateModels(
+          originalProvider,
+          originalProvider === normalizedPreferredProvider ? preferredModel : ''
+        )[0] || ''
+      : '';
     const attempted = [];
     let lastError = null;
 
@@ -406,7 +426,14 @@ export class AIProviderManager {
         attempted.push({ providerId, status: 'model_missing' });
         continue;
       }
-      const maxAttempts = Math.max(1, Number(this.config.aiProviderMaxRetries || 1));
+      const requestRetries = Number(maxRetries);
+      const configuredRetries = Number.isFinite(requestRetries)
+        ? requestRetries
+        : Number(this.config.aiProviderMaxRetries);
+      const maxRetryCount = Number.isFinite(configuredRetries)
+        ? Math.max(0, Math.floor(configuredRetries))
+        : 1;
+      const maxAttempts = maxRetryCount + 1;
 
       modelLoop:
       for (const model of modelCandidates) {
@@ -423,13 +450,17 @@ export class AIProviderManager {
               throw new Error('AI provider returned an empty response.');
             }
             this.markSuccess(providerId, capability);
-            const originallyPreferred = normalizeProviderId(preferredProvider || this.config.aiProvider);
             return {
               result,
               providerId,
               providerName: client.getProviderName?.() || providerId,
               model,
-              switched: Boolean(originallyPreferred && originallyPreferred !== 'auto' && originallyPreferred !== providerId),
+              switched: Boolean(
+                originalProvider && (
+                  originalProvider !== providerId ||
+                  Boolean(originalModel && originalModel !== model)
+                )
+              ),
               attempted
             };
           } catch (error) {

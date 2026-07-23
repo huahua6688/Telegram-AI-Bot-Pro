@@ -1544,14 +1544,141 @@ export class TelegramAIBot {
     const stored = this.db.getUserAISettings?.(userId) || {};
     const providerId = stored.providerId || this.config.defaultAIProvider || this.config.aiProvider;
     const models = this.providerManager?.getProviderModels?.(providerId) || this.config.availableModels || [];
+    const storedModel = String(stored.modelId || '').trim();
+    // Model selections survive deployments in SQLite. Do not keep sending a
+    // retired model forever after the server's configured model list changes.
+    // An empty model list can represent a custom provider, so preserve its
+    // explicit model rather than guessing.
+    const modelId =
+      storedModel && (models.length === 0 || models.includes(storedModel))
+        ? storedModel
+        : models[0] || this.config.defaultModel;
     return {
       userId: String(userId || ''),
       providerId,
-      modelId: stored.modelId || models[0] || this.config.defaultModel,
+      modelId,
       fallbackEnabled: Object.hasOwn(stored, 'fallbackEnabled')
         ? Boolean(stored.fallbackEnabled)
         : Boolean(this.config.enableProviderFallback)
     };
+  }
+
+  hasConfiguredCapability(capability, preferredProvider = '') {
+    try {
+      if (this.providerManager?.hasAvailableProvider) {
+        return Boolean(this.providerManager.hasAvailableProvider(capability, preferredProvider));
+      }
+      return Boolean(this.aiClient?.getCapabilities?.()?.[capability]);
+    } catch {
+      return false;
+    }
+  }
+
+  isConfiguredToolAllowed(toolName = '') {
+    const allowed = this.config?.toolAllowedNames;
+    if (allowed === undefined || allowed === null) return true;
+    if (typeof allowed.has === 'function') return allowed.has(toolName);
+    if (Array.isArray(allowed)) return allowed.includes(toolName);
+    return String(allowed)
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .includes(toolName);
+  }
+
+  buildHelpFeatureLines(locale = 'zh') {
+    const english = locale === 'en';
+    const lines = [];
+    const unavailable = [];
+    const canSearch = Boolean(
+      this.config?.enableToolCalls &&
+      this.config?.enableWebSearch &&
+      this.isConfiguredToolAllowed('web_search')
+    );
+    const canReadUrls = Boolean(
+      this.config?.enableToolCalls &&
+      this.config?.enableUrlFetch &&
+      this.isConfiguredToolAllowed('fetch_url')
+    );
+    const canVision = this.hasConfiguredCapability('vision', this.config?.visionProvider);
+    const canGenerateImages = this.hasConfiguredCapability('imageGeneration', this.config?.imageProvider);
+    const canEditImages = this.hasConfiguredCapability('imageEditing', this.config?.imageProvider);
+    const canTranscribe = this.hasConfiguredCapability(
+      'speechTranscription',
+      this.config?.transcriptionProvider
+    );
+    const canSpeak = this.hasConfiguredCapability('speechSynthesis', this.config?.ttsProvider);
+
+    if (canSearch) {
+      lines.push(
+        english
+          ? '- Current information: “Search today’s news” or “What is the latest exchange rate?”'
+          : '- 实时信息：例如“搜索今日新闻”“查询最新汇率”。'
+      );
+    } else {
+      unavailable.push(english ? 'web search' : '联网搜索');
+    }
+
+    lines.push(
+      english
+        ? '- Translation: “Translate this into English: …”'
+        : '- 翻译：例如“把这段话翻译成英文：……”。'
+    );
+
+    if (canVision) {
+      lines.push(
+        english
+          ? '- Images: send an image and describe what you want to know.'
+          : '- 图片识别：直接发送图片并说明想了解什么。'
+      );
+    } else {
+      unavailable.push(english ? 'image understanding' : '图片识别');
+    }
+    if (canGenerateImages || canEditImages) {
+      lines.push(
+        english
+          ? `- Image creation: ask to ${canGenerateImages ? 'generate' : ''}${canGenerateImages && canEditImages ? ' or ' : ''}${canEditImages ? 'edit' : ''} an image.`
+          : `- 图片创作：可以直接说“${canGenerateImages ? '生成一张……' : ''}${canGenerateImages && canEditImages ? '”或“' : ''}${canEditImages ? '修改这张图……' : ''}”。`
+      );
+    } else {
+      unavailable.push(english ? 'image generation/editing' : '图片生成/编辑');
+    }
+
+    lines.push(
+      canReadUrls
+        ? (english
+            ? '- Files and pages: send a supported file or link for reading and summarizing.'
+            : '- 文件和网页：直接发支持的文件或链接，可读取、总结和分析。')
+        : (english
+            ? '- Files: send a supported document for reading and summarizing.'
+            : '- 文件：直接发支持的文档，可读取、总结和分析。')
+    );
+
+    if (canTranscribe || canSpeak) {
+      lines.push(
+        english
+          ? `- Voice: ${canTranscribe ? 'send a voice message for transcription' : ''}${canTranscribe && canSpeak ? ', or ' : ''}${canSpeak ? 'say “Read this aloud: …”' : ''}.`
+          : `- 语音：${canTranscribe ? '直接发语音可转写' : ''}${canTranscribe && canSpeak ? '；' : ''}${canSpeak ? '也可以说“朗读这段话：……”' : ''}。`
+      );
+    } else {
+      unavailable.push(english ? 'voice transcription/TTS' : '语音转写/朗读');
+    }
+
+    lines.push(
+      english ? '- Memory: say “show memory” or “clear memory”.' : '- 记忆：可以说“查看记忆”或“清空记忆”。',
+      english
+        ? '- Quoted reply: select part of a bot reply and respond; I will continue from that passage without starting a new topic.'
+        : '- 局部引用：选中机器人回复中的一段再回复，我会接着解释该段，不会另开话题。'
+    );
+
+    if (unavailable.length > 0) {
+      lines.push(
+        english
+          ? `- Not configured or not implemented: ${unavailable.join(', ')}.`
+          : `- 当前未配置或尚未实现：${unavailable.join('、')}。`
+      );
+    }
+    return lines;
   }
 
   getEffectiveDailyQuota(userId) {
@@ -3400,7 +3527,8 @@ export class TelegramAIBot {
     userId = '',
     preferredProvider = '',
     fallbackEnabled = this.config.enableProviderFallback,
-    ignoreCooldown = false
+    ignoreCooldown = false,
+    maxRetries
   } = {}) {
     if (this.providerManager) {
       const managed = await this.providerManager.execute({
@@ -3410,6 +3538,7 @@ export class TelegramAIBot {
         preferredModel: model,
         fallbackEnabled,
         ignoreCooldown,
+        maxRetries,
         request,
         scope
       });
@@ -4129,13 +4258,7 @@ export class TelegramAIBot {
             'Help',
             '',
             'Send requests naturally; no feature buttons are required:',
-            '- Current information: “Search today’s news” or “What is the latest exchange rate?”',
-            '- Translation: “Translate this into English: …”',
-            '- Images: send an image to understand it, or ask to generate/edit an image.',
-            '- Files and pages: send a supported file or link for reading and summarizing.',
-            '- Voice: send a voice message for transcription, or say “Read this aloud: …”.',
-            '- Memory: say “show memory” or “clear memory”.',
-            '- Quoted reply: select part of a bot reply and respond; I will continue from that passage without starting a new topic.',
+            ...this.buildHelpFeatureLines(locale),
             '',
             'Private chat: use the button below.',
             'Your Telegram ID: /whoami',
@@ -4145,13 +4268,7 @@ export class TelegramAIBot {
             '使用帮助',
             '',
             '直接描述需求即可，不需要功能按钮：',
-            '- 实时信息：例如“搜索今日新闻”“查询最新汇率”。',
-            '- 翻译：例如“把这段话翻译成英文：……”。',
-            '- 图片：直接发图片可识别；也可以说“生成一张……”“修改这张图……”。',
-            '- 文件和网页：直接发支持的文件或链接，可读取、总结和分析。',
-            '- 语音：直接发语音可转写；也可以说“朗读这段话：……”。',
-            '- 记忆：可以说“查看记忆”或“清空记忆”。',
-            '- 局部引用：选中机器人回复中的一段再回复，我会接着解释该段，不会另开话题。',
+            ...this.buildHelpFeatureLines(locale),
             '',
             '隐私聊天：使用下方按钮。',
             '查询 Telegram ID：/whoami',
@@ -7035,13 +7152,6 @@ export class TelegramAIBot {
 
     try {
       const model = activeAiModel;
-      const chatCooldown = this.getAiCooldown('chat', model);
-      if (chatCooldown) {
-        await this.refundQuotaForContext(ctx);
-        await ctx.reply(this.formatQuotaCooldownMessage(chatCooldown, locale));
-        return;
-      }
-
       await ctx.sendChatAction('typing');
       const prepared = await this.prepareUserMessage(ctx);
       const requestCapability = ctx.message?.photo?.length ? 'vision' : 'chat';
@@ -7113,11 +7223,15 @@ export class TelegramAIBot {
       const assistantRef = this.db.getLatestAssistantMessageReference(sessionId);
 
       const assistantText = result.text;
+      const switchTarget = [
+        this.getAIProviderLabel(completion.providerId),
+        completion.model
+      ].filter(Boolean).join(' / ');
       const visibleAssistantText = completion.switched
         ? [
             isEnglishLocale(locale)
-              ? `Current model was busy, switched to ${this.getAIProviderLabel(completion.providerId)}.`
-              : `当前模型暂时繁忙，已自动切换到 ${this.getAIProviderLabel(completion.providerId)}。`,
+              ? `Current model was unavailable, switched to ${switchTarget}.`
+              : `当前模型暂时不可用，已自动切换到 ${switchTarget}。`,
             '',
             assistantText
           ].join('\n')
@@ -7164,7 +7278,10 @@ export class TelegramAIBot {
       }
     } catch (error) {
       if (!assistantDelivered) await this.refundQuotaForContext(ctx);
-      if (this.isAiQuotaError(error)) {
+      // ProviderManager owns provider/model health and cooldowns. Mirroring a
+      // provider-wide failure into the legacy model cooldown would pre-block
+      // the next request before another provider gets a chance to recover it.
+      if (!this.providerManager && this.isAiQuotaError(error)) {
         this.setAiCooldown('chat', activeAiModel, error);
       }
 

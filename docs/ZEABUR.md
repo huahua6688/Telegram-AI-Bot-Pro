@@ -22,9 +22,9 @@ Zeabur 设置：
 最少需要：
 
     BOT_TOKEN
-    AI_PROVIDER
+    DEFAULT_AI_PROVIDER=auto
     GEMINI_API_KEY
-    AI_MODEL
+    DEFAULT_AI_MODEL=gemini-2.5-flash
     ADMIN_USER_IDS
 
 不知道 Telegram User ID 时，部署后给 Bot 发送：

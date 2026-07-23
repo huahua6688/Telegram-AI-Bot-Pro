@@ -526,6 +526,132 @@ test('inline mode coalesces rapid typing and only calls AI for the last query', 
   );
 });
 
+test('identical in-flight inline queries share one AI request', async () => {
+  let aiCalls = 0;
+  const answers = [];
+  const bot = createBot({
+    config: { inlineQueryDebounceMs: 1 },
+    methods: {
+      async completePlatformRequest({ text }) {
+        aiCalls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        return `answer:${text}`;
+      }
+    }
+  });
+  const makeContext = (id) => ({
+    update: {
+      inline_query: {
+        id,
+        query: 'same in-flight question',
+        from: { id: 770, language_code: 'en' }
+      }
+    },
+    answerInlineQuery: async (results) => answers.push({ id, results })
+  });
+
+  const first = bot.handleInlineQuery(makeContext('same-running-1'));
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  const second = bot.handleInlineQuery(makeContext('same-running-2'));
+  await Promise.all([first, second]);
+
+  assert.equal(aiCalls, 1);
+  assert.equal(answers.length, 2);
+  assert.deepEqual(
+    answers.map(({ results }) => results[0].input_message_content.message_text),
+    ['answer:same in-flight question', 'answer:same in-flight question']
+  );
+});
+
+test('shared inline work commits quota when a joiner delivers after the owner query expires', async () => {
+  let aiCalls = 0;
+  let commits = 0;
+  let refunds = 0;
+  const bot = createBot({
+    config: { inlineQueryDebounceMs: 1 },
+    db: {
+      findUser() {
+        return { id: '771' };
+      }
+    },
+    methods: {
+      async reserveUsageForUser() {
+        return { allowed: true, reserved: true, recordId: 'shared-inline-reservation' };
+      },
+      async commitUsageReservation() {
+        commits += 1;
+      },
+      async refundUsageReservation() {
+        refunds += 1;
+      },
+      async completePlatformRequest({ text }) {
+        aiCalls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        return `answer:${text}`;
+      }
+    }
+  });
+  const makeContext = (id, owner = false) => ({
+    update: {
+      inline_query: {
+        id,
+        query: 'shared quota result',
+        from: { id: 771, language_code: 'en' }
+      }
+    },
+    answerInlineQuery: async () => {
+      if (owner) {
+        throw new Error('400: Bad Request: query is too old and response timeout expired');
+      }
+    }
+  });
+
+  const first = bot.handleInlineQuery(makeContext('shared-owner', true));
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  const second = bot.handleInlineQuery(makeContext('shared-joiner'));
+  await Promise.all([first, second]);
+
+  assert.equal(aiCalls, 1);
+  assert.equal(commits, 1);
+  assert.equal(refunds, 0);
+});
+
+test('a repeated Telegram inline query id never starts duplicate work', async () => {
+  let aiCalls = 0;
+  let answerCalls = 0;
+  const bot = createBot({
+    config: { inlineQueryDebounceMs: 1 },
+    methods: {
+      async completePlatformRequest() {
+        aiCalls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 80));
+        return 'one answer';
+      }
+    }
+  });
+  const context = {
+    update: {
+      inline_query: {
+        id: 'telegram-retry-id',
+        query: 'retry delivery',
+        from: { id: 7701, language_code: 'en' }
+      }
+    },
+    answerInlineQuery: async () => {
+      answerCalls += 1;
+    }
+  };
+
+  const first = bot.handleInlineQuery(context);
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  const duplicate = await bot.handleInlineQuery(context);
+  await first;
+
+  assert.equal(duplicate, false);
+  assert.equal(aiCalls, 1);
+  assert.equal(answerCalls, 1);
+});
+
 test('new inline input cancels an in-flight answer without waiting for it', async () => {
   const answers = [];
   const bot = createBot({
@@ -733,6 +859,21 @@ test('inline Telegram delivery is bounded and aborts a stuck API request', async
   assert.equal(calls, 1);
   assert.equal(signalSeen, true);
   assert.ok(Date.now() - startedAt < 1000);
+});
+
+test('inline delivery does not call Telegram after its absolute deadline', async () => {
+  const bot = createBot();
+  let calls = 0;
+
+  const delivered = await bot.answerInlineQuerySafely({
+    update: { inline_query: { id: 'already-stale' } },
+    async answerInlineQuery() {
+      calls += 1;
+    }
+  }, 'already-stale', [], { cache_time: 1, is_personal: true }, true, Date.now() - 1);
+
+  assert.equal(delivered, false);
+  assert.equal(calls, 0);
 });
 
 test('inline delivery does not retry non-transient Telegram errors', async () => {
@@ -1291,12 +1432,13 @@ test('inline current-information query prefetches web results and forces provide
   assert.equal(calls[0].type, 'rss');
   assert.equal(calls[0].query, '今日新闻');
   assert.ok(calls[0].options.signal instanceof AbortSignal);
-  assert.equal(calls[0].options.timeoutMs, 3500);
+  assert.ok(calls[0].options.timeoutMs > 0);
+  assert.ok(calls[0].options.timeoutMs < 3500, 'search must reserve time for AI and Telegram delivery');
   assert.equal(calls[1].type, 'ai');
   assert.equal(calls[1].options.fallbackEnabled, true);
   assert.ok(calls[1].options.signal instanceof AbortSignal);
   assert.ok(calls[1].options.requestTimeoutMs > 0);
-  assert.ok(calls[1].options.requestTimeoutMs <= 1400, 'one slow model must leave time for inline fallback');
+  assert.ok(calls[1].options.requestTimeoutMs <= 2200, 'one slow model must leave time for inline fallback');
   assert.match(calls[1].options.retrievedContext, /example\.com\/news/);
   assert.match(calls[1].options.role, /live-search/);
   assert.equal(answers[0].length, 5, 'digest plus four individual news results should be returned');
@@ -1313,6 +1455,55 @@ test('inline current-information query prefetches web results and forces provide
   assert.match(message.message_text, /https:\/\/example\.com\/news-1/);
   assert.doesNotMatch(message.message_text, /fake\.example|\*\*\*/);
   assert.equal(message.parse_mode, 'HTML');
+});
+
+test('inline search sends sourced results without starting doomed AI work near the deadline', async () => {
+  let aiCalls = 0;
+  let receivedSearchBudget = 0;
+  const answers = [];
+  const bot = createBot({
+    config: {
+      inlineQueryDebounceMs: 1,
+      inlineQueryResponseTimeoutMs: 1200,
+      inlineQuerySearchTimeoutMs: 800,
+      inlineQueryAiAttemptTimeoutMs: 1400
+    },
+    methods: {
+      async getInlineSearchContext({ timeoutMs }) {
+        receivedSearchBudget = timeoutMs;
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        return JSON.stringify({
+          results: [{
+            title: 'Verified result',
+            snippet: 'A sourced answer that is ready to send.',
+            url: 'https://example.com/verified'
+          }]
+        });
+      },
+      async completePlatformRequest() {
+        aiCalls += 1;
+        return 'must not start';
+      }
+    }
+  });
+
+  await bot.handleInlineQuery({
+    update: {
+      inline_query: {
+        id: 'source-before-deadline',
+        query: 'search deadline reliability',
+        from: { id: 802, language_code: 'en' }
+      }
+    },
+    answerInlineQuery: async (results, extra) => answers.push({ results, extra })
+  });
+
+  assert.ok(receivedSearchBudget > 0);
+  assert.ok(receivedSearchBudget < 800);
+  assert.equal(aiCalls, 0);
+  assert.match(answers[0].results[0].input_message_content.message_text, /Verified result/);
+  assert.match(answers[0].results[0].input_message_content.message_text, /example\.com\/verified/);
+  assert.deepEqual(answers[0].extra, { cache_time: 10, is_personal: true });
 });
 
 test('strict today news never falls back to an old undated web result', async () => {
