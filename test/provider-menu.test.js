@@ -13,6 +13,104 @@ test('provider menu exposes requested provider callbacks', () => {
   assert.match(source, /ai:auto/);
 });
 
+test('effective AI settings discard a retired persisted model', () => {
+  const settings = TelegramAIBot.prototype.getEffectiveAISettings.call(
+    {
+      db: {
+        getUserAISettings: () => ({
+          providerId: 'gemini',
+          modelId: 'gemini-retired-preview',
+          fallbackEnabled: true
+        })
+      },
+      config: {
+        defaultAIProvider: 'gemini',
+        aiProvider: 'gemini',
+        defaultModel: 'gemini-2.5-flash',
+        availableModels: ['gemini-2.5-flash']
+      },
+      providerManager: {
+        getProviderModels: () => ['gemini-2.5-flash', 'gemini-2.5-flash-lite']
+      }
+    },
+    42
+  );
+
+  assert.equal(settings.modelId, 'gemini-2.5-flash');
+});
+
+test('effective AI settings preserve a configured persisted model', () => {
+  const settings = TelegramAIBot.prototype.getEffectiveAISettings.call(
+    {
+      db: {
+        getUserAISettings: () => ({
+          providerId: 'gemini',
+          modelId: 'gemini-2.5-flash-lite',
+          fallbackEnabled: false
+        })
+      },
+      config: {
+        defaultAIProvider: 'gemini',
+        aiProvider: 'gemini',
+        defaultModel: 'gemini-2.5-flash',
+        availableModels: ['gemini-2.5-flash']
+      },
+      providerManager: {
+        getProviderModels: () => ['gemini-2.5-flash', 'gemini-2.5-flash-lite']
+      }
+    },
+    42
+  );
+
+  assert.equal(settings.modelId, 'gemini-2.5-flash-lite');
+  assert.equal(settings.fallbackEnabled, false);
+});
+
+test('help only advertises configured multimodal capabilities', () => {
+  const available = new Set(['vision']);
+  const lines = TelegramAIBot.prototype.buildHelpFeatureLines.call(
+    {
+      config: {
+        enableToolCalls: true,
+        enableWebSearch: true,
+        enableUrlFetch: true,
+        visionProvider: 'gemini',
+        imageProvider: 'openai-compatible',
+        transcriptionProvider: 'gemini-live',
+        ttsProvider: 'gemini-live'
+      },
+      hasConfiguredCapability: (capability) => available.has(capability),
+      isConfiguredToolAllowed: () => true
+    },
+    'zh'
+  );
+  const help = lines.join('\n');
+
+  assert.match(help, /实时信息/);
+  assert.match(help, /图片识别/);
+  assert.doesNotMatch(help, /- 图片创作/);
+  assert.doesNotMatch(help, /- 语音：/);
+  assert.match(help, /当前未配置或尚未实现：图片生成\/编辑、语音转写\/朗读/);
+});
+
+test('help does not advertise tools excluded by the configured allowlist', () => {
+  const bot = {
+    config: {
+      enableToolCalls: true,
+      enableWebSearch: true,
+      enableUrlFetch: true,
+      toolAllowedNames: new Set(['get_time'])
+    },
+    hasConfiguredCapability: () => false,
+    isConfiguredToolAllowed: TelegramAIBot.prototype.isConfiguredToolAllowed
+  };
+  const help = TelegramAIBot.prototype.buildHelpFeatureLines.call(bot, 'zh').join('\n');
+
+  assert.doesNotMatch(help, /- 实时信息/);
+  assert.doesNotMatch(help, /- 文件和网页/);
+  assert.match(help, /当前未配置或尚未实现：联网搜索/);
+});
+
 test('provider auth failures are not reported as missing configuration', () => {
   const error = new Error('All configured AI providers failed: anthropic/auth');
   error.code = 'AI_PROVIDERS_FAILED';

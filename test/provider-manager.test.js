@@ -138,7 +138,73 @@ test('AIProviderManager still switches Gemini models for model-scoped quota fail
     'gemini/gemini-model',
     'gemini/gemini-second-model'
   ]);
+  assert.equal(result.switched, true, 'using a backup model must be reported as a switch');
   assert.equal(manager.getCooldown('gemini', 'chat'), null, 'a model-scoped quota error must not cool every Gemini model');
+});
+
+test('AIProviderManager treats AI_PROVIDER_MAX_RETRIES as retries after the first attempt', async () => {
+  const calls = [];
+  const manager = new AIProviderManager({
+    config: baseConfig({ aiProviderMaxRetries: 1 }),
+    logger,
+    clientFactory: fakeFactory({
+      gemini: [
+        new Error('AI request failed (503): temporarily busy'),
+        { text: 'gemini recovered', messages: [{ role: 'assistant', content: 'gemini recovered' }] }
+      ]
+    }, calls)
+  });
+
+  const result = await manager.execute({
+    capability: 'chat',
+    preferredProvider: 'gemini',
+    preferredModel: 'gemini-model',
+    fallbackEnabled: false,
+    request: { messages: [{ role: 'user', content: 'hello' }], tools: [] }
+  });
+
+  assert.equal(result.providerId, 'gemini');
+  assert.equal(result.model, 'gemini-model');
+  assert.equal(result.switched, false);
+  assert.deepEqual(calls.map((item) => `${item.providerId}/${item.model}`), [
+    'gemini/gemini-model',
+    'gemini/gemini-model'
+  ]);
+  assert.deepEqual(result.attempted.map((item) => item.attempt), [1]);
+});
+
+test('AIProviderManager can disable same-model retries for deadline-bound inline work', async () => {
+  const calls = [];
+  const manager = new AIProviderManager({
+    config: baseConfig({
+      aiProviderMaxRetries: 3,
+      providerModels: {
+        gemini: ['gemini-model', 'gemini-second-model'],
+        groq: ['groq-model'],
+        openrouter: ['openrouter-model'],
+        huggingface: ['hf-model']
+      }
+    }),
+    logger,
+    clientFactory: fakeFactory({
+      gemini: [
+        new Error('AI request failed (503): temporarily busy'),
+        { text: 'backup recovered', messages: [{ role: 'assistant', content: 'backup recovered' }] }
+      ]
+    }, calls)
+  });
+
+  const result = await manager.execute({
+    capability: 'chat',
+    preferredProvider: 'gemini',
+    preferredModel: 'gemini-model',
+    fallbackEnabled: true,
+    maxRetries: 0,
+    request: { messages: [{ role: 'user', content: 'hello' }], tools: [] }
+  });
+
+  assert.equal(result.model, 'gemini-second-model');
+  assert.deepEqual(calls.map((item) => item.model), ['gemini-model', 'gemini-second-model']);
 });
 
 test('AIProviderManager tries a backup model after a per-attempt inline timeout', async () => {
@@ -330,7 +396,7 @@ for (const [failureType, failure] of [
 
 test('AIProviderManager does not cross providers when fallback is disabled', async () => {
   const manager = new AIProviderManager({
-    config: baseConfig(),
+    config: baseConfig({ aiProviderMaxRetries: 0 }),
     logger,
     clientFactory: fakeFactory({
       gemini: [new Error('AI request failed (503): busy')],
@@ -416,23 +482,56 @@ test('AIProviderManager reports setup problems separately from provider failures
 });
 
 test('AIProviderManager skips unconfigured providers', async () => {
+  const calls = [];
   const manager = new AIProviderManager({
     config: baseConfig({ geminiApiKey: '' }),
     logger,
     clientFactory: fakeFactory({
       groq: [{ text: 'groq ok', messages: [{ role: 'assistant', content: 'groq ok' }] }]
-    })
+    }, calls)
   });
 
   const result = await manager.execute({
     capability: 'chat',
-    preferredProvider: 'gemini',
+    preferredProvider: 'auto',
     preferredModel: 'gemini-model',
     fallbackEnabled: true,
     request: { messages: [{ role: 'user', content: 'hello' }], tools: [] }
   });
 
   assert.equal(result.providerId, 'groq');
+  assert.equal(result.switched, true, 'auto mode must report a switch away from its default provider');
+  assert.deepEqual(calls.map((item) => item.providerId), ['groq']);
+  assert.deepEqual(result.attempted, [{ providerId: 'gemini', status: 'unconfigured' }]);
+});
+
+test('AIProviderManager does not bypass disabled fallback when the default provider is unconfigured', async () => {
+  const calls = [];
+  const manager = new AIProviderManager({
+    config: baseConfig({
+      geminiApiKey: '',
+      aiProviderMaxRetries: 0
+    }),
+    logger,
+    clientFactory: fakeFactory({
+      groq: [{ text: 'must not run', messages: [] }]
+    }, calls)
+  });
+
+  await assert.rejects(
+    () => manager.execute({
+      capability: 'chat',
+      fallbackEnabled: false,
+      request: { messages: [{ role: 'user', content: 'hello' }], tools: [] }
+    }),
+    (error) => {
+      assert.equal(error.code, 'NO_USABLE_AI_PROVIDER');
+      assert.deepEqual(error.attemptedProviders, [{ providerId: 'gemini', status: 'unconfigured' }]);
+      return true;
+    }
+  );
+
+  assert.deepEqual(calls, []);
 });
 
 test('AIProviderManager strips tools for providers without tool calling', async () => {

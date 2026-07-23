@@ -28,6 +28,13 @@ function extractClassifyUserIntent() {
   );
 }
 
+function extractIncomingMessageHandler() {
+  return extractBetween(
+    '  async handleIncomingMessage(ctx) {',
+    '\n  async prepareUserMessage'
+  );
+}
+
 test('translation uses translation fallback scope', () => {
   const block = extractRunTranslation();
 
@@ -49,6 +56,7 @@ test('router uses router fallback scope and a real locale value', () => {
 test('fallback handles cooldown instead of pre-blocking primary model', () => {
   const translationBlock = extractRunTranslation();
   const routerBlock = extractClassifyUserIntent();
+  const incomingMessageBlock = extractIncomingMessageHandler();
 
   assert.doesNotMatch(
     translationBlock,
@@ -59,4 +67,15 @@ test('fallback handles cooldown instead of pre-blocking primary model', () => {
     routerBlock,
     /const cooldown = this\.getAiCooldown\('router', model\)/
   );
+
+  assert.doesNotMatch(
+    incomingMessageBlock,
+    /const chatCooldown = this\.getAiCooldown\('chat', model\)/
+  );
+  assert.match(
+    incomingMessageBlock,
+    /!this\.providerManager && this\.isAiQuotaError\(error\)/
+  );
+  assert.match(incomingMessageBlock, /completion\.model/);
+  assert.match(incomingMessageBlock, /已自动切换到 \$\{switchTarget\}/);
 });

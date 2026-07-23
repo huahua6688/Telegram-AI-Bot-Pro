@@ -29,7 +29,9 @@ ENABLE_USER_MODEL_SELECTION=true
 
 # Automatic fallback
 ENABLE_PROVIDER_FALLBACK=true
-AI_PROVIDER_FALLBACK_ORDER=gemini,openrouter,groq
+# 每个备用平台都必须配置自己的 API Key，才能真正跨平台切换
+AI_PROVIDER_FALLBACK_ORDER=gemini,groq,openrouter
+# 首次失败后的额外重试次数；1 表示每个模型最多尝试 2 次
 AI_PROVIDER_MAX_RETRIES=1
 AI_PROVIDER_RETRY_DELAY_MS=800
 AI_PROVIDER_COOLDOWN_MS=60000
@@ -44,7 +46,7 @@ GEMINI_FALLBACK_MODELS=gemini-2.5-flash-lite
 # OpenRouter free models
 OPENROUTER_API_KEY=
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-OPENROUTER_MODEL=tencent/hy3:free
+OPENROUTER_MODEL=openrouter/free
 OPENROUTER_FALLBACK_MODELS=poolside/laguna-xs-2.1:free,cohere/north-mini-code:free
 OPENROUTER_HTTP_REFERER=
 OPENROUTER_APP_TITLE=Telegram AI Bot Pro
@@ -57,11 +59,11 @@ GROQ_FALLBACK_MODELS=openai/gpt-oss-20b,llama-3.3-70b-versatile
 
 # Dedicated capability providers
 TRANSLATION_PROVIDER=gemini
-TRANSLATION_MODEL=gemini-3.1-flash-lite
+TRANSLATION_MODEL=gemini-2.5-flash-lite
 ROUTER_PROVIDER=gemini
-ROUTER_MODEL=gemini-3.1-flash-lite
+ROUTER_MODEL=gemini-2.5-flash-lite
 MEMORY_PROVIDER=gemini
-MEMORY_MODEL=gemini-3.1-flash-lite
+MEMORY_MODEL=gemini-2.5-flash-lite
 VISION_PROVIDER=gemini
 VISION_MODEL=gemini-2.5-flash
 TRANSCRIPTION_PROVIDER=gemini-live
@@ -77,6 +79,7 @@ GEMINI_LIVE_BASE_URL=https://generativelanguage.googleapis.com/v1beta
 GEMINI_LIVE_MODEL=
 GEMINI_LIVE_TRANSCRIPTION_MODEL=
 GEMINI_LIVE_TTS_MODEL=
+# 没有独立 GEMINI_LIVE_API_KEY 和兼容模型时保持关闭
 ENABLE_LIVE_AUDIO=false
 ENABLE_LIVE_TRANSLATE=false
 
@@ -90,6 +93,8 @@ ENABLE_WEB_SEARCH=true
 ENABLE_GEMINI_GOOGLE_SEARCH=true
 ENABLE_URL_FETCH=true
 ENABLE_STREAMING_REPLIES=true
+# 稳定实时搜索建议配置；无 Key 的搜索回退只提供尽力而为的结果
+BRAVE_SEARCH_API_KEY=
 
 # Limits
 MAX_HISTORY_MESSAGES=32
@@ -122,7 +127,7 @@ AI_FALLBACK_MODELS=
 | `BOT_TOKEN` | 必填 | 填 BotFather 给你的 Telegram Bot Token |
 | `ADMIN_USER_IDS` | 建议填 | 给机器人发 `/whoami`，复制数字 ID；多个管理员用英文逗号分隔 |
 | `GEMINI_API_KEY` | 必填 | 填 Google AI Studio 的 API Key |
-| `OPENROUTER_API_KEY` | 强烈建议 | 填 OpenRouter Key，用来走 `:free` 免费备用模型 |
+| `OPENROUTER_API_KEY` | 强烈建议 | 填 OpenRouter Key，用来走 `openrouter/free` 动态免费路由 |
 | `GROQ_API_KEY` | 可选 | 有 Groq Key 就填，没有就留空 |
 | `GEMINI_LIVE_API_KEY` | 可选 | 暂时不用实时语音就留空 |
 | `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`, `AI_FALLBACK_MODELS` | 留空 | 这是旧配置兼容位，留空可以避免干扰 `DEFAULT_AI_PROVIDER=auto` |
@@ -138,7 +143,7 @@ AI_FALLBACK_MODELS=
 | --- | --- | --- |
 | Gemini | `gemini-2.5-flash` | Google 官方价格页显示 Free Tier 输入和输出免费 |
 | Gemini 备用 | `gemini-2.5-flash-lite` | 免费层、限流和地区可能变化；如果控制台明确支持其他模型，再手动加入 |
-| OpenRouter | `tencent/hy3:free` | 当前 OpenRouter API 中显示为 `prompt=0`、`completion=0` 的免费模型 |
+| OpenRouter | `openrouter/free` | OpenRouter 官方动态免费路由；具体模型会随可用性变化，不保证生产稳定性 |
 | OpenRouter 备用 | `poolside/laguna-xs-2.1:free`, `cohere/north-mini-code:free` | 带 `:free` 的模型更适合做备用；免费模型可能会过期或下线 |
 | Groq | `llama-3.1-8b-instant` | 官方列为 Developer Plan 模型，有限额和价格，是否可用取决于账号 |
 
@@ -245,7 +250,7 @@ npm run verify
 
 代码部署后，还需要在 BotFather 的 Bot Settings 中为当前 Bot 开启对应平台模式。按钮详情页会根据 `getMe` 返回值显示 Inline、Guest、Guard、Secretary 的实际启用状态。访客、Inline 和 Secretary 的第三方消息不写入普通聊天记录或长期记忆。
 
-Inline Query 会在用户输入变化时不断产生 Telegram 更新。程序默认至少输入 2 个字符，并等待用户停止输入 1200ms 后只处理最后一次；空白或过短内容只显示输入提示，不调用搜索、AI 或额度。同一用户的相同问题缓存 60 秒，避免一句话重复消耗多次 AI 调用。每次查询最多占用 7 秒，其中联网预取最多等待 2.5 秒、单个 AI 模型最多等待 1.4 秒，并为 Telegram 回传结果保留时间；超时、模型 429/503 或新输入会立即切换/取消，避免回复已经失效的 Query ID。实时搜索优先使用 `BRAVE_SEARCH_API_KEY`，未配置或失败时会在剩余时限内回退到免密搜索。可通过 `INLINE_QUERY_MIN_CHARS`、`INLINE_QUERY_DEBOUNCE_MS`、`INLINE_QUERY_RESPONSE_TIMEOUT_MS`、`INLINE_QUERY_SEARCH_TIMEOUT_MS`、`INLINE_QUERY_AI_ATTEMPT_TIMEOUT_MS` 和 `INLINE_QUERY_CACHE_TTL_MS` 调整。
+Inline Query 会在用户输入变化时不断产生 Telegram 更新。程序默认至少输入 2 个字符，并等待用户停止输入 1200ms 后只处理最后一次；空白或过短内容只显示输入提示，不调用搜索、AI 或额度。同一用户的相同问题缓存 60 秒，避免一句话重复消耗多次 AI 调用。每次查询最多占用 8 秒，其中联网预取最多等待 2.3 秒、单个 AI 模型最多等待 2.2 秒，并为 Telegram 回传结果保留绝对投递截止时间；超时、模型 429/503 或新输入会立即切换/取消，避免回复已经失效的 Query ID。实时搜索优先使用 `BRAVE_SEARCH_API_KEY`，未配置或失败时会在剩余时限内回退到免密搜索。可通过 `INLINE_QUERY_MIN_CHARS`、`INLINE_QUERY_DEBOUNCE_MS`、`INLINE_QUERY_RESPONSE_TIMEOUT_MS`、`INLINE_QUERY_SEARCH_TIMEOUT_MS`、`INLINE_QUERY_AI_ATTEMPT_TIMEOUT_MS` 和 `INLINE_QUERY_CACHE_TTL_MS` 调整。
 
 ## English
 
@@ -276,7 +281,9 @@ ENABLE_USER_MODEL_SELECTION=true
 
 # Automatic fallback
 ENABLE_PROVIDER_FALLBACK=true
-AI_PROVIDER_FALLBACK_ORDER=gemini,openrouter,groq
+# Each fallback provider needs its own API key for real cross-provider failover
+AI_PROVIDER_FALLBACK_ORDER=gemini,groq,openrouter
+# Extra retries after the first failure; 1 means at most 2 attempts per model
 AI_PROVIDER_MAX_RETRIES=1
 AI_PROVIDER_RETRY_DELAY_MS=800
 AI_PROVIDER_COOLDOWN_MS=60000
@@ -291,7 +298,7 @@ GEMINI_FALLBACK_MODELS=gemini-2.5-flash-lite
 # OpenRouter free models
 OPENROUTER_API_KEY=
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-OPENROUTER_MODEL=tencent/hy3:free
+OPENROUTER_MODEL=openrouter/free
 OPENROUTER_FALLBACK_MODELS=poolside/laguna-xs-2.1:free,cohere/north-mini-code:free
 OPENROUTER_HTTP_REFERER=
 OPENROUTER_APP_TITLE=Telegram AI Bot Pro
@@ -304,11 +311,11 @@ GROQ_FALLBACK_MODELS=openai/gpt-oss-20b,llama-3.3-70b-versatile
 
 # Dedicated capability providers
 TRANSLATION_PROVIDER=gemini
-TRANSLATION_MODEL=gemini-3.1-flash-lite
+TRANSLATION_MODEL=gemini-2.5-flash-lite
 ROUTER_PROVIDER=gemini
-ROUTER_MODEL=gemini-3.1-flash-lite
+ROUTER_MODEL=gemini-2.5-flash-lite
 MEMORY_PROVIDER=gemini
-MEMORY_MODEL=gemini-3.1-flash-lite
+MEMORY_MODEL=gemini-2.5-flash-lite
 VISION_PROVIDER=gemini
 VISION_MODEL=gemini-2.5-flash
 TRANSCRIPTION_PROVIDER=gemini-live
@@ -324,6 +331,7 @@ GEMINI_LIVE_BASE_URL=https://generativelanguage.googleapis.com/v1beta
 GEMINI_LIVE_MODEL=
 GEMINI_LIVE_TRANSCRIPTION_MODEL=
 GEMINI_LIVE_TTS_MODEL=
+# Keep disabled without a separate GEMINI_LIVE_API_KEY and compatible models
 ENABLE_LIVE_AUDIO=false
 ENABLE_LIVE_TRANSLATE=false
 
@@ -337,6 +345,8 @@ ENABLE_WEB_SEARCH=true
 ENABLE_GEMINI_GOOGLE_SEARCH=true
 ENABLE_URL_FETCH=true
 ENABLE_STREAMING_REPLIES=true
+# Recommended for stable search; keyless fallback is best-effort only
+BRAVE_SEARCH_API_KEY=
 
 # Limits
 MAX_HISTORY_MESSAGES=32
@@ -369,7 +379,7 @@ AI_FALLBACK_MODELS=
 | `BOT_TOKEN` | Required | Your Telegram BotFather token |
 | `ADMIN_USER_IDS` | Recommended | Send `/whoami` to the bot and copy the numeric ID; separate multiple IDs with commas |
 | `GEMINI_API_KEY` | Required | Your Google AI Studio API key |
-| `OPENROUTER_API_KEY` | Strongly recommended | Your OpenRouter key for `:free` fallback models |
+| `OPENROUTER_API_KEY` | Strongly recommended | Your OpenRouter key for the `openrouter/free` dynamic free router |
 | `GROQ_API_KEY` | Optional | Fill it only if you have a Groq key |
 | `GEMINI_LIVE_API_KEY` | Optional | Leave blank unless you use live audio |
 | `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`, `AI_FALLBACK_MODELS` | Leave blank | Legacy compatibility fields; blank avoids overriding `DEFAULT_AI_PROVIDER=auto` |
@@ -383,7 +393,7 @@ AI_FALLBACK_MODELS=
 | --- | --- | --- |
 | Gemini | `gemini-2.5-flash` | Google pricing lists free input/output on the Free Tier |
 | Gemini fallback | `gemini-2.5-flash-lite` | Free tiers and limits can change; add other models only after confirming access in the console |
-| OpenRouter | `tencent/hy3:free` | Currently listed by OpenRouter with `prompt=0` and `completion=0` |
+| OpenRouter | `openrouter/free` | Official dynamic free router; the selected model varies with availability and is not production-grade |
 | OpenRouter fallback | `poolside/laguna-xs-2.1:free`, `cohere/north-mini-code:free` | Useful explicit free fallbacks; free models may expire or disappear |
 | Groq | `llama-3.1-8b-instant` | Developer Plan model; availability depends on your account |
 

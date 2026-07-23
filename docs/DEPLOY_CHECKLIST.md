@@ -13,13 +13,15 @@
 最少填写：
 
     BOT_TOKEN
-    AI_PROVIDER
+    DEFAULT_AI_PROVIDER=auto
     GEMINI_API_KEY
-    AI_MODEL
+    DEFAULT_AI_MODEL=gemini-2.5-flash
     ADMIN_USER_IDS
 
 推荐填写：
 
+    ENABLE_PROVIDER_FALLBACK=true
+    AI_PROVIDER_FALLBACK_ORDER=gemini,groq,openrouter
     PORT=8080
     HEALTH_PORT=8080
     DATABASE_FILE=/data/bot-data.db

@@ -75,6 +75,31 @@ test('loadConfig keeps Gemini Live separate from ordinary Gemini keys', () => {
   assert.equal(config.geminiLiveApiKey, '');
 });
 
+test('loadConfig keeps Live features disabled unless explicitly enabled', () => {
+  resetEnv();
+  delete process.env.ENABLE_LIVE_AUDIO;
+  delete process.env.ENABLE_LIVE_TRANSLATE;
+
+  let config = loadConfig();
+  assert.equal(config.enableLiveAudio, false);
+  assert.equal(config.enableLiveTranslate, false);
+
+  process.env.ENABLE_LIVE_AUDIO = 'true';
+  process.env.ENABLE_LIVE_TRANSLATE = 'true';
+  config = loadConfig();
+  assert.equal(config.enableLiveAudio, true);
+  assert.equal(config.enableLiveTranslate, true);
+});
+
+test('loadConfig uses the stable cross-provider fallback order by default', () => {
+  resetEnv();
+  process.env.DEFAULT_AI_PROVIDER = 'auto';
+  delete process.env.AI_PROVIDER_FALLBACK_ORDER;
+
+  const config = loadConfig();
+  assert.deepEqual(config.aiProviderFallbackOrder, ['gemini', 'groq', 'openrouter']);
+});
+
 test('loadConfig resolves first-batch native provider aliases', () => {
   resetEnv();
   process.env.AI_PROVIDER = 'xai';
@@ -255,9 +280,9 @@ test('loadConfig exposes safe Telegram platform mode defaults', () => {
   assert.equal(config.botCollaborationCooldownMs, 5000);
   assert.equal(config.inlineQueryDebounceMs, 1200);
   assert.equal(config.inlineQueryMinChars, 2);
-  assert.equal(config.inlineQueryResponseTimeoutMs, 7000);
-  assert.equal(config.inlineQuerySearchTimeoutMs, 2500);
-  assert.equal(config.inlineQueryAiAttemptTimeoutMs, 1400);
+  assert.equal(config.inlineQueryResponseTimeoutMs, 8000);
+  assert.equal(config.inlineQuerySearchTimeoutMs, 2300);
+  assert.equal(config.inlineQueryAiAttemptTimeoutMs, 2200);
   assert.equal(config.inlineQueryCacheTtlMs, 60000);
   assert.equal(config.newsRegion, 'MY');
   assert.equal(config.newsLanguage, 'auto');

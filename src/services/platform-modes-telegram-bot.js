@@ -51,7 +51,7 @@ function localText(locale, zh, en) {
 }
 
 function inlineResponseBudgetMs(config = {}) {
-  return Math.max(250, Number(config.inlineQueryResponseTimeoutMs) || 7000);
+  return Math.max(250, Number(config.inlineQueryResponseTimeoutMs) || 8000);
 }
 
 function inlineDeliveryBudgetMs(config = {}) {
@@ -59,6 +59,40 @@ function inlineDeliveryBudgetMs(config = {}) {
   // deliver them. Keep the normal delivery cap short and reserve it before
   // starting debounce/search/model work.
   return Math.max(250, Math.min(1200, Math.floor(inlineResponseBudgetMs(config) / 3)));
+}
+
+function inlineDeadlineSafetyMs(config = {}) {
+  // Leave a small gap for formatting, event-loop lag and Telegram transport
+  // overhead. Using the whole configured timeout made otherwise valid replies
+  // reach Telegram just as the query expired.
+  return Math.max(50, Math.min(350, Math.floor(inlineResponseBudgetMs(config) * 0.08)));
+}
+
+function inlineSearchWorkBudgetMs(config = {}, remainingMs = 0) {
+  const remaining = Math.max(1, Number(remainingMs) || 0);
+  const searchLimit = Math.max(100, Number(config.inlineQuerySearchTimeoutMs) || 2300);
+  const aiAttempt = Math.max(250, Number(config.inlineQueryAiAttemptTimeoutMs) || 2200);
+  const aiReserve = Math.min(aiAttempt, Math.max(350, Math.floor(remaining * 0.4)));
+  return Math.max(
+    100,
+    Math.min(
+      searchLimit,
+      Math.floor(remaining * 0.62),
+      Math.max(100, remaining - aiReserve)
+    )
+  );
+}
+
+function inlineAiAttemptBudgetMs(config = {}, remainingMs = 0) {
+  const remaining = Math.max(1, Number(remainingMs) || 0);
+  const attemptLimit = Math.max(250, Number(config.inlineQueryAiAttemptTimeoutMs) || 2200);
+  // Do not let a provider own the final formatting/delivery hand-off window.
+  return Math.max(1, Math.min(attemptLimit, remaining - 50));
+}
+
+function inlineMinimumAiStartBudgetMs(config = {}) {
+  const attemptLimit = Math.max(250, Number(config.inlineQueryAiAttemptTimeoutMs) || 2200);
+  return Math.max(250, Math.min(600, Math.floor(attemptLimit * 0.4)));
 }
 
 function inlineMinimumChars(config = {}) {
@@ -392,6 +426,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     this.inlineQueryStates = new Map();
     this.inlineResultCache = new Map();
     this.answeredInlineQueryIds = new Set();
+    this.processingInlineQueryIds = new Set();
     // Register before TelegramAIBot.registerCommands installs its catch-all
     // callback handler, otherwise these buttons would look unresponsive.
     this.bot.action(/^platform_mode:(.+)$/, (ctx) =>
@@ -588,6 +623,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     retrievedContextIsNews = false,
     requestTimeoutMs,
     signal,
+    maxRetries,
     accessAlreadyChecked = false,
     quotaAlreadyReserved = false,
     quotaReservation
@@ -664,6 +700,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
         fallbackEnabled: typeof fallbackEnabled === 'boolean' ? fallbackEnabled : settings.fallbackEnabled,
         model,
         locale,
+        maxRetries,
         request: {
           requestTimeoutMs,
           signal,
@@ -724,6 +761,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
       fallbackEnabled: true,
       model,
       locale,
+      maxRetries: 0,
       request: {
         requestTimeoutMs,
         signal,
@@ -862,13 +900,31 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     }
   }
 
-  async answerInlineQuerySafely(ctx, queryId, results, extra, retryOnTransient = true) {
+  async answerInlineQuerySafely(
+    ctx,
+    queryId,
+    results,
+    extra,
+    retryOnTransient = true,
+    deadlineAt = 0
+  ) {
     this.answeredInlineQueryIds ||= new Set();
     const normalizedQueryId = String(queryId || ctx.update?.inline_query?.id || '');
     if (normalizedQueryId && this.answeredInlineQueryIds.has(normalizedQueryId)) return false;
     if (normalizedQueryId) addBounded(this.answeredInlineQueryIds, normalizedQueryId, 1000);
 
-    const deliveryTimeoutMs = inlineDeliveryBudgetMs(this.config);
+    const configuredDeliveryTimeoutMs = inlineDeliveryBudgetMs(this.config);
+    const remainingDeliveryMs = Number(deadlineAt || 0) > 0
+      ? Number(deadlineAt) - Date.now()
+      : configuredDeliveryTimeoutMs;
+    if (remainingDeliveryMs < 50) {
+      this.logger?.info?.('Discarded inline query before late delivery', { queryId: normalizedQueryId });
+      return false;
+    }
+    const deliveryTimeoutMs = Math.max(
+      50,
+      Math.min(configuredDeliveryTimeoutMs, remainingDeliveryMs)
+    );
     const abortController = new AbortController();
     let deliveryTimedOut = false;
     let timeout;
@@ -902,12 +958,19 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
         if (normalizedQueryId) this.answeredInlineQueryIds.delete(normalizedQueryId);
         if (isInlineHtmlParseError(error)) {
           const plainResults = downgradeInlineHtmlResults(results);
-          if (plainResults.some((item, index) => item !== results[index])) {
-            return this.answerInlineQuerySafely(ctx, queryId, plainResults, extra, false);
+          if (
+            plainResults.some((item, index) => item !== results[index]) &&
+            (!deadlineAt || Number(deadlineAt) - Date.now() >= 100)
+          ) {
+            return this.answerInlineQuerySafely(ctx, queryId, plainResults, extra, false, deadlineAt);
           }
         }
-        if (retryOnTransient && isRetryableInlineDeliveryError(error)) {
-          return this.answerInlineQuerySafely(ctx, queryId, results, extra, false);
+        if (
+          retryOnTransient &&
+          isRetryableInlineDeliveryError(error) &&
+          (!deadlineAt || Number(deadlineAt) - Date.now() >= 100)
+        ) {
+          return this.answerInlineQuerySafely(ctx, queryId, results, extra, false, deadlineAt);
         }
         throw error;
       }
@@ -1067,6 +1130,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
   }
 
   async handleInlineQuery(ctx) {
+    const requestStartedAt = Date.now();
     const query = safeText(ctx.update.inline_query?.query, this.config.maxInputChars || 12000);
     const user = ctx.update.inline_query?.from || {};
     const userId = String(user.id || 'anonymous');
@@ -1083,29 +1147,118 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
         : searchQuery
           ? 'search'
           : 'answer';
+    const responseBudgetMs = inlineResponseBudgetMs(this.config);
+    const deliveryDeadlineAt = requestStartedAt + responseBudgetMs;
+    const deadlineAt = deliveryDeadlineAt -
+      inlineDeliveryBudgetMs(this.config) -
+      inlineDeadlineSafetyMs(this.config);
+    const remainingMs = () => Math.max(1, deadlineAt - Date.now());
     const state = this.getInlineQueryState(userId);
+    this.processingInlineQueryIds ||= new Set();
+    this.answeredInlineQueryIds ||= new Set();
+    if (
+      queryId &&
+      (
+        this.processingInlineQueryIds.has(queryId) ||
+        this.answeredInlineQueryIds.has(queryId)
+      )
+    ) {
+      return false;
+    }
+    if (queryId) addBounded(this.processingInlineQueryIds, queryId, 1000);
+    const releaseProcessingQuery = () => {
+      if (queryId) this.processingInlineQueryIds.delete(queryId);
+    };
+    const answerAndRelease = async (results, extra) => {
+      try {
+        return await this.answerInlineQuerySafely(
+          ctx,
+          queryId,
+          results,
+          extra,
+          true,
+          deliveryDeadlineAt
+        );
+      } finally {
+        releaseProcessingQuery();
+      }
+    };
+
+    const activeRun = query &&
+      Array.from(query).length >= inlineMinimumChars(this.config) &&
+      !translationIncomplete &&
+      state.running?.query === query &&
+      state.running?.responsePromise
+      ? state.running
+      : null;
+    if (activeRun) {
+      const joinedDelivery = (async () => {
+        let joinedResponse;
+        try {
+          joinedResponse = await this.runInlineWork(
+            () => activeRun.responsePromise,
+            { deadlineAt }
+          );
+        } catch (error) {
+          if (error?.code === 'INLINE_QUERY_DEADLINE') {
+            joinedResponse = {
+              results: [inlineArticle(
+                localText(
+                  locale,
+                  '这次处理时间较长，请稍后重试；较长的问题也可以直接私聊机器人。',
+                  'This request took too long. Please retry, or send longer questions directly to the bot.'
+                ),
+                query
+              )],
+              extra: { cache_time: 1, is_personal: true },
+              chargeable: false
+            };
+          } else if (error?.code === 'INLINE_QUERY_SUPERSEDED') {
+            joinedResponse = {
+              results: [],
+              extra: { cache_time: 1, is_personal: true },
+              chargeable: false
+            };
+          } else {
+            joinedResponse = {
+              results: [inlineArticle(this.formatUserFacingError(error, locale), PLATFORM_MODE_NAMES.inline)],
+              extra: { cache_time: 5, is_personal: true },
+              chargeable: false
+            };
+          }
+        }
+        const delivered = await answerAndRelease(joinedResponse.results, joinedResponse.extra);
+        if (delivered && joinedResponse.chargeable) activeRun.chargeableDelivered = true;
+        return delivered;
+      })();
+      activeRun.joinedDeliveries.add(joinedDelivery);
+      return joinedDelivery;
+    }
+
     state.abortController?.abort();
     const abortController = new AbortController();
     state.abortController = abortController;
     state.version += 1;
     state.latestQueryId = queryId;
     const version = state.version;
-    const responseBudgetMs = inlineResponseBudgetMs(this.config);
-    const deadlineAt = Date.now() + Math.max(
-      1,
-      responseBudgetMs - inlineDeliveryBudgetMs(this.config)
-    );
-    const remainingMs = () => Math.max(1, deadlineAt - Date.now());
-    const runToken = { version, queryId, query };
+    let resolveSharedResponse;
+    const runToken = {
+      version,
+      queryId,
+      query,
+      joinedDeliveries: new Set(),
+      chargeableDelivered: false,
+      responsePromise: new Promise((resolve) => {
+        resolveSharedResponse = resolve;
+      })
+    };
     const isLatest = () => state.version === version && state.latestQueryId === queryId;
 
     if (!query) {
       // Telegram always sends one empty inline_query as soon as @bot is opened.
       // Answer it without invoking AI/tools, and invalidate any pending typed query.
       if (state.abortController === abortController) state.abortController = null;
-      return this.answerInlineQuerySafely(
-        ctx,
-        queryId,
+      return answerAndRelease(
         [],
         { cache_time: 30, is_personal: true }
       );
@@ -1113,9 +1266,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
 
     if (Array.from(query).length < inlineMinimumChars(this.config)) {
       if (state.abortController === abortController) state.abortController = null;
-      return this.answerInlineQuerySafely(
-        ctx,
-        queryId,
+      return answerAndRelease(
         [inlineArticle(
           localText(locale, '请继续输入至少两个字符后再发送。', 'Keep typing a little more before sending.'),
           localText(locale, '继续输入', 'Continue typing')
@@ -1126,9 +1277,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
 
     if (translationIncomplete) {
       if (state.abortController === abortController) state.abortController = null;
-      return this.answerInlineQuerySafely(
-        ctx,
-        queryId,
+      return answerAndRelease(
         [inlineArticle(
           localText(
             locale,
@@ -1219,6 +1368,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
             quotaReserved = Boolean(quota.reserved || quota.admin);
           }
         }, { deadlineAt, signal: abortController.signal });
+        const searchWorkBudgetMs = inlineSearchWorkBudgetMs(this.config, remainingMs());
         const retrievedContext = translationRequest
           ? ''
           : await this.runInlineWork(
@@ -1227,10 +1377,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
                 query,
                 locale,
                 signal: abortController.signal,
-                timeoutMs: Math.min(
-                  remainingMs(),
-                  Number(this.config.inlineQuerySearchTimeoutMs) || 3500
-                )
+                timeoutMs: searchWorkBudgetMs
               }),
               { deadlineAt, signal: abortController.signal }
             );
@@ -1259,68 +1406,21 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
             extra: { cache_time: 5, is_personal: true }
           };
         } else {
-          try {
-            const answer = await this.runInlineWork(
-              () => translationRequest
-                ? this.completeInlineTranslation({
-                    userId,
-                    text: translationRequest.text,
-                    targetLanguage: translationRequest.targetLanguage,
-                    locale,
-                    requestTimeoutMs: Math.min(
-                      remainingMs(),
-                      Math.max(250, Number(this.config.inlineQueryAiAttemptTimeoutMs) || 1400)
-                    ),
-                    signal: abortController.signal
-                  })
-                : this.completePlatformRequest({
-                    userId,
-                    text: query,
-                    locale,
-                    scope: 'telegram_inline',
-                    role: retrievedContext ? 'inline live-search answer generator' : 'inline answer generator',
-                    fallbackEnabled: true,
-                    retrievedContext,
-                    retrievedContextIsNews: searchIsNews,
-                    requestTimeoutMs: Math.min(
-                      remainingMs(),
-                      Math.max(250, Number(this.config.inlineQueryAiAttemptTimeoutMs) || 1400)
-                    ),
-                    signal: abortController.signal,
-                    accessAlreadyChecked: true,
-                    quotaAlreadyReserved: quotaReserved
-                  }),
-              { deadlineAt, signal: abortController.signal }
-            );
-            const cleanAnswer = responseKind === 'translation'
-              ? cleanInlineTranslationOutput(answer, translationRequest?.text)
-              : cleanBotOutput(answer);
-            this.cacheInlineAnswer(userId, query, cleanAnswer, {
-              fingerprint: cacheFingerprint,
-              kind: responseKind,
-              context: retrievedContext
-            });
-            response = {
-              results: buildInlineResponseResults({
-                answer: cleanAnswer,
-                query,
-                kind: responseKind,
-                context: retrievedContext,
-                locale,
-                timeZone: this.config.newsTimeZone
-              }),
-              extra: { cache_time: 30, is_personal: true }
-            };
-            quotaShouldCommit = true;
-          } catch (error) {
-            if (error?.code === 'INLINE_QUERY_SUPERSEDED') throw error;
+          const useRetrievedSearchFallback = (error = null) => {
             const searchFallback = retrievedContext
               ? formatInlineSearchFallback(retrievedContext, locale, this.config.newsTimeZone)
               : '';
-            if (!searchFallback) throw error;
-            this.logger?.warn?.('Inline AI generation failed, using retrieved search results', {
-              error: this.formatLogError(error)
-            });
+            if (!searchFallback) return false;
+            if (error) {
+              this.logger?.warn?.('Inline AI generation failed, using retrieved search results', {
+                error: this.formatLogError(error)
+              });
+            } else {
+              this.logger?.info?.('Inline AI generation skipped to preserve delivery deadline', {
+                userId,
+                queryId
+              });
+            }
             const fallbackAnswer = searchIsNews
               ? localText(locale, '以下是搜索到的最新新闻：', 'Here is the latest sourced news:')
               : decodeHtmlText(searchFallback);
@@ -1342,6 +1442,67 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
               extra: { cache_time: 10, is_personal: true }
             };
             quotaShouldCommit = true;
+            return true;
+          };
+
+          if (
+            retrievedContext &&
+            remainingMs() < inlineMinimumAiStartBudgetMs(this.config)
+          ) {
+            useRetrievedSearchFallback();
+          } else {
+            try {
+              const answer = await this.runInlineWork(
+                () => translationRequest
+                  ? this.completeInlineTranslation({
+                      userId,
+                      text: translationRequest.text,
+                      targetLanguage: translationRequest.targetLanguage,
+                      locale,
+                      requestTimeoutMs: inlineAiAttemptBudgetMs(this.config, remainingMs()),
+                      signal: abortController.signal
+                    })
+                  : this.completePlatformRequest({
+                      userId,
+                      text: query,
+                      locale,
+                      scope: 'telegram_inline',
+                      role: retrievedContext ? 'inline live-search answer generator' : 'inline answer generator',
+                      fallbackEnabled: true,
+                      retrievedContext,
+                    retrievedContextIsNews: searchIsNews,
+                    requestTimeoutMs: inlineAiAttemptBudgetMs(this.config, remainingMs()),
+                    signal: abortController.signal,
+                    maxRetries: 0,
+                    accessAlreadyChecked: true,
+                      quotaAlreadyReserved: quotaReserved
+                    }),
+                { deadlineAt, signal: abortController.signal }
+              );
+              const cleanAnswer = responseKind === 'translation'
+                ? cleanInlineTranslationOutput(answer, translationRequest?.text)
+                : cleanBotOutput(answer);
+              this.cacheInlineAnswer(userId, query, cleanAnswer, {
+                fingerprint: cacheFingerprint,
+                kind: responseKind,
+                context: retrievedContext
+              });
+              response = {
+                results: buildInlineResponseResults({
+                  answer: cleanAnswer,
+                  query,
+                  kind: responseKind,
+                  context: retrievedContext,
+                  locale,
+                  timeZone: this.config.newsTimeZone
+                }),
+                extra: { cache_time: 30, is_personal: true }
+              };
+              quotaShouldCommit = true;
+            } catch (error) {
+              if (error?.code === 'INLINE_QUERY_SUPERSEDED') throw error;
+              if (!useRetrievedSearchFallback(error)) throw error;
+            }
           }
         }
       }
@@ -1383,6 +1544,13 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
         };
       }
     } finally {
+      if (!runToken.responseSettled) {
+        runToken.responseSettled = true;
+        resolveSharedResponse({
+          ...(response || { results: [], extra: { cache_time: 1, is_personal: true } }),
+          chargeable: quotaShouldCommit
+        });
+      }
       if (state.running === runToken) state.running = null;
       if (state.abortController === abortController) {
         abortController.abort();
@@ -1390,16 +1558,37 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
       }
     }
 
-    if (!quotaShouldCommit) await refundInlineQuota();
     let delivered = false;
-    try {
-      delivered = await this.answerInlineQuerySafely(ctx, queryId, response.results, response.extra);
-      if (delivered && quotaShouldCommit && inlineQuotaReservation) {
+    let quotaSettled = false;
+    const settleSharedInlineQuota = async () => {
+      if (quotaSettled) return;
+      quotaSettled = true;
+      await Promise.allSettled(Array.from(runToken.joinedDeliveries));
+      if (
+        quotaShouldCommit &&
+        runToken.chargeableDelivered &&
+        inlineQuotaReservation
+      ) {
         await this.commitUsageReservation(inlineQuotaReservation);
+        return;
       }
+      await refundInlineQuota();
+    };
+    try {
+      delivered = await this.answerInlineQuerySafely(
+        ctx,
+        queryId,
+        response.results,
+        response.extra,
+        true,
+        deliveryDeadlineAt
+      );
+      if (delivered && quotaShouldCommit) runToken.chargeableDelivered = true;
+      await settleSharedInlineQuota();
       return delivered;
     } finally {
-      if (!delivered) await refundInlineQuota();
+      await settleSharedInlineQuota();
+      releaseProcessingQuery();
     }
   }
 
@@ -1835,7 +2024,11 @@ export const platformModesInternals = {
   cleanInlineTranslationOutput,
   formatInlineNewsDigest,
   groupTriggerHelp,
+  inlineAiAttemptBudgetMs,
   inlineArticle,
+  inlineDeadlineSafetyMs,
+  inlineMinimumAiStartBudgetMs,
+  inlineSearchWorkBudgetMs,
   isIncompleteInlineTranslationQuery,
   isInlineNewsQuery,
   isRetryableInlineDeliveryError,

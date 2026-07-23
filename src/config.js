@@ -242,7 +242,7 @@ export function loadConfig() {
   providerModels[aiProvider] = compactList(defaultModel, providerModels[aiProvider] || [], fallbackModels);
   const fallbackOrder = normalizeProviderList(
     process.env.AI_PROVIDER_FALLBACK_ORDER,
-    compactList(aiProvider, 'gemini', 'groq', 'openrouter').map((item) => normalizeProvider(item, '')).filter(Boolean)
+    ['gemini', 'groq', 'openrouter']
   ).filter((item) => item !== 'auto');
   const databaseFile = path.resolve(process.cwd(), process.env.DATABASE_FILE || './data/bot-data.db');
   const legacyDataFile = path.resolve(process.cwd(), process.env.DATA_FILE || './data/bot-data.json');
@@ -343,8 +343,8 @@ export function loadConfig() {
     networkToolScope: (process.env.NETWORK_TOOL_SCOPE || 'all').toLowerCase(),
     networkToolAllowedUserIds: new Set(parseList(process.env.NETWORK_TOOL_ALLOWED_USER_IDS).map(String)),
     networkToolAllowedChatIds: new Set(parseList(process.env.NETWORK_TOOL_ALLOWED_CHAT_IDS).map(String)),
-    enableLiveAudio: parseBoolean(process.env.ENABLE_LIVE_AUDIO, true),
-    enableLiveTranslate: parseBoolean(process.env.ENABLE_LIVE_TRANSLATE, true),
+    enableLiveAudio: parseBoolean(process.env.ENABLE_LIVE_AUDIO, false),
+    enableLiveTranslate: parseBoolean(process.env.ENABLE_LIVE_TRANSLATE, false),
     enableVideo: parseBoolean(process.env.ENABLE_VIDEO, false),
     maxHistoryMessages: parseInteger(process.env.MAX_HISTORY_MESSAGES, 32),
     maxContextChars: parseInteger(process.env.MAX_CONTEXT_CHARS, 48000),
@@ -385,9 +385,9 @@ export function loadConfig() {
     botCollaborationCooldownMs: parseInteger(process.env.BOT_COLLABORATION_COOLDOWN_MS, 5000),
     inlineQueryDebounceMs: parseInteger(process.env.INLINE_QUERY_DEBOUNCE_MS, 1200),
     inlineQueryMinChars: Math.max(1, parseInteger(process.env.INLINE_QUERY_MIN_CHARS, 2)),
-    inlineQueryResponseTimeoutMs: parseInteger(process.env.INLINE_QUERY_RESPONSE_TIMEOUT_MS, 7000),
-    inlineQuerySearchTimeoutMs: parseInteger(process.env.INLINE_QUERY_SEARCH_TIMEOUT_MS, 2500),
-    inlineQueryAiAttemptTimeoutMs: parseInteger(process.env.INLINE_QUERY_AI_ATTEMPT_TIMEOUT_MS, 1400),
+    inlineQueryResponseTimeoutMs: parseInteger(process.env.INLINE_QUERY_RESPONSE_TIMEOUT_MS, 8000),
+    inlineQuerySearchTimeoutMs: parseInteger(process.env.INLINE_QUERY_SEARCH_TIMEOUT_MS, 2300),
+    inlineQueryAiAttemptTimeoutMs: parseInteger(process.env.INLINE_QUERY_AI_ATTEMPT_TIMEOUT_MS, 2200),
     inlineQueryCacheTtlMs: parseInteger(process.env.INLINE_QUERY_CACHE_TTL_MS, 60000),
     braveSearchApiKey: process.env.BRAVE_SEARCH_API_KEY || '',
     newsRegion: normalizeNewsRegion(process.env.NEWS_REGION),
