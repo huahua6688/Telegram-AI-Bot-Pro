@@ -3,6 +3,18 @@ import assert from 'node:assert/strict';
 import { loadConfig } from '../src/config.js';
 
 const ORIGINAL_ENV = { ...process.env };
+const SMART_ROUTING_ENV_SUFFIXES = [
+  'GENERAL',
+  'TRANSLATION',
+  'CODE',
+  'REASONING',
+  'LONG_CONTEXT',
+  'DOCUMENT',
+  'VISION',
+  'OCR',
+  'TOOL',
+  'CHEAP'
+];
 
 function resetEnv() {
   for (const key of Object.keys(process.env)) {
@@ -12,6 +24,16 @@ function resetEnv() {
   }
   for (const [key, value] of Object.entries(ORIGINAL_ENV)) {
     process.env[key] = value;
+  }
+}
+
+function clearSmartRoutingEnv() {
+  delete process.env.SMART_ROUTING_ENABLED;
+  delete process.env.SMART_ROUTING_DEBUG;
+  delete process.env.SMART_ROUTING_MIN_CONFIDENCE;
+  for (const suffix of SMART_ROUTING_ENV_SUFFIXES) {
+    delete process.env[`ROUTER_${suffix}_MODEL`];
+    delete process.env[`ROUTER_${suffix}_PROVIDER`];
   }
 }
 
@@ -188,6 +210,118 @@ test('legacy AI_API_KEY does not make unrelated fallback providers look configur
   assert.equal(config.grokApiKey, '');
   assert.equal(config.glmApiKey, '');
   assert.equal(config.doubaoApiKey, '');
+});
+
+test('loadConfig exposes safe Smart AI Router defaults', () => {
+  resetEnv();
+  clearSmartRoutingEnv();
+
+  const config = loadConfig();
+  const emptyRoutes = {
+    general: '',
+    translation: '',
+    code: '',
+    reasoning: '',
+    long_context: '',
+    document: '',
+    vision: '',
+    ocr: '',
+    tool: '',
+    cheap: ''
+  };
+
+  assert.equal(config.smartRoutingEnabled, true);
+  assert.equal(config.smartRoutingDebug, false);
+  assert.equal(config.smartRoutingMinConfidence, 0.55);
+  assert.deepEqual(config.smartRoutingModels, emptyRoutes);
+  assert.deepEqual(config.smartRoutingProviders, emptyRoutes);
+});
+
+test('loadConfig normalizes Smart AI Router providers and clamps confidence', () => {
+  resetEnv();
+  clearSmartRoutingEnv();
+  process.env.DEFAULT_AI_PROVIDER = 'auto';
+  process.env.SMART_ROUTING_ENABLED = 'false';
+  process.env.SMART_ROUTING_DEBUG = 'yes';
+  process.env.SMART_ROUTING_MIN_CONFIDENCE = '1.75';
+  process.env.ROUTER_CODE_PROVIDER = 'claude';
+  process.env.ROUTER_CODE_MODEL = 'code-special';
+  process.env.ROUTER_LONG_CONTEXT_PROVIDER = 'google';
+  process.env.ROUTER_LONG_CONTEXT_MODEL = 'context-special';
+  process.env.ROUTER_OCR_PROVIDER = 'github';
+  process.env.ROUTER_OCR_MODEL = 'ocr-special';
+
+  let config = loadConfig();
+  assert.equal(config.smartRoutingEnabled, false);
+  assert.equal(config.smartRoutingDebug, true);
+  assert.equal(config.smartRoutingMinConfidence, 1);
+  assert.equal(config.smartRoutingProviders.code, 'anthropic');
+  assert.equal(config.smartRoutingProviders.long_context, 'gemini');
+  assert.equal(config.smartRoutingProviders.ocr, 'github-models');
+  assert.ok(config.providerModels.anthropic.includes('code-special'));
+  assert.ok(config.providerModels.gemini.includes('context-special'));
+  assert.ok(config.providerModels['github-models'].includes('ocr-special'));
+
+  process.env.SMART_ROUTING_MIN_CONFIDENCE = '-0.2';
+  config = loadConfig();
+  assert.equal(config.smartRoutingMinConfidence, 0);
+
+  process.env.SMART_ROUTING_MIN_CONFIDENCE = 'not-a-number';
+  config = loadConfig();
+  assert.equal(config.smartRoutingMinConfidence, 0.55);
+});
+
+test('fixed providers associate blank-provider Smart route models with the shared provider', () => {
+  resetEnv();
+  clearSmartRoutingEnv();
+  process.env.DEFAULT_AI_PROVIDER = 'custom';
+  process.env.DEFAULT_AI_MODEL = 'hub-default';
+  process.env.ROUTER_GENERAL_MODEL = 'hub-general';
+  process.env.ROUTER_REASONING_MODEL = 'hub-reasoning';
+  process.env.ROUTER_TOOL_PROVIDER = 'unknown-provider';
+  process.env.ROUTER_TOOL_MODEL = 'must-not-be-associated';
+
+  const config = loadConfig();
+  assert.equal(config.aiProvider, 'openai-compatible');
+  assert.equal(config.smartRoutingProviders.general, '');
+  assert.equal(config.smartRoutingProviders.reasoning, '');
+  assert.equal(config.smartRoutingProviders.tool, '');
+  assert.ok(config.providerModels['openai-compatible'].includes('hub-general'));
+  assert.ok(config.providerModels['openai-compatible'].includes('hub-reasoning'));
+  assert.equal(config.providerModels['openai-compatible'].includes('must-not-be-associated'), false);
+});
+
+test('auto provider requires an explicit provider before associating a Smart route model', () => {
+  resetEnv();
+  clearSmartRoutingEnv();
+  process.env.DEFAULT_AI_PROVIDER = 'auto';
+  process.env.DEFAULT_AI_MODEL = 'auto-default';
+  process.env.ROUTER_CHEAP_MODEL = 'unpaired-cheap-model';
+
+  const config = loadConfig();
+  assert.equal(config.smartRoutingProviders.cheap, '');
+  assert.equal(
+    Object.values(config.providerModels).some((models) => models.includes('unpaired-cheap-model')),
+    false
+  );
+});
+
+test('Smart AI Router settings do not change the legacy intent router fields', () => {
+  resetEnv();
+  clearSmartRoutingEnv();
+  process.env.DEFAULT_AI_PROVIDER = 'gemini';
+  process.env.ENABLE_AI_ROUTER = 'true';
+  process.env.ROUTER_PROVIDER = 'google';
+  process.env.ROUTER_MODEL = 'legacy-intent-router';
+  process.env.ROUTER_GENERAL_PROVIDER = 'claude';
+  process.env.ROUTER_GENERAL_MODEL = 'smart-general';
+
+  const config = loadConfig();
+  assert.equal(config.enableAiRouter, true);
+  assert.equal(config.routerProvider, 'gemini');
+  assert.equal(config.routerModel, 'legacy-intent-router');
+  assert.equal(config.smartRoutingProviders.general, 'anthropic');
+  assert.equal(config.smartRoutingModels.general, 'smart-general');
 });
 
 test('loadConfig parses Telegram Stars products and independent free quotas', () => {

@@ -41,12 +41,33 @@ function parseInteger(value, defaultValue) {
   return Number.isFinite(parsed) ? parsed : defaultValue;
 }
 
+function parseUnitInterval(value, defaultValue) {
+  const raw = String(value ?? '').trim();
+  if (!raw) return defaultValue;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return defaultValue;
+  return Math.min(1, Math.max(0, parsed));
+}
+
 function parseList(value) {
   return (value ?? '')
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean);
 }
+
+const SMART_ROUTING_ROUTES = Object.freeze({
+  general: 'GENERAL',
+  translation: 'TRANSLATION',
+  code: 'CODE',
+  reasoning: 'REASONING',
+  long_context: 'LONG_CONTEXT',
+  document: 'DOCUMENT',
+  vision: 'VISION',
+  ocr: 'OCR',
+  tool: 'TOOL',
+  cheap: 'CHEAP'
+});
 
 const STAR_CREDIT_TYPES = Object.freeze([
   'chat',
@@ -173,6 +194,15 @@ export function loadConfig() {
   const aiProvider = normalizeProvider(
     process.env.DEFAULT_AI_PROVIDER || process.env.AI_PROVIDER || 'openai-compatible'
   );
+  const smartRoutingModels = {};
+  const smartRoutingProviders = {};
+  for (const [routeKey, envSuffix] of Object.entries(SMART_ROUTING_ROUTES)) {
+    smartRoutingModels[routeKey] = String(process.env[`ROUTER_${envSuffix}_MODEL`] || '').trim();
+    smartRoutingProviders[routeKey] = normalizeProvider(
+      process.env[`ROUTER_${envSuffix}_PROVIDER`],
+      ''
+    );
+  }
   const configuredFallbackModels = parseList(process.env.AI_FALLBACK_MODELS);
   const providerDefaultModels = {
     'openai-compatible': 'gpt-4.1-mini',
@@ -240,6 +270,19 @@ export function loadConfig() {
     providerDefaultModels[aiProvider] ||
     'gpt-4.1-mini';
   providerModels[aiProvider] = compactList(defaultModel, providerModels[aiProvider] || [], fallbackModels);
+  for (const [routeKey, envSuffix] of Object.entries(SMART_ROUTING_ROUTES)) {
+    const model = smartRoutingModels[routeKey];
+    const explicitProvider = smartRoutingProviders[routeKey];
+    const providerWasConfigured = Boolean(
+      String(process.env[`ROUTER_${envSuffix}_PROVIDER`] || '').trim()
+    );
+    const modelProvider = explicitProvider && explicitProvider !== 'auto'
+      ? explicitProvider
+      : (!providerWasConfigured && aiProvider !== 'auto' ? aiProvider : '');
+    if (model && modelProvider) {
+      providerModels[modelProvider] = compactList(providerModels[modelProvider] || [], model);
+    }
+  }
   const fallbackOrder = normalizeProviderList(
     process.env.AI_PROVIDER_FALLBACK_ORDER,
     ['gemini', 'groq', 'openrouter']
@@ -318,6 +361,11 @@ export function loadConfig() {
     memoryModel: process.env.MEMORY_MODEL || process.env.ROUTER_MODEL || defaultModel,
     visionProvider: normalizeProvider(process.env.VISION_PROVIDER || 'gemini', 'gemini'),
     visionModel: process.env.VISION_MODEL || providerModels.gemini?.[0] || defaultModel,
+    smartRoutingEnabled: parseBoolean(process.env.SMART_ROUTING_ENABLED, true),
+    smartRoutingDebug: parseBoolean(process.env.SMART_ROUTING_DEBUG, false),
+    smartRoutingMinConfidence: parseUnitInterval(process.env.SMART_ROUTING_MIN_CONFIDENCE, 0.55),
+    smartRoutingModels,
+    smartRoutingProviders,
     enableAiRouter: parseBoolean(process.env.ENABLE_AI_ROUTER, false),
     aiRouterMode: process.env.AI_ROUTER_MODE || 'single-pass',
     enableMemorySummary: parseBoolean(process.env.ENABLE_MEMORY_SUMMARY, true),

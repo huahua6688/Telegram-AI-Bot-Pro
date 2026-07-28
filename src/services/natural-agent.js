@@ -715,22 +715,50 @@ function modelName(bot, ctx) {
   return settings.modelId || bot.config?.routerModel || bot.config?.translationModel || bot.config?.defaultModel || '';
 }
 
-function providerId(bot, ctx) {
+function resolveCompletionTarget(bot, ctx, {
+  text = '',
+  mode = 'chat',
+  conversationContext = {},
+  requiredCapability = 'chat',
+  allowToolCalls = false
+} = {}) {
   const settings = getEffectiveAISettings(bot, ctx);
-  return settings.providerId || bot.config?.aiProvider || '';
-}
+  const original = {
+    provider: settings.providerId || bot.config?.aiProvider || '',
+    model:
+      settings.modelId ||
+      bot.config?.routerModel ||
+      bot.config?.translationModel ||
+      bot.config?.defaultModel ||
+      '',
+    fallbackEnabled: Object.hasOwn(settings, 'fallbackEnabled')
+      ? Boolean(settings.fallbackEnabled)
+      : Boolean(bot.config?.enableProviderFallback)
+  };
+  if (typeof bot.resolveSmartModelRoute !== 'function') return original;
 
-function fallbackEnabled(bot, ctx) {
-  const settings = getEffectiveAISettings(bot, ctx);
-  return Object.hasOwn(settings, 'fallbackEnabled')
-    ? Boolean(settings.fallbackEnabled)
-    : Boolean(bot.config?.enableProviderFallback);
+  const routed = bot.resolveSmartModelRoute({
+    text,
+    messageType: 'text',
+    attachmentType: '',
+    mode,
+    settings,
+    conversationContext,
+    requiredCapability,
+    allowToolCalls,
+    userId: ctx.from?.id,
+    chatId: ctx.chat?.id
+  });
+  return {
+    provider: routed?.provider || routed?.providerId || original.provider,
+    model: routed?.model || routed?.modelId || original.model,
+    fallbackEnabled: original.fallbackEnabled
+  };
 }
 
 
 async function composeHumanAnswer(bot, ctx, { userText, toolName, raw, title }) {
   const locale = bot.getLocale(ctx);
-  const model = modelName(bot, ctx);
   const payload = compactToolPayload(raw);
   const recentContext = getRecentContext(bot, ctx);
   const personaInstruction = getPersonaInstruction(bot, ctx);
@@ -740,12 +768,25 @@ async function composeHumanAnswer(bot, ctx, { userText, toolName, raw, title }) 
   }
 
   try {
+    const target = resolveCompletionTarget(bot, ctx, {
+      text: userText,
+      mode: toolName === 'web_search' ? 'web_research' : 'tool_calling',
+      conversationContext: {
+        hasRetrievedContext: true,
+        toolName: String(toolName || ''),
+        historyChars: recentContext.length,
+        retrievedContextChars: payload.length,
+        totalChars: recentContext.length + payload.length + String(userText || '').length
+      },
+      requiredCapability: 'chat',
+      allowToolCalls: false
+    });
     const completion = await bot.completeWithAiFallback({
       scope: 'answer_composer',
       userId: ctx.from?.id,
-      preferredProvider: providerId(bot, ctx),
-      fallbackEnabled: fallbackEnabled(bot, ctx),
-      model,
+      preferredProvider: target.provider,
+      fallbackEnabled: target.fallbackEnabled,
+      model: target.model,
       locale,
       request: {
         messages: [
@@ -1045,18 +1086,28 @@ async function continueFromContext(bot, ctx, text = '') {
     return true;
   }
 
-  const model = modelName(bot, ctx);
   const followupPersonaInstruction = getPersonaInstruction(bot, ctx);
 
   try {
     await ctx.sendChatAction('typing');
 
+    const target = resolveCompletionTarget(bot, ctx, {
+      text,
+      mode: 'chat',
+      conversationContext: {
+        hasHistory: true,
+        historyChars: recentContext.length,
+        totalChars: recentContext.length + String(text || '').length
+      },
+      requiredCapability: 'chat',
+      allowToolCalls: false
+    });
     const completion = await bot.completeWithAiFallback({
       scope: 'follow_up',
       userId: ctx.from?.id,
-      preferredProvider: providerId(bot, ctx),
-      fallbackEnabled: fallbackEnabled(bot, ctx),
-      model,
+      preferredProvider: target.provider,
+      fallbackEnabled: target.fallbackEnabled,
+      model: target.model,
       locale,
       request: {
         messages: [
@@ -1091,7 +1142,7 @@ async function continueFromContext(bot, ctx, text = '') {
     if (!answer) return false;
 
     await replyPlain(ctx, answer, bot.config.maxOutputChars);
-    await rememberHandledInteraction(bot, ctx, text, answer, model);
+    await rememberHandledInteraction(bot, ctx, text, answer, target.model);
     return true;
   } catch (error) {
     await bot.refundQuotaForContext?.(ctx);

@@ -37,6 +37,11 @@ test('effective AI settings discard a retired persisted model', () => {
   );
 
   assert.equal(settings.modelId, 'gemini-2.5-flash');
+  assert.equal(settings.rawProviderId, 'gemini');
+  assert.equal(settings.rawModelId, 'gemini-retired-preview');
+  assert.equal(settings.manualProvider, true);
+  assert.equal(settings.manualModel, true);
+  assert.equal(settings.autoRouting, false);
 });
 
 test('effective AI settings preserve a configured persisted model', () => {
@@ -64,6 +69,105 @@ test('effective AI settings preserve a configured persisted model', () => {
 
   assert.equal(settings.modelId, 'gemini-2.5-flash-lite');
   assert.equal(settings.fallbackEnabled, false);
+  assert.equal(settings.manualProvider, true);
+  assert.equal(settings.manualModel, true);
+  assert.equal(settings.autoRouting, false);
+});
+
+test('blank canonical settings use Smart automatic routing without becoming a manual override', () => {
+  const makeSettings = (defaultAIProvider) => TelegramAIBot.prototype.getEffectiveAISettings.call(
+    {
+      db: {
+        getUserAISettings: () => ({
+          providerId: '',
+          modelId: '',
+          fallbackEnabled: true,
+          updatedAt: ''
+        })
+      },
+      config: {
+        defaultAIProvider,
+        aiProvider: defaultAIProvider,
+        defaultModel: 'default-model',
+        availableModels: ['default-model']
+      },
+      providerManager: {
+        getProviderModels: () => ['default-model']
+      }
+    },
+    42
+  );
+
+  const automatic = makeSettings('auto');
+  assert.equal(automatic.providerId, 'auto');
+  assert.equal(automatic.autoRouting, true);
+  assert.equal(automatic.manualProvider, false);
+  assert.equal(automatic.manualModel, false);
+
+  const manualDefault = makeSettings('gemini');
+  assert.equal(manualDefault.providerId, 'gemini');
+  assert.equal(manualDefault.autoRouting, true);
+  assert.equal(manualDefault.manualProvider, false);
+  assert.equal(manualDefault.manualModel, false);
+});
+
+test('explicit automatic provider is canonical even when the configured default is manual', () => {
+  const settings = TelegramAIBot.prototype.getEffectiveAISettings.call(
+    {
+      db: {
+        getUserAISettings: () => ({
+          providerId: 'auto',
+          modelId: '',
+          fallbackEnabled: true
+        })
+      },
+      config: {
+        defaultAIProvider: 'gemini',
+        aiProvider: 'gemini',
+        defaultModel: 'gemini-2.5-flash',
+        availableModels: ['gemini-2.5-flash']
+      },
+      providerManager: {
+        getProviderModels: () => []
+      }
+    },
+    42
+  );
+
+  assert.equal(settings.rawProviderId, 'auto');
+  assert.equal(settings.providerId, 'auto');
+  assert.equal(settings.autoRouting, true);
+  assert.equal(settings.manualProvider, false);
+});
+
+test('a fixed model under the auto provider remains visible as a manual model', () => {
+  const settings = TelegramAIBot.prototype.getEffectiveAISettings.call(
+    {
+      db: {
+        getUserAISettings: () => ({
+          providerId: 'auto',
+          modelId: 'shared-model',
+          fallbackEnabled: false
+        })
+      },
+      config: {
+        defaultAIProvider: 'auto',
+        aiProvider: 'auto',
+        defaultModel: 'shared-model',
+        availableModels: ['shared-model']
+      },
+      providerManager: {
+        getProviderModels: () => ['shared-model']
+      }
+    },
+    42
+  );
+
+  assert.equal(settings.providerId, 'auto');
+  assert.equal(settings.modelId, 'shared-model');
+  assert.equal(settings.autoRouting, false);
+  assert.equal(settings.manualProvider, false);
+  assert.equal(settings.manualModel, true);
 });
 
 test('help only advertises configured multimodal capabilities', () => {

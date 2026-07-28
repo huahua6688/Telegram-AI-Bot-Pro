@@ -652,7 +652,24 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
 
     try {
       const settings = this.getEffectiveAISettings(normalizedUserId);
-      const model = settings.modelId || this.config.defaultModel;
+      const smartRoute = this.resolveSmartModelRoute({
+        text: prompt,
+        messageType: 'text',
+        attachmentType: '',
+        mode: scope,
+        settings,
+        conversationContext: {
+          scope,
+          role: String(role || ''),
+          hasRetrievedContext: Boolean(retrievedContext),
+          retrievedContextIsNews: Boolean(retrievedContextIsNews)
+        },
+        requiredCapability: 'chat',
+        allowToolCalls: !retrievedContext && Boolean(this.config.enableToolCalls),
+        userId: normalizedUserId,
+        chatId: normalizedChatId
+      });
+      const model = smartRoute.model || smartRoute.modelId || settings.modelId || this.config.defaultModel;
       const tools = !retrievedContext && this.config.enableToolCalls && this.toolRegistry?.getDefinitions
         ? this.toolRegistry.getDefinitions()
         : [];
@@ -696,7 +713,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
         scope,
         capability: 'chat',
         userId: normalizedUserId,
-        preferredProvider: settings.providerId,
+        preferredProvider: smartRoute.provider || smartRoute.providerId || settings.providerId,
         fallbackEnabled: typeof fallbackEnabled === 'boolean' ? fallbackEnabled : settings.fallbackEnabled,
         model,
         locale,
@@ -752,13 +769,41 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     const targetInstruction = targetLanguage === 'auto'
       ? 'Detect the source language. If it is Chinese, translate it into natural English; otherwise translate it into natural Simplified Chinese.'
       : `Translate the source text into ${targetLanguage}.`;
-    const model = this.config.translationModel || this.config.defaultModel;
+    const settings = this.getEffectiveAISettings(String(userId || ''));
+    const smartRoute = this.resolveSmartModelRoute({
+      text: sourceText,
+      messageType: 'text',
+      attachmentType: '',
+      mode: 'translation',
+      modeSelection: {
+        provider: this.config.translationProvider,
+        model: this.config.translationModel || this.config.defaultModel
+      },
+      settings,
+      conversationContext: {
+        targetLanguage: String(targetLanguage || 'auto'),
+        totalChars: sourceText.length,
+        source: 'telegram_inline_translation'
+      },
+      requiredCapability: 'chat',
+      allowToolCalls: false,
+      userId: String(userId || ''),
+      chatId: ''
+    });
+    const model =
+      smartRoute.model ||
+      smartRoute.modelId ||
+      this.config.translationModel ||
+      this.config.defaultModel;
     const completion = await this.completeWithAiFallback({
       scope: 'translation',
       capability: 'translation',
       userId: String(userId || ''),
-      preferredProvider: this.config.translationProvider,
-      fallbackEnabled: true,
+      preferredProvider:
+        smartRoute.provider ||
+        smartRoute.providerId ||
+        this.config.translationProvider,
+      fallbackEnabled: settings.fallbackEnabled,
       model,
       locale,
       maxRetries: 0,
@@ -854,7 +899,20 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
       customSystemPrompt: user.customSystemPrompt || '',
       providerId: settings.providerId || '',
       modelId: settings.modelId || '',
+      rawProviderId: settings.rawProviderId || '',
+      rawModelId: settings.rawModelId || '',
+      manualProvider: Boolean(settings.manualProvider),
+      manualModel: Boolean(settings.manualModel),
+      autoRouting: Boolean(settings.autoRouting),
       fallbackEnabled: Boolean(settings.fallbackEnabled),
+      smartRoutingPolicyVersion:
+        this.aiModelRouter?.policyVersion ||
+        this.aiModelRouter?.version ||
+        'smart-router-v1',
+      smartRoutingEnabled: this.config.smartRoutingEnabled !== false,
+      smartRoutingMinConfidence: Number(this.config.smartRoutingMinConfidence) || 0,
+      smartRoutingModels: this.config.smartRoutingModels || {},
+      smartRoutingProviders: this.config.smartRoutingProviders || {},
       kind,
       translationProvider: kind === 'translation' ? this.config.translationProvider || '' : '',
       translationModel: kind === 'translation' ? this.config.translationModel || this.config.defaultModel || '' : '',

@@ -26,6 +26,83 @@
     DATA_FILE            旧数据文件路径
     ADMIN_API_ENABLED    Admin API 开关
 
+## Smart AI Router
+
+Smart AI Router 会按任务类型选择已配置的目标模型。它默认开启：
+
+```env
+SMART_ROUTING_ENABLED=true
+SMART_ROUTING_DEBUG=false
+SMART_ROUTING_MIN_CONFIDENCE=0.55
+```
+
+- `SMART_ROUTING_ENABLED=false`：跳过 Smart 任务路由，直接使用后续的默认 Provider / 模型流程。
+- `SMART_ROUTING_DEBUG=true`：输出路由诊断信息，适合部署调试；日常使用建议关闭。
+- `SMART_ROUTING_MIN_CONFIDENCE`：接受 Smart 规则结果的最低置信度，默认 `0.55`；配置会安全限制在 `0` 到 `1`，无效值回到默认值。
+
+可配置的任务路由如下。模型 ID 必须从对应 Provider 控制台复制；模板不内置或猜测新的模型 ID：
+
+```env
+ROUTER_GENERAL_PROVIDER=
+ROUTER_GENERAL_MODEL=
+ROUTER_TRANSLATION_PROVIDER=
+ROUTER_TRANSLATION_MODEL=
+ROUTER_CODE_PROVIDER=
+ROUTER_CODE_MODEL=
+ROUTER_REASONING_PROVIDER=
+ROUTER_REASONING_MODEL=
+ROUTER_LONG_CONTEXT_PROVIDER=
+ROUTER_LONG_CONTEXT_MODEL=
+ROUTER_DOCUMENT_PROVIDER=
+ROUTER_DOCUMENT_MODEL=
+ROUTER_VISION_PROVIDER=
+ROUTER_VISION_MODEL=
+ROUTER_OCR_PROVIDER=
+ROUTER_OCR_MODEL=
+ROUTER_TOOL_PROVIDER=
+ROUTER_TOOL_MODEL=
+ROUTER_CHEAP_PROVIDER=
+ROUTER_CHEAP_MODEL=
+```
+
+路由键分别对应通用聊天、翻译、代码、推理、长上下文、文档、视觉、OCR、工具调用和低成本任务。
+
+### 优先级与配置规则
+
+请求选择顺序为：
+
+1. 用户明确选择的模型
+2. 用户明确选择的 Provider
+3. 翻译、视觉/媒体等专用功能或模式的 Provider + 模型；需要时这些模式会绕过 Smart 路由
+4. Smart 规则命中的任务目标
+5. 默认 Provider + 模型
+6. 请求失败后，按原有顺序尝试同 Provider 的备用模型，再按 `AI_PROVIDER_FALLBACK_ORDER` 跨 Provider 回退
+
+Smart 路由只决定首次目标，不会改变 `ENABLE_PROVIDER_FALLBACK`、备用模型列表、重试次数或跨 Provider 回退顺序。
+
+- `DEFAULT_AI_PROVIDER=auto` 时，每个非空的 `ROUTER_*_MODEL` 都必须同时配置对应的具体 `ROUTER_*_PROVIDER`。只填模型无法安全判断它属于哪个平台。
+- `DEFAULT_AI_PROVIDER` 是固定、非 `auto` Provider 时，`ROUTER_*_PROVIDER` 可以留空；对应任务模型会归入这个固定 Provider，同一个 Key / 网关可以使用多个模型。
+- Provider 别名会规范化，例如 `google` → `gemini`、`claude` → `anthropic`、`custom` → `openai-compatible`。
+
+### 与旧 AI intent router 的区别
+
+`ENABLE_AI_ROUTER`、`AI_ROUTER_MODE`、`ROUTER_PROVIDER` 和 `ROUTER_MODEL` 属于旧的 LLM intent router：它调用专用模型判断意图。`SMART_ROUTING_*` 和 `ROUTER_<TASK>_*` 属于新的按任务选模型功能。两套变量不是别名，旧变量的行为保持不变，也可以继续独立使用。
+
+### AI Hub / OpenAI-compatible 网关
+
+AI Hub 按标准 OpenAI-compatible Provider 配置，不使用代码内置的 Zeabur URL：
+
+```env
+DEFAULT_AI_PROVIDER=openai-compatible
+AI_API_KEY=
+AI_BASE_URL=
+AI_MODEL=
+```
+
+请把 AI Hub 控制台提供的完整 API Base URL 填入 `AI_BASE_URL`。固定使用 `openai-compatible` 时，可以保持各 `ROUTER_*_PROVIDER` 为空，只填写该 Hub 实际支持的任务模型 ID；所有这些模型会共用同一个 `AI_API_KEY` 和 `AI_BASE_URL`。如果默认 Provider 为 `auto`，则每组任务配置都应显式写 `ROUTER_*_PROVIDER=openai-compatible`。
+
+Gemini Live 仍只走 Google 官方 Gemini Live API，并使用独立的 `GEMINI_LIVE_API_KEY` 与兼容 Live 模型。第三方 OpenAI-compatible Hub 不能冒充 `gemini-live`；实时语音等专用模式需要时会绕过 Smart 路由。
+
 ## Telegram 扩展模式
 
 代码已支持 Inline Mode、Guest Chat Mode、Guard Mode、Secretary Mode 和 Bot-to-Bot Communication。

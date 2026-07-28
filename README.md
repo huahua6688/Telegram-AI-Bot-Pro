@@ -83,7 +83,33 @@ GEMINI_LIVE_TTS_MODEL=
 ENABLE_LIVE_AUDIO=false
 ENABLE_LIVE_TRANSLATE=false
 
+# Smart AI Router（任务选模型；模型 ID 从自己的 Provider 控制台复制）
+SMART_ROUTING_ENABLED=true
+SMART_ROUTING_DEBUG=false
+SMART_ROUTING_MIN_CONFIDENCE=0.55
+ROUTER_GENERAL_PROVIDER=
+ROUTER_GENERAL_MODEL=
+ROUTER_TRANSLATION_PROVIDER=
+ROUTER_TRANSLATION_MODEL=
+ROUTER_CODE_PROVIDER=
+ROUTER_CODE_MODEL=
+ROUTER_REASONING_PROVIDER=
+ROUTER_REASONING_MODEL=
+ROUTER_LONG_CONTEXT_PROVIDER=
+ROUTER_LONG_CONTEXT_MODEL=
+ROUTER_DOCUMENT_PROVIDER=
+ROUTER_DOCUMENT_MODEL=
+ROUTER_VISION_PROVIDER=
+ROUTER_VISION_MODEL=
+ROUTER_OCR_PROVIDER=
+ROUTER_OCR_MODEL=
+ROUTER_TOOL_PROVIDER=
+ROUTER_TOOL_MODEL=
+ROUTER_CHEAP_PROVIDER=
+ROUTER_CHEAP_MODEL=
+
 # Features
+# 下面两项是旧 LLM intent router，不是 SMART_ROUTING_ENABLED
 ENABLE_AI_ROUTER=false
 AI_ROUTER_MODE=single-pass
 ENABLE_MEMORY_SUMMARY=true
@@ -184,6 +210,22 @@ Claude、OpenAI、DeepSeek、Qwen、Grok、GLM、Doubao、Mistral、Hugging Face
 - 发链接：自动抓取网页并总结
 
 如果要切换 Provider 或模型，进入 `设置 -> 模型`。选择会保存到 SQLite，重启后仍然有效。
+
+## Smart AI Router（任务选模型）
+
+`SMART_ROUTING_ENABLED=true` 默认按通用、翻译、代码、推理、长上下文、文档、视觉、OCR、工具和低成本任务选择配置的模型。设为 `false` 会跳过这层路由；`SMART_ROUTING_DEBUG` 用于诊断，`SMART_ROUTING_MIN_CONFIDENCE` 默认 `0.55`，无效值回到默认值，超出范围会限制到 `0`–`1`。
+
+实际选择优先级是：用户明确模型 → 用户明确 Provider → 翻译、视觉/媒体等专用功能或模式 → Smart 任务目标 → 默认 Provider / 模型 → 请求失败后的原有备用链。需要固定模型的专用模式会绕过 Smart 路由。Smart 路由只选择首次目标，不会改变 `ENABLE_PROVIDER_FALLBACK`、同 Provider 备用模型或 `AI_PROVIDER_FALLBACK_ORDER`。
+
+配置时注意：
+
+- `DEFAULT_AI_PROVIDER=auto`：每个非空 `ROUTER_*_MODEL` 必须与具体的 `ROUTER_*_PROVIDER` 成对填写。
+- 固定的非 `auto` 默认 Provider：任务 Provider 可以留空；多个任务模型会共用该 Provider 的 Key 和 Base URL。
+- `ENABLE_AI_ROUTER`、`ROUTER_PROVIDER`、`ROUTER_MODEL` 是旧的 LLM intent router，和新的 `SMART_ROUTING_*` / `ROUTER_<TASK>_*` 不是别名，旧行为保持不变。
+
+Zeabur AI Hub 按标准 OpenAI-compatible Provider 使用：设置 `DEFAULT_AI_PROVIDER=openai-compatible`，将自己的 Key 填入 `AI_API_KEY`，并把 AI Hub 控制台提供的完整 Base URL 填入 `AI_BASE_URL`。项目不硬编码 Zeabur AI Hub URL。这样一个 AI Hub Key 可以配多个任务模型；若默认 Provider 仍是 `auto`，每组 Hub 任务模型还要写 `ROUTER_*_PROVIDER=openai-compatible`。
+
+Gemini Live 只支持 Google 官方 Gemini Live API，必须使用独立的 `GEMINI_LIVE_API_KEY` 和兼容 Live 模型；不要把第三方 OpenAI-compatible / AI Hub 地址当作 `gemini-live`。
 
 ## 自动切换说明
 
@@ -335,7 +377,33 @@ GEMINI_LIVE_TTS_MODEL=
 ENABLE_LIVE_AUDIO=false
 ENABLE_LIVE_TRANSLATE=false
 
+# Smart AI Router (task-to-model routing; copy model IDs from your provider)
+SMART_ROUTING_ENABLED=true
+SMART_ROUTING_DEBUG=false
+SMART_ROUTING_MIN_CONFIDENCE=0.55
+ROUTER_GENERAL_PROVIDER=
+ROUTER_GENERAL_MODEL=
+ROUTER_TRANSLATION_PROVIDER=
+ROUTER_TRANSLATION_MODEL=
+ROUTER_CODE_PROVIDER=
+ROUTER_CODE_MODEL=
+ROUTER_REASONING_PROVIDER=
+ROUTER_REASONING_MODEL=
+ROUTER_LONG_CONTEXT_PROVIDER=
+ROUTER_LONG_CONTEXT_MODEL=
+ROUTER_DOCUMENT_PROVIDER=
+ROUTER_DOCUMENT_MODEL=
+ROUTER_VISION_PROVIDER=
+ROUTER_VISION_MODEL=
+ROUTER_OCR_PROVIDER=
+ROUTER_OCR_MODEL=
+ROUTER_TOOL_PROVIDER=
+ROUTER_TOOL_MODEL=
+ROUTER_CHEAP_PROVIDER=
+ROUTER_CHEAP_MODEL=
+
 # Features
+# These are the legacy LLM intent-router settings, not SMART_ROUTING_ENABLED.
 ENABLE_AI_ROUTER=false
 AI_ROUTER_MODE=single-pass
 ENABLE_MEMORY_SUMMARY=true
@@ -414,6 +482,22 @@ Users can send content directly:
 - Links: webpage fetch and summary
 
 To switch provider or model, open `Settings -> Model`. User choices are stored in SQLite and survive restarts.
+
+## Smart AI Router
+
+`SMART_ROUTING_ENABLED=true` routes general, translation, code, reasoning, long-context, document, vision, OCR, tool, and low-cost tasks to configured targets. Set it to `false` to bypass this layer. `SMART_ROUTING_DEBUG` enables diagnostics, while `SMART_ROUTING_MIN_CONFIDENCE` defaults to `0.55`; invalid values use the default and numeric values are clamped to `0`–`1`.
+
+Selection priority is: explicit user model → explicit user provider → dedicated feature/mode provider and model (translation, vision/media, and similar modes) → Smart rule target → default provider/model → the existing failure fallback chain. Dedicated modes bypass Smart routing where required. Smart routing selects the first target only; it does not change `ENABLE_PROVIDER_FALLBACK`, same-provider fallback models, or `AI_PROVIDER_FALLBACK_ORDER`.
+
+Configuration rules:
+
+- With `DEFAULT_AI_PROVIDER=auto`, every non-empty `ROUTER_*_MODEL` needs a matching concrete `ROUTER_*_PROVIDER`.
+- With a fixed, non-`auto` default provider, route providers may stay blank and multiple task models share that provider’s key and Base URL.
+- `ENABLE_AI_ROUTER`, `ROUTER_PROVIDER`, and `ROUTER_MODEL` are the legacy LLM intent router. They are not aliases for the new `SMART_ROUTING_*` / `ROUTER_<TASK>_*` settings, and their behavior is unchanged.
+
+Treat Zeabur AI Hub as a standard OpenAI-compatible provider: set `DEFAULT_AI_PROVIDER=openai-compatible`, put your key in `AI_API_KEY`, and paste the full Base URL supplied by the AI Hub console into `AI_BASE_URL`. The project does not hard-code a Zeabur AI Hub URL. One Hub key can serve multiple task models; with `DEFAULT_AI_PROVIDER=auto`, also set each Hub task’s provider to `openai-compatible`.
+
+Gemini Live remains official-only: use Google’s Gemini Live API with a separate `GEMINI_LIVE_API_KEY` and compatible Live models. Do not configure a third-party OpenAI-compatible gateway or AI Hub as `gemini-live`.
 
 ## Safety
 

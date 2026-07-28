@@ -13,8 +13,9 @@ test("natural agent and minimal keyboard are present", () => {
 
 test("natural tool answers use the user's selected AI settings", () => {
   assert.match(agent, /function getEffectiveAISettings/);
-  assert.match(agent, /preferredProvider: providerId\(bot, ctx\)/);
-  assert.match(agent, /fallbackEnabled: fallbackEnabled\(bot, ctx\)/);
+  assert.match(agent, /function resolveCompletionTarget/);
+  assert.match(agent, /preferredProvider: target\.provider/);
+  assert.match(agent, /fallbackEnabled: target\.fallbackEnabled/);
   assert.match(bot, /composeToolReply/);
   assert.match(bot, /naturalAgentInternals\.composeHumanAnswer/);
 });
