@@ -20,6 +20,7 @@ import { AudioOrchestrator } from './audio-orchestrator.js';
 import { MemoryManager } from './memory-manager.js';
 import { naturalAgentInternals, tryHandleNaturalAgent } from './natural-agent.js';
 import { PROVIDER_LABELS } from './ai-provider-manager.js';
+import { createAIModelRouter } from './ai-model-router.js';
 
 const LANGUAGE_NAMES = {
   auto: 'Auto / Telegram',
@@ -832,6 +833,7 @@ export class TelegramAIBot {
     this.db = db;
     this.aiClient = aiClient;
     this.providerManager = providerManager;
+    this.aiModelRouter = createAIModelRouter({ config, providerManager, db, logger });
     this.toolRegistry = toolRegistry;
     this.pluginManager = pluginManager;
     this.logger = logger;
@@ -1542,16 +1544,21 @@ export class TelegramAIBot {
 
   getEffectiveAISettings(userId) {
     const stored = this.db.getUserAISettings?.(userId) || {};
-    const providerId = stored.providerId || this.config.defaultAIProvider || this.config.aiProvider;
+    const rawProviderId = String(stored.providerId || '').trim();
+    const rawModelId = String(stored.modelId || '').trim();
+    const defaultProviderId = this.config.defaultAIProvider || this.config.aiProvider;
+    const manualProvider = Boolean(rawProviderId && rawProviderId !== 'auto');
+    const manualModel = Boolean(rawModelId);
+    const autoRouting = !manualProvider && !manualModel;
+    const providerId = rawProviderId || defaultProviderId;
     const models = this.providerManager?.getProviderModels?.(providerId) || this.config.availableModels || [];
-    const storedModel = String(stored.modelId || '').trim();
     // Model selections survive deployments in SQLite. Do not keep sending a
     // retired model forever after the server's configured model list changes.
     // An empty model list can represent a custom provider, so preserve its
     // explicit model rather than guessing.
     const modelId =
-      storedModel && (models.length === 0 || models.includes(storedModel))
-        ? storedModel
+      rawModelId && (models.length === 0 || models.includes(rawModelId))
+        ? rawModelId
         : models[0] || this.config.defaultModel;
     return {
       userId: String(userId || ''),
@@ -1559,8 +1566,92 @@ export class TelegramAIBot {
       modelId,
       fallbackEnabled: Object.hasOwn(stored, 'fallbackEnabled')
         ? Boolean(stored.fallbackEnabled)
-        : Boolean(this.config.enableProviderFallback)
+        : Boolean(this.config.enableProviderFallback),
+      rawProviderId,
+      rawModelId,
+      manualProvider,
+      manualModel,
+      autoRouting
     };
+  }
+
+  resolveSmartModelRoute({
+    text = '',
+    messageType = 'text',
+    attachmentType = '',
+    mode = 'chat',
+    modeSelection = {},
+    settings = {},
+    conversationContext = {},
+    requiredCapability = 'chat',
+    allowToolCalls = false,
+    userId = '',
+    chatId = ''
+  } = {}) {
+    const hasManualSelection = Boolean(settings.manualProvider || settings.manualModel);
+    const modeProvider = String(modeSelection?.provider || modeSelection?.providerId || '').trim();
+    const modeModel = String(modeSelection?.model || modeSelection?.modelId || '').trim();
+    const originalProvider =
+      (hasManualSelection ? settings.providerId : modeProvider) ||
+      settings.providerId ||
+      this.config.defaultAIProvider ||
+      this.config.aiProvider;
+    const originalModel =
+      (hasManualSelection ? settings.modelId : modeModel) ||
+      settings.modelId ||
+      this.config.defaultModel;
+    const defaultRoute = {
+      taskType: 'general_chat',
+      provider: originalProvider,
+      model: originalModel,
+      providerId: originalProvider,
+      modelId: originalModel,
+      confidence: 0,
+      reason: 'smart_router_default_fallback',
+      fallbackModels: [],
+      source: 'default'
+    };
+
+    if (typeof this.aiModelRouter?.route !== 'function') return defaultRoute;
+
+    try {
+      const routed = this.aiModelRouter.route({
+        text,
+        messageType,
+        attachmentType,
+        mode,
+        modeSelection,
+        userSettings: settings,
+        settings,
+        conversationContext,
+        requiredCapability,
+        allowToolCalls: Boolean(allowToolCalls),
+        userId: String(userId || ''),
+        chatId: String(chatId || '')
+      });
+      if (!routed || typeof routed !== 'object') return defaultRoute;
+
+      const provider = String(routed.provider || routed.providerId || originalProvider || '');
+      const model = String(routed.model || routed.modelId || originalModel || '');
+      return {
+        ...routed,
+        provider,
+        model,
+        providerId: provider,
+        modelId: model
+      };
+    } catch (error) {
+      this.logger?.warn?.('smart_router_default_fallback', {
+        mode: String(mode || ''),
+        messageType: String(messageType || ''),
+        requiredCapability: String(requiredCapability || ''),
+        error: {
+          name: String(error?.name || 'Error'),
+          code: String(error?.code || 'SMART_ROUTER_ERROR')
+        }
+      });
+      return defaultRoute;
+    }
   }
 
   hasConfiguredCapability(capability, preferredProvider = '') {
@@ -2445,6 +2536,7 @@ export class TelegramAIBot {
       )
     );
     return Markup.inlineKeyboard([
+      [Markup.button.callback(localText(locale, '🤖 自动选择', '🤖 Auto select'), 'ai:auto')],
       ...chunkItems(buttons, 1),
       [Markup.button.callback(localText(locale, '返回', 'Back'), 'ai:back')],
       ...this.createSettingsNavigationRows(locale)
@@ -2454,7 +2546,10 @@ export class TelegramAIBot {
   formatAISettingsPanel(settings = {}, locale = 'zh') {
     const providerId = settings.providerId || this.config.aiProvider;
     const modelId = settings.modelId || this.config.defaultModel;
-    const provider = this.getAIProviderLabel(providerId);
+    const automatic = localText(locale, '自动选择', 'Automatic');
+    const autoRouting = Boolean(settings.autoRouting);
+    const provider = autoRouting ? automatic : this.getAIProviderLabel(providerId);
+    const displayedModel = autoRouting ? automatic : modelId || '-';
     const fallback = settings.fallbackEnabled
       ? localText(locale, '已开启', 'on')
       : localText(locale, '已关闭', 'off');
@@ -2468,7 +2563,7 @@ export class TelegramAIBot {
         'AI model',
         '',
         `Current provider: ${provider}`,
-        `Current model: ${modelId || '-'}`,
+        `Current model: ${displayedModel}`,
         `Fallback: ${fallback}`,
         `Status: ${status}`,
         '',
@@ -2480,7 +2575,7 @@ export class TelegramAIBot {
       'AI 模型',
       '',
       `当前平台：${provider}`,
-      `当前模型：${modelId || '-'}`,
+      `当前模型：${displayedModel}`,
       `自动备用：${fallback}`,
       `状态：${status}`,
       '',
@@ -3042,18 +3137,45 @@ export class TelegramAIBot {
       targetLanguage === 'auto'
         ? 'Detect the source language. If the source text is Chinese, translate it into natural English. Otherwise translate it into natural Simplified Chinese.'
         : `Translate the source text into ${targetLanguage}.`;
-
-    const model = this.config.translationModel || this.config.defaultModel;
+    let model = this.config.translationModel || this.config.defaultModel;
 
     try {
       await ctx.sendChatAction('typing');
 
+      const aiSettings = this.getEffectiveAISettings(ctx.from?.id);
+      const smartRoute = this.resolveSmartModelRoute({
+        text: sourceText,
+        messageType: 'text',
+        attachmentType: '',
+        mode: 'translation',
+        modeSelection: {
+          provider: this.config.translationProvider,
+          model: this.config.translationModel || this.config.defaultModel
+        },
+        settings: aiSettings,
+        conversationContext: {
+          targetLanguage: String(targetLanguage || 'auto'),
+          totalChars: sourceText.length
+        },
+        requiredCapability: 'chat',
+        allowToolCalls: false,
+        userId: ctx.from?.id,
+        chatId: ctx.chat?.id
+      });
+      model =
+        smartRoute.model ||
+        smartRoute.modelId ||
+        this.config.translationModel ||
+        this.config.defaultModel;
       const completion = await this.completeWithAiFallback({
         scope: 'translation',
         capability: 'translation',
         userId: ctx.from?.id,
-        preferredProvider: this.config.translationProvider,
-        fallbackEnabled: true,
+        preferredProvider:
+          smartRoute.provider ||
+          smartRoute.providerId ||
+          this.config.translationProvider,
+        fallbackEnabled: aiSettings.fallbackEnabled,
         model,
         locale: this.getLocale(ctx),
         request: {
@@ -4722,15 +4844,48 @@ export class TelegramAIBot {
       };
 
       const aiSettings = this.getEffectiveAISettings(ctx.from?.id);
+      const routeMode = mode === 'translate'
+        ? 'translation'
+        : mode === 'summarize'
+          ? 'summarization'
+          : 'document_analysis';
+      const smartRoute = this.resolveSmartModelRoute({
+        text: `${instructions[mode] || instructions.summarize}\n\n${extracted}`,
+        messageType: 'document',
+        attachmentType: file.mimeType || 'document',
+        mode: routeMode,
+        modeSelection: mode === 'translate'
+          ? {
+              provider: this.config.translationProvider,
+              model: this.config.translationModel || this.config.defaultModel
+            }
+          : {},
+        settings: aiSettings,
+        conversationContext: {
+          filename: String(file.filename || ''),
+          documentMimeType: String(file.mimeType || ''),
+          totalChars: extracted.length
+        },
+        requiredCapability: 'chat',
+        allowToolCalls: false,
+        userId: ctx.from?.id,
+        chatId: ctx.chat?.id
+      });
       const completion = await this.completeWithAiFallback({
         scope: mode === 'translate' ? 'translation' : 'chat',
         capability: mode === 'translate' ? 'translation' : 'chat',
         userId: ctx.from?.id,
-        preferredProvider: mode === 'translate' ? this.config.translationProvider : aiSettings.providerId,
-        fallbackEnabled: mode === 'translate' ? true : aiSettings.fallbackEnabled,
-        model: mode === 'translate'
-          ? this.config.translationModel || this.config.defaultModel
-          : aiSettings.modelId || this.config.defaultModel,
+        preferredProvider:
+          smartRoute.provider ||
+          smartRoute.providerId ||
+          (mode === 'translate' ? this.config.translationProvider : aiSettings.providerId),
+        fallbackEnabled: aiSettings.fallbackEnabled,
+        model:
+          smartRoute.model ||
+          smartRoute.modelId ||
+          (mode === 'translate'
+            ? this.config.translationModel || this.config.defaultModel
+            : aiSettings.modelId || this.config.defaultModel),
         locale,
         request: {
           messages: [
@@ -4937,15 +5092,50 @@ export class TelegramAIBot {
     try {
       await ctx.sendChatAction('typing');
       const settings = this.getEffectiveAISettings(ctx.from?.id);
-      const preferredModel = settings.modelId || this.db.findUser(ctx.from?.id)?.preferredModel || this.config.defaultModel;
-      const selectedProvider = String(settings.providerId || this.config.aiProvider || '').toLowerCase();
+      const smartRoute = this.resolveSmartModelRoute({
+        text: query,
+        messageType: 'text',
+        attachmentType: '',
+        mode: 'web_research',
+        settings,
+        conversationContext: {
+          hasRetrievedContext: false,
+          source: 'telegram_web_search'
+        },
+        requiredCapability: 'chat',
+        allowToolCalls: true,
+        userId: ctx.from?.id,
+        chatId: ctx.chat?.id
+      });
+      const preferredModel =
+        smartRoute.model ||
+        smartRoute.modelId ||
+        settings.modelId ||
+        this.db.findUser(ctx.from?.id)?.preferredModel ||
+        this.config.defaultModel;
+      const selectedProvider = String(
+        smartRoute.provider ||
+        smartRoute.providerId ||
+        settings.providerId ||
+        this.config.aiProvider ||
+        ''
+      ).toLowerCase();
+      const defaultProvider = String(this.config.aiProvider || '').toLowerCase();
+      const trulyAutomaticProvider =
+        selectedProvider === 'auto' &&
+        settings.autoRouting === true &&
+        !settings.manualProvider &&
+        !settings.manualModel;
 
       if (
         this.config.enableWebSearch &&
         this.config.enableGeminiGoogleSearch &&
-        (selectedProvider === 'gemini' || selectedProvider === 'auto' || this.config.aiProvider === 'gemini')
+        (selectedProvider === 'gemini' || trulyAutomaticProvider)
       ) {
-        let searchClient = typeof this.aiClient.searchWeb === 'function' ? this.aiClient : null;
+        let searchClient =
+          selectedProvider === defaultProvider && typeof this.aiClient.searchWeb === 'function'
+            ? this.aiClient
+            : null;
         const geminiModels = this.providerManager?.getProviderModels?.('gemini') || [];
         const searchModels = Array.from(new Set([
           selectedProvider === 'gemini' ? preferredModel : '',
@@ -6514,13 +6704,42 @@ export class TelegramAIBot {
       prompt = `Translate the content below into ${resolvedTarget}. Output the translation only. Do not add explanations.`;
     }
 
+    const settings = this.getEffectiveAISettings(state.userId);
+    const smartRoute = this.resolveSmartModelRoute({
+      text: state.replyText || '',
+      messageType: 'text',
+      attachmentType: '',
+      mode: 'translation',
+      modeSelection: {
+        provider: this.config.translationProvider,
+        model: this.config.translationModel || state.model || this.config.defaultModel
+      },
+      settings,
+      conversationContext: {
+        targetLanguage: resolvedTarget || 'auto',
+        totalChars: String(state.replyText || '').length,
+        source: 'assistant_translation'
+      },
+      requiredCapability: 'chat',
+      allowToolCalls: false,
+      userId: state.userId,
+      chatId: state.chatId
+    });
     const completion = await this.completeWithAiFallback({
       scope: 'translation',
       capability: 'translation',
       userId: state.userId,
-      preferredProvider: this.config.translationProvider,
-      fallbackEnabled: true,
-      model: this.config.translationModel || state.model || this.config.defaultModel,
+      preferredProvider:
+        smartRoute.provider ||
+        smartRoute.providerId ||
+        this.config.translationProvider,
+      fallbackEnabled: settings.fallbackEnabled,
+      model:
+        smartRoute.model ||
+        smartRoute.modelId ||
+        this.config.translationModel ||
+        state.model ||
+        this.config.defaultModel,
       locale: state.locale || 'zh',
       request: {
         messages: [
@@ -6546,12 +6765,62 @@ export class TelegramAIBot {
     }
     const user = this.db.findUser(state.userId);
     const settings = this.getEffectiveAISettings(state.userId);
-    const model = settings.modelId || user?.preferredModel || state.model || this.config.defaultModel;
+    const preparedContent = state.preparedMessage?.content;
+    const routingText = typeof preparedContent === 'string'
+      ? preparedContent
+      : Array.isArray(preparedContent)
+        ? preparedContent
+            .filter((item) => item?.type === 'text')
+            .map((item) => String(item.text || ''))
+            .filter(Boolean)
+            .join('\n')
+        : '';
+    const requestCapability = Array.isArray(preparedContent) ? 'vision' : 'chat';
+    const historyChars = (state.historyBefore || []).reduce(
+      (total, item) => total + (
+        typeof item?.content === 'string'
+          ? item.content.length
+          : 0
+      ),
+      0
+    );
+    const smartRoute = this.resolveSmartModelRoute({
+      text: routingText,
+      messageType: requestCapability === 'vision' ? 'photo' : 'text',
+      attachmentType: requestCapability === 'vision' ? 'photo' : '',
+      mode: 'chat',
+      modeSelection: requestCapability === 'vision'
+        ? {
+            provider: this.config.visionProvider,
+            model: this.config.visionModel
+          }
+        : {},
+      settings,
+      conversationContext: {
+        historyChars,
+        totalChars: historyChars + routingText.length,
+        source: 'assistant_regenerate'
+      },
+      requiredCapability: requestCapability,
+      allowToolCalls: requestCapability === 'chat' && Boolean(this.config.enableToolCalls),
+      userId: state.userId,
+      chatId: state.chatId
+    });
+    const model =
+      smartRoute.model ||
+      smartRoute.modelId ||
+      settings.modelId ||
+      user?.preferredModel ||
+      state.model ||
+      this.config.defaultModel;
     const completion = await this.completeWithAiFallback({
       scope: 'chat',
-      capability: Array.isArray(state.preparedMessage?.content) ? 'vision' : 'chat',
+      capability: requestCapability,
       userId: state.userId,
-      preferredProvider: settings.providerId,
+      preferredProvider:
+        smartRoute.provider ||
+        smartRoute.providerId ||
+        settings.providerId,
       fallbackEnabled: settings.fallbackEnabled,
       model,
       locale: state.locale || 'zh',
@@ -6614,7 +6883,7 @@ export class TelegramAIBot {
       settings = this.db.setUserAISettings?.(userId, {
         providerId: 'auto',
         modelId: '',
-        fallbackEnabled: true
+        fallbackEnabled: settings.fallbackEnabled
       }) || settings;
       settings = this.getEffectiveAISettings(userId);
       await this.editAssistantMessageText(
@@ -7151,7 +7420,6 @@ export class TelegramAIBot {
     let assistantDelivered = false;
 
     try {
-      const model = activeAiModel;
       await ctx.sendChatAction('typing');
       const prepared = await this.prepareUserMessage(ctx);
       const requestCapability = ctx.message?.photo?.length ? 'vision' : 'chat';
@@ -7172,12 +7440,70 @@ export class TelegramAIBot {
       };
 
       const messages = [systemMessage, ...history, prepared.message];
+      const preparedContent = prepared.message?.content;
+      const routingText = typeof preparedContent === 'string'
+        ? preparedContent
+        : Array.isArray(preparedContent)
+          ? preparedContent
+              .filter((item) => item?.type === 'text')
+              .map((item) => String(item.text || ''))
+              .filter(Boolean)
+              .join('\n')
+          : String(text || caption || '');
+      const attachmentType = ctx.message?.photo?.length
+        ? 'photo'
+        : ctx.message?.document
+          ? 'document'
+          : (ctx.message?.voice || ctx.message?.audio)
+            ? 'transcribed_audio'
+            : '';
+      const messageType = attachmentType === 'transcribed_audio'
+        ? 'text'
+        : attachmentType || 'text';
+      const historyChars = history.reduce((total, item) => {
+        const content = item?.content;
+        if (typeof content === 'string') return total + content.length;
+        if (!Array.isArray(content)) return total;
+        return total + content.reduce(
+          (sum, part) => sum + (part?.type === 'text' ? String(part.text || '').length : 0),
+          0
+        );
+      }, 0);
+      const smartRoute = this.resolveSmartModelRoute({
+        text: routingText,
+        messageType,
+        attachmentType,
+        mode: 'chat',
+        modeSelection: requestCapability === 'vision'
+          ? {
+              provider: this.config.visionProvider,
+              model: this.config.visionModel
+            }
+          : {},
+        settings: aiSettings,
+        conversationContext: {
+          sessionId,
+          historyMessageCount: history.length,
+          historyChars,
+          totalChars: historyChars + routingText.length,
+          hasHistory: history.length > 0,
+          hasMemory: Boolean(memoryContext),
+          chatType: String(ctx.chat?.type || ''),
+          isReply: Boolean(ctx.message?.reply_to_message),
+          documentMimeType: String(ctx.message?.document?.mime_type || '')
+        },
+        requiredCapability: requestCapability,
+        allowToolCalls: requestCapability === 'chat' && Boolean(this.config.enableToolCalls),
+        userId: ctx.from.id,
+        chatId: ctx.chat.id
+      });
+      const model = smartRoute.model || smartRoute.modelId || activeAiModel;
       const toolUsage = { count: 0 };
       const completion = await this.completeWithAiFallback({
         scope: 'chat',
         capability: requestCapability,
         userId: ctx.from.id,
-        preferredProvider: aiSettings.providerId,
+        preferredProvider: smartRoute.provider || smartRoute.providerId || aiSettings.providerId,
         fallbackEnabled: aiSettings.fallbackEnabled,
         model,
         locale,
