@@ -141,7 +141,7 @@ test('Stars payments credit each capability exactly once and persist charge IDs'
 
   db.close();
   const reopened = await fixture.open();
-  assert.equal(reopened.getMeta('schemaVersion'), '8');
+  assert.equal(reopened.getMeta('schemaVersion'), '9');
   assert.equal(reopened.findStarOrderByChargeId('tg-charge-101')?.status, 'paid');
   assert.deepEqual(reopened.getCreditBalances(101).balances, order.grants);
 });
@@ -610,7 +610,7 @@ test('v6 databases migrate to Stars schema without changing legacy daily quota b
   db.close();
 
   const upgraded = await fixture.open();
-  assert.equal(upgraded.getMeta('schemaVersion'), '8');
+  assert.equal(upgraded.getMeta('schemaVersion'), '9');
   assert.equal(upgraded.getUserDailyQuota(401, 10).dailyQuota, 2);
   assert.equal(upgraded.findUser(401).dailyUsageCount, 1);
   assert.deepEqual(upgraded.consumeDailyQuota(401, 10), {
@@ -701,7 +701,7 @@ test('v7 Stars refund rows gain lease columns during the v8 migration', async (t
   db.close();
 
   const upgraded = await fixture.open();
-  assert.equal(upgraded.getMeta('schemaVersion'), '8');
+  assert.equal(upgraded.getMeta('schemaVersion'), '9');
   const columns = upgraded.db
     .prepare('PRAGMA table_info(star_refunds)')
     .all()

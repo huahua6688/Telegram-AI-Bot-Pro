@@ -504,6 +504,19 @@ export class ToolRegistry {
           return await fetchUrlText(args.url);
         case 'web_search':
           usage.count += 1;
+          if (typeof context.newsSearch === 'function') {
+            const personalized = await context.newsSearch(args.query, {
+              signal: context.signal,
+              timeoutMs: boundedTimeoutMs(context.requestTimeoutMs ?? this.config.requestTimeoutMs)
+            });
+            if (personalized?.handled) {
+              const output = String(personalized.output || '').trim();
+              return output || toolError(
+                'NEWS_RESULTS_EMPTY',
+                'No verified news results matched the requested date and personal news settings.'
+              );
+            }
+          }
           return await searchWeb(args.query, {
             signal: context.signal,
             timeoutMs: boundedTimeoutMs(context.requestTimeoutMs ?? this.config.requestTimeoutMs),

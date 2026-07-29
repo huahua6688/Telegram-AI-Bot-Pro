@@ -71,7 +71,7 @@ test('BotDatabase imports legacy JSON data into SQLite', async (t) => {
   assert.equal(db.findChat('200')?.triggerMode, 'mention');
   assert.deepEqual(db.getConversation('200:100:main'), [{ role: 'user', content: 'hello' }]);
   assert.equal(db.getStats().aiCalls, 4);
-  assert.equal(db.getMeta('schemaVersion'), '8');
+  assert.equal(db.getMeta('schemaVersion'), '9');
 });
 
 test('BotDatabase provides RBAC, feature flags, policy rules and audit logs', async (t) => {
@@ -281,7 +281,7 @@ test('BotDatabase upgrades a v5 database through quota and Stars billing storage
 
   upgraded = new BotDatabase(databaseFile);
   await upgraded.init();
-  assert.equal(upgraded.getMeta('schemaVersion'), '8');
+  assert.equal(upgraded.getMeta('schemaVersion'), '9');
   assert.equal(upgraded.setUserDailyQuota(12, 9, 3)?.dailyQuota, 9);
   assert.equal(upgraded.findUser(12)?.dailyQuotaOverride, 9);
 });
@@ -315,6 +315,73 @@ test('BotDatabase persists per-user AI provider settings', async (t) => {
   assert.equal(settings.providerId, 'groq');
   assert.equal(settings.modelId, 'llama-current');
   assert.equal(settings.fallbackEnabled, false);
+});
+
+test('BotDatabase persists isolated per-user news settings and supports inheritance reset', async (t) => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-news-settings-db-'));
+  const databaseFile = path.join(tempDir, 'bot-data.db');
+  const db = new BotDatabase(databaseFile);
+  let reopened = null;
+  t.after(() => {
+    db.close();
+    reopened?.close();
+    return fs.rm(tempDir, { recursive: true, force: true });
+  });
+  await db.init();
+  await db.upsertUser({ id: 31, username: 'news-a', first_name: 'News A', language_code: 'zh-CN' });
+  await db.upsertUser({ id: 32, username: 'news-b', first_name: 'News B', language_code: 'en' });
+
+  assert.deepEqual(db.getUserNewsSettings(31), {
+    region: '',
+    language: '',
+    timeZone: '',
+    updatedAt: ''
+  });
+  const saved = db.setUserNewsSettings(31, {
+    region: 'sg',
+    language: 'en-SG',
+    timeZone: 'Asia/Singapore'
+  });
+  assert.equal(saved.region, 'SG');
+  assert.equal(saved.language, 'en-SG');
+  assert.equal(saved.timeZone, 'Asia/Singapore');
+  assert.equal(db.getUserNewsSettings(32).region, '');
+  assert.throws(() => db.setUserNewsSettings(31, { region: 'Singapore' }), /two-letter/);
+  assert.throws(() => db.setUserNewsSettings(31, { timeZone: 'Mars\/Olympus' }), /IANA/);
+
+  db.close();
+  reopened = new BotDatabase(databaseFile);
+  await reopened.init();
+  assert.equal(reopened.getUserNewsSettings(31).region, 'SG');
+  assert.equal(reopened.getUserNewsSettings(31).timeZone, 'Asia/Singapore');
+  assert.deepEqual(reopened.resetUserNewsSettings(31), {
+    region: '',
+    language: '',
+    timeZone: '',
+    updatedAt: ''
+  });
+});
+
+test('BotDatabase upgrades a v8 database with per-user news settings storage', async (t) => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-news-settings-v8-'));
+  const databaseFile = path.join(tempDir, 'bot-data.db');
+  const db = new BotDatabase(databaseFile);
+  let upgraded = null;
+  t.after(() => {
+    db.close();
+    upgraded?.close();
+    return fs.rm(tempDir, { recursive: true, force: true });
+  });
+  await db.init();
+  await db.upsertUser({ id: 33, username: 'news-upgrade', first_name: 'Upgrade', language_code: 'zh-CN' });
+  db.db.exec('DROP TABLE user_news_settings');
+  db.setMeta('schemaVersion', '8');
+  db.close();
+
+  upgraded = new BotDatabase(databaseFile);
+  await upgraded.init();
+  assert.equal(upgraded.getMeta('schemaVersion'), '9');
+  assert.equal(upgraded.setUserNewsSettings(33, { region: 'CN' })?.region, 'CN');
 });
 
 test('BotDatabase tracks assistant regenerate message versions', async (t) => {

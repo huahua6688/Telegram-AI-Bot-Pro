@@ -1,6 +1,15 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
 import { BILLING_CREDIT_TYPES } from '../db.js';
+import {
+  isValidNewsLanguage,
+  isValidNewsRegion,
+  isValidNewsTimeZone,
+  normalizeNewsLanguage,
+  normalizeNewsRegion,
+  normalizeNewsTimeZone,
+  resolveEffectiveNewsSettings
+} from '../utils/news-settings.js';
 
 const TELEGRAM_AUTH_MAX_AGE_SECONDS = 60 * 60;
 const MAX_JSON_BODY_BYTES = 32 * 1024;
@@ -64,6 +73,63 @@ const PERSONA_OPTIONS = [
   { id: 'translator', label: '翻译助手' },
   { id: 'teacher', label: '耐心老师' },
   { id: 'writer', label: '写作助手' }
+];
+
+const NEWS_REGION_OPTIONS = [
+  { id: 'CN', label: '中国大陆' },
+  { id: 'HK', label: '香港' },
+  { id: 'TW', label: '台湾' },
+  { id: 'MO', label: '澳门' },
+  { id: 'MY', label: '马来西亚' },
+  { id: 'SG', label: '新加坡' },
+  { id: 'ID', label: '印度尼西亚' },
+  { id: 'KH', label: '柬埔寨' },
+  { id: 'JP', label: '日本' },
+  { id: 'KR', label: '韩国' },
+  { id: 'TH', label: '泰国' },
+  { id: 'VN', label: '越南' },
+  { id: 'US', label: '美国' },
+  { id: 'GB', label: '英国' },
+  { id: 'AU', label: '澳大利亚' },
+  { id: 'CA', label: '加拿大' }
+];
+
+const NEWS_LANGUAGE_OPTIONS = [
+  { id: 'zh-CN', label: '简体中文' },
+  { id: 'zh-HK', label: '香港繁体中文' },
+  { id: 'zh-TW', label: '台湾繁体中文' },
+  { id: 'en', label: 'English' },
+  { id: 'ms-MY', label: 'Bahasa Melayu' },
+  { id: 'id-ID', label: 'Bahasa Indonesia' },
+  { id: 'km-KH', label: 'ភាសាខ្មែរ' },
+  { id: 'ja-JP', label: '日本語' },
+  { id: 'ko-KR', label: '한국어' },
+  { id: 'th-TH', label: 'ไทย' },
+  { id: 'vi-VN', label: 'Tiếng Việt' }
+];
+
+const NEWS_TIME_ZONE_OPTIONS = [
+  { id: 'Asia/Shanghai', label: '中国大陆（上海）' },
+  { id: 'Asia/Hong_Kong', label: '香港' },
+  { id: 'Asia/Taipei', label: '台湾（台北）' },
+  { id: 'Asia/Macau', label: '澳门' },
+  { id: 'Asia/Kuala_Lumpur', label: '马来西亚（吉隆坡）' },
+  { id: 'Asia/Singapore', label: '新加坡' },
+  { id: 'Asia/Jakarta', label: '印度尼西亚西部（雅加达）' },
+  { id: 'Asia/Makassar', label: '印度尼西亚中部（望加锡）' },
+  { id: 'Asia/Jayapura', label: '印度尼西亚东部（查亚普拉）' },
+  { id: 'Asia/Phnom_Penh', label: '柬埔寨（金边）' },
+  { id: 'Asia/Tokyo', label: '日本（东京）' },
+  { id: 'Asia/Seoul', label: '韩国（首尔）' },
+  { id: 'Asia/Bangkok', label: '泰国（曼谷）' },
+  { id: 'Asia/Ho_Chi_Minh', label: '越南（胡志明市）' },
+  { id: 'Europe/London', label: '英国（伦敦）' },
+  { id: 'America/New_York', label: '美国东部（纽约）' },
+  { id: 'America/Chicago', label: '美国中部（芝加哥）' },
+  { id: 'America/Denver', label: '美国山地（丹佛）' },
+  { id: 'America/Los_Angeles', label: '美国西部（洛杉矶）' },
+  { id: 'Australia/Sydney', label: '澳大利亚东部（悉尼）' },
+  { id: 'UTC', label: 'UTC' }
 ];
 
 const MINI_APP_HTML = String.raw`<!doctype html>
@@ -187,7 +253,9 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       font-weight: 700;
     }
 
-    select {
+    select,
+    input[list] {
+      box-sizing: border-box;
       width: 100%;
       min-height: 48px;
       padding: 0 12px;
@@ -199,7 +267,8 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       outline: none;
     }
 
-    select:focus {
+    select:focus,
+    input[list]:focus {
       border-color: var(--tg-theme-button-color, #2481cc);
     }
 
@@ -734,6 +803,31 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         </div>
 
         <div class="field">
+          <label for="newsRegionSelect">新闻地区</label>
+          <input id="newsRegionSelect" list="newsRegionOptions" maxlength="2" autocomplete="off"
+            placeholder="自动继承，也可输入 DE" disabled />
+          <datalist id="newsRegionOptions"></datalist>
+        </div>
+
+        <div class="field">
+          <label for="newsLanguageSelect">新闻语言</label>
+          <input id="newsLanguageSelect" list="newsLanguageOptions" maxlength="35" autocomplete="off"
+            placeholder="自动继承，也可输入 de-DE" disabled />
+          <datalist id="newsLanguageOptions"></datalist>
+        </div>
+
+        <div class="field">
+          <label for="newsTimeZoneSelect">新闻时区</label>
+          <input id="newsTimeZoneSelect" list="newsTimeZoneOptions" maxlength="64" autocomplete="off"
+            placeholder="自动继承，也可输入 Europe/Berlin" disabled />
+          <datalist id="newsTimeZoneOptions"></datalist>
+        </div>
+
+        <p class="small" id="newsEffectiveLabel">
+          未单独设置时，会根据你的语言判断；无法可靠判断时才使用服务器默认值。
+        </p>
+
+        <div class="field">
           <label for="personaSelect">助手人格</label>
           <select id="personaSelect" disabled></select>
         </div>
@@ -888,6 +982,13 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       providerSelect: document.getElementById('providerSelect'),
       modelSelect: document.getElementById('modelSelect'),
       languageSelect: document.getElementById('languageSelect'),
+      newsRegionSelect: document.getElementById('newsRegionSelect'),
+      newsRegionOptions: document.getElementById('newsRegionOptions'),
+      newsLanguageSelect: document.getElementById('newsLanguageSelect'),
+      newsLanguageOptions: document.getElementById('newsLanguageOptions'),
+      newsTimeZoneSelect: document.getElementById('newsTimeZoneSelect'),
+      newsTimeZoneOptions: document.getElementById('newsTimeZoneOptions'),
+      newsEffectiveLabel: document.getElementById('newsEffectiveLabel'),
       personaSelect: document.getElementById('personaSelect'),
       fallbackToggle: document.getElementById('fallbackToggle'),
       settingsNotice: document.getElementById('settingsNotice'),
@@ -948,6 +1049,9 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       elements.providerSelect.disabled = !enabled;
       elements.modelSelect.disabled = !enabled;
       elements.languageSelect.disabled = !enabled;
+      elements.newsRegionSelect.disabled = !enabled;
+      elements.newsLanguageSelect.disabled = !enabled;
+      elements.newsTimeZoneSelect.disabled = !enabled;
       elements.personaSelect.disabled = !enabled;
       elements.fallbackToggle.disabled = !enabled;
       elements.saveButton.disabled = !enabled;
@@ -1001,6 +1105,41 @@ const MINI_APP_HTML = String.raw`<!doctype html>
 
       updateModelOptions(state.settings.modelId || '');
       buildOptions(elements.languageSelect, data.languages || [], state.profile.preferredLanguage || 'auto');
+      const regionOptions = Array.isArray(data.newsRegions) ? data.newsRegions.slice() : [];
+      const languageOptions = Array.isArray(data.newsLanguages) ? data.newsLanguages.slice() : [];
+      let detectedLanguage = '';
+      let detectedRegion = '';
+      try {
+        detectedLanguage = String(navigator.language || '').replaceAll('_', '-');
+        detectedRegion = new Intl.Locale(detectedLanguage).region || '';
+      } catch {}
+      if (detectedRegion && !regionOptions.some(function (item) { return item.id === detectedRegion; })) {
+        regionOptions.splice(1, 0, { id: detectedRegion, label: '本机语言地区（' + detectedRegion + '）' });
+      }
+      if (detectedLanguage && !languageOptions.some(function (item) { return item.id === detectedLanguage; })) {
+        languageOptions.splice(1, 0, { id: detectedLanguage, label: '本机语言（' + detectedLanguage + '）' });
+      }
+      buildOptions(elements.newsRegionOptions, regionOptions, '');
+      buildOptions(elements.newsLanguageOptions, languageOptions, '');
+      elements.newsRegionSelect.value = data.news?.region || '';
+      elements.newsLanguageSelect.value = data.news?.language || '';
+
+      const timeZoneOptions = Array.isArray(data.newsTimeZones) ? data.newsTimeZones.slice() : [];
+      let detectedTimeZone = '';
+      try {
+        detectedTimeZone = Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+      } catch {}
+      if (detectedTimeZone && !timeZoneOptions.some(function (item) { return item.id === detectedTimeZone; })) {
+        timeZoneOptions.splice(1, 0, { id: detectedTimeZone, label: '本机时区（' + detectedTimeZone + '）' });
+      }
+      buildOptions(elements.newsTimeZoneOptions, timeZoneOptions, '');
+      elements.newsTimeZoneSelect.value = data.news?.timeZone || '';
+      const effectiveNews = data.news?.effective || {};
+      elements.newsEffectiveLabel.textContent =
+        '当前实际使用：' +
+        String(effectiveNews.region || '-') + ' · ' +
+        String(effectiveNews.language || '-') + ' · ' +
+        String(effectiveNews.timeZone || '-');
       buildOptions(elements.personaSelect, data.personas || [], state.profile.persona || 'default');
 
       elements.fallbackToggle.checked = state.settings.fallbackEnabled !== false;
@@ -1110,6 +1249,9 @@ const MINI_APP_HTML = String.raw`<!doctype html>
             modelId: elements.modelSelect.value,
             fallbackEnabled: elements.fallbackToggle.checked,
             preferredLanguage: elements.languageSelect.value,
+            newsRegion: elements.newsRegionSelect.value,
+            newsLanguage: elements.newsLanguageSelect.value,
+            newsTimeZone: elements.newsTimeZoneSelect.value,
             persona: elements.personaSelect.value
           })
         });
@@ -2246,9 +2388,38 @@ async function getAuthenticatedUser(req, { db, config }) {
   return { telegramUser, user };
 }
 
-function serializeSettingsResponse({ db, config, userId }) {
+function withInheritedNewsOption(options, currentValue, effectiveValue, inheritedLabel) {
+  const items = [
+    {
+      id: '',
+      label: `${inheritedLabel}（当前：${effectiveValue || '-'}）`
+    },
+    ...options
+  ];
+  if (currentValue && !items.some((item) => item.id === currentValue)) {
+    items.push({ id: currentValue, label: `${currentValue}（当前设置）` });
+  }
+  if (effectiveValue && !items.some((item) => item.id === effectiveValue)) {
+    items.push({ id: effectiveValue, label: `${effectiveValue}（当前自动值）` });
+  }
+  return items;
+}
+
+function serializeSettingsResponse({ db, config, userId, telegramLanguageCode = '' }) {
   const user = db.findUser(userId);
   const settings = db.getUserAISettings(userId);
+  const news = db.getUserNewsSettings?.(userId) || {
+    region: '',
+    language: '',
+    timeZone: '',
+    updatedAt: ''
+  };
+  const effectiveNews = resolveEffectiveNewsSettings({
+    stored: news,
+    config,
+    locale: user?.preferredLanguage || telegramLanguageCode,
+    telegramLanguageCode
+  });
 
   return {
     ok: true,
@@ -2267,9 +2438,38 @@ function serializeSettingsResponse({ db, config, userId }) {
       fallbackEnabled: settings.fallbackEnabled !== false,
       updatedAt: settings.updatedAt || ''
     },
+    news: {
+      region: news.region || '',
+      language: news.language || '',
+      timeZone: news.timeZone || '',
+      updatedAt: news.updatedAt || '',
+      effective: {
+        region: effectiveNews.region,
+        language: effectiveNews.language,
+        timeZone: effectiveNews.timeZone
+      }
+    },
     providers: buildProviderCatalog(config),
     languages: LANGUAGE_OPTIONS,
-    personas: PERSONA_OPTIONS
+    personas: PERSONA_OPTIONS,
+    newsRegions: withInheritedNewsOption(
+      NEWS_REGION_OPTIONS,
+      news.region,
+      effectiveNews.region,
+      '自动判断'
+    ),
+    newsLanguages: withInheritedNewsOption(
+      NEWS_LANGUAGE_OPTIONS,
+      news.language,
+      effectiveNews.language,
+      '跟随回复语言'
+    ),
+    newsTimeZones: withInheritedNewsOption(
+      NEWS_TIME_ZONE_OPTIONS,
+      news.timeZone,
+      effectiveNews.timeZone,
+      '自动判断'
+    )
   };
 }
 
@@ -2304,12 +2504,33 @@ function validateSettingsPayload(payload, config) {
     throw new Error('PERSONA_NOT_AVAILABLE');
   }
 
+  const newsPatch = {};
+  if (Object.hasOwn(payload, 'newsRegion')) {
+    if (!isValidNewsRegion(payload.newsRegion)) {
+      throw new Error('NEWS_REGION_INVALID');
+    }
+    newsPatch.region = normalizeNewsRegion(payload.newsRegion);
+  }
+  if (Object.hasOwn(payload, 'newsLanguage')) {
+    if (!isValidNewsLanguage(payload.newsLanguage)) {
+      throw new Error('NEWS_LANGUAGE_INVALID');
+    }
+    newsPatch.language = normalizeNewsLanguage(payload.newsLanguage);
+  }
+  if (Object.hasOwn(payload, 'newsTimeZone')) {
+    if (!isValidNewsTimeZone(payload.newsTimeZone)) {
+      throw new Error('NEWS_TIME_ZONE_INVALID');
+    }
+    newsPatch.timeZone = normalizeNewsTimeZone(payload.newsTimeZone);
+  }
+
   return {
     providerId,
     modelId,
     fallbackEnabled: payload.fallbackEnabled !== false,
     preferredLanguage,
-    persona
+    persona,
+    newsPatch
   };
 }
 
@@ -3010,7 +3231,8 @@ async function handleMiniAppApi(req, res, context) {
       serializeSettingsResponse({
         db: context.db,
         config: context.config,
-        userId: auth.telegramUser.id
+        userId: auth.telegramUser.id,
+        telegramLanguageCode: auth.telegramUser.language_code
       })
     );
     return;
@@ -3031,6 +3253,9 @@ async function handleMiniAppApi(req, res, context) {
         preferredLanguage: next.preferredLanguage,
         persona: next.persona
       });
+      if (Object.keys(next.newsPatch).length > 0) {
+        context.db.setUserNewsSettings(auth.telegramUser.id, next.newsPatch);
+      }
 
       sendJson(
         res,
@@ -3038,7 +3263,8 @@ async function handleMiniAppApi(req, res, context) {
         serializeSettingsResponse({
           db: context.db,
           config: context.config,
-          userId: auth.telegramUser.id
+          userId: auth.telegramUser.id,
+          telegramLanguageCode: auth.telegramUser.language_code
         })
       );
     } catch (error) {

@@ -23,7 +23,7 @@ function buildHiddenFeatureHelp(locale = 'zh') {
       '- Private chat: use the “🔒 Private chat” button below. Private chat content is not written to the chat database.',
       '- Credits: use “⭐ Buy credits” and “💰 My balance” below. Daily free allowances are used before purchased credits; failed requests are restored automatically.',
       '',
-      'Open Console beside the message box for provider/model settings, persona, language, chat history, and administration.'
+      'Open Console beside the message box for provider/model settings, persona, reply language, personal news region/language/time zone, chat history, and administration.'
     ].join('\n');
   }
 
@@ -44,7 +44,7 @@ function buildHiddenFeatureHelp(locale = 'zh') {
     '- 隐私聊天：使用下方“🔒 隐私聊天”按钮；隐私内容不写入聊天数据库。',
     '- 用量额度：使用下方“⭐ 购买额度”和“💰 我的余额”；系统先使用每日免费额度，再使用已购额度，失败请求会自动归还。',
     '',
-    'Provider/模型、人格、语言、聊天记录和管理员功能在输入框旁的“控制台”。'
+    'Provider/模型、人格、回复语言、个人新闻地区/语言/时区、聊天记录和管理员功能在输入框旁的“控制台”。'
   ].join('\n');
 }
 
