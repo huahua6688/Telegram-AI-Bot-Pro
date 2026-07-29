@@ -3,6 +3,14 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { normalizeLanguageCode } from './utils/telegram.js';
+import {
+  isValidNewsLanguage,
+  isValidNewsRegion,
+  isValidNewsTimeZone,
+  normalizeNewsLanguage,
+  normalizeNewsRegion,
+  normalizeNewsTimeZone
+} from './utils/news-settings.js';
 
 // Schema version history:
 // v1: Core bot tables (users/chats/conversations/stats/favorites)
@@ -13,7 +21,8 @@ import { normalizeLanguageCode } from './utils/telegram.js';
 // v6: Per-user daily quota overrides
 // v7: Telegram Stars orders, per-capability balances, usage reservations, and refunds
 // v8: Single-owner leases for Telegram Stars refund attempts
-const CURRENT_SCHEMA_VERSION = 8;
+// v9: Per-user news region, language, and time-zone preferences
+const CURRENT_SCHEMA_VERSION = 9;
 
 export const BILLING_CREDIT_TYPES = Object.freeze([
   'chat',
@@ -271,6 +280,23 @@ function rowToUser(row) {
   };
 }
 
+function rowToUserNewsSettings(row) {
+  if (!row) {
+    return {
+      region: '',
+      language: '',
+      timeZone: '',
+      updatedAt: ''
+    };
+  }
+  return {
+    region: row.region || '',
+    language: row.language || '',
+    timeZone: row.time_zone || '',
+    updatedAt: row.updated_at || ''
+  };
+}
+
 function rowToChat(row) {
   if (!row) return undefined;
   return {
@@ -432,6 +458,9 @@ export class BotDatabase {
       }
       if (version === 8) {
         this.applySchemaV8();
+      }
+      if (version === 9) {
+        this.applySchemaV9();
       }
       this.setMeta('schemaVersion', String(version));
     }
@@ -852,6 +881,21 @@ export class BotDatabase {
     }
   }
 
+  applySchemaV9() {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS user_news_settings (
+        user_id TEXT PRIMARY KEY,
+        region TEXT NOT NULL DEFAULT '',
+        language TEXT NOT NULL DEFAULT '',
+        time_zone TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_user_news_settings_updated
+        ON user_news_settings(updated_at DESC);
+    `);
+  }
+
   ensureFavoritesV2Columns() {
     const columns = this.db.prepare('PRAGMA table_info(favorites)').all();
     const existing = new Set(columns.map((column) => column.name));
@@ -1187,6 +1231,57 @@ export class BotDatabase {
       .run(...values, now(), String(userId));
     await this.write();
     return this.findUser(userId);
+  }
+
+  getUserNewsSettings(userId) {
+    return rowToUserNewsSettings(
+      this.db
+        .prepare(
+          `SELECT region, language, time_zone, updated_at
+           FROM user_news_settings
+           WHERE user_id = ?`
+        )
+        .get(String(userId))
+    );
+  }
+
+  setUserNewsSettings(userId, patch = {}) {
+    const user = this.findUser(userId);
+    if (!user) return null;
+
+    const current = this.getUserNewsSettings(userId);
+    if (Object.hasOwn(patch, 'region') && !isValidNewsRegion(patch.region)) {
+      throw new RangeError('News region must be empty or a two-letter country code.');
+    }
+    if (Object.hasOwn(patch, 'language') && !isValidNewsLanguage(patch.language)) {
+      throw new RangeError('News language must be empty or a valid language tag.');
+    }
+    if (Object.hasOwn(patch, 'timeZone') && !isValidNewsTimeZone(patch.timeZone)) {
+      throw new RangeError('News time zone must be empty or a valid IANA time zone.');
+    }
+    const next = {
+      region: Object.hasOwn(patch, 'region') ? normalizeNewsRegion(patch.region) : current.region,
+      language: Object.hasOwn(patch, 'language') ? normalizeNewsLanguage(patch.language) : current.language,
+      timeZone: Object.hasOwn(patch, 'timeZone') ? normalizeNewsTimeZone(patch.timeZone) : current.timeZone
+    };
+    const timestamp = now();
+    this.db.prepare(
+      `INSERT INTO user_news_settings(user_id, region, language, time_zone, updated_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET
+         region = excluded.region,
+         language = excluded.language,
+         time_zone = excluded.time_zone,
+         updated_at = excluded.updated_at`
+    ).run(String(userId), next.region, next.language, next.timeZone, timestamp);
+    this.setMeta('updatedAt', timestamp);
+    return this.getUserNewsSettings(userId);
+  }
+
+  resetUserNewsSettings(userId) {
+    this.db.prepare('DELETE FROM user_news_settings WHERE user_id = ?').run(String(userId));
+    this.setMeta('updatedAt', now());
+    return this.getUserNewsSettings(userId);
   }
 
   getUserAISettings(userId) {

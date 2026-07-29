@@ -48,7 +48,10 @@ test('Mini App securely exposes settings without chat input actions', async (t) 
     defaultModel: 'gemini-2.5-flash',
     providerModels: { gemini: ['gemini-2.5-flash'] },
     aiProviderFallbackOrder: [],
-    maxInputChars: 12000
+    maxInputChars: 12000,
+    newsRegion: 'MY',
+    newsLanguage: 'auto',
+    newsTimeZone: 'Asia/Kuala_Lumpur'
   };
   const server = startHealthServer({ port: 0, db, config, logger: logger() });
 
@@ -72,6 +75,17 @@ test('Mini App securely exposes settings without chat input actions', async (t) 
   assert.doesNotMatch(appHtml, /AI 工作台/);
   assert.doesNotMatch(appHtml, /\/api\/miniapp\/action/);
   assert.doesNotMatch(appHtml, /发送到聊天/);
+  assert.match(appHtml, /新闻地区/);
+  assert.match(appHtml, /新闻语言/);
+  assert.match(appHtml, /新闻时区/);
+  assert.match(appHtml, /list="newsRegionOptions"/);
+  assert.match(appHtml, /list="newsLanguageOptions"/);
+  assert.match(appHtml, /list="newsTimeZoneOptions"/);
+  const inlineScripts = [...appHtml.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)]
+    .map((match) => match[1])
+    .filter((script) => script.trim());
+  assert.ok(inlineScripts.length > 0);
+  assert.doesNotThrow(() => new Function(inlineScripts.at(-1)));
 
   const denied = await fetch(`${base}/api/miniapp/settings`);
   assert.equal(denied.status, 401);
@@ -81,6 +95,110 @@ test('Mini App securely exposes settings without chat input actions', async (t) 
   const settings = await settingsResponse.json();
   assert.equal(settings.profile.id, String(telegramUser.id));
   assert.ok(settings.providers.some((provider) => provider.id === 'gemini'));
+  assert.deepEqual(settings.news.effective, {
+    region: 'CN',
+    language: 'zh-CN',
+    timeZone: 'Asia/Shanghai'
+  });
+
+  const updateResponse = await fetch(`${base}/api/miniapp/settings`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({
+      providerId: 'auto',
+      modelId: '',
+      fallbackEnabled: true,
+      preferredLanguage: 'zh',
+      persona: 'default',
+      newsRegion: 'SG',
+      newsLanguage: 'en-SG',
+      newsTimeZone: 'Asia/Singapore'
+    })
+  });
+  assert.equal(updateResponse.status, 200);
+  const updated = await updateResponse.json();
+  assert.equal(updated.news.region, 'SG');
+  assert.equal(updated.news.language, 'en-SG');
+  assert.equal(updated.news.timeZone, 'Asia/Singapore');
+  assert.deepEqual(updated.news.effective, {
+    region: 'SG',
+    language: 'en-SG',
+    timeZone: 'Asia/Singapore'
+  });
+
+  const invalidResponse = await fetch(`${base}/api/miniapp/settings`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({
+      providerId: 'auto',
+      modelId: '',
+      fallbackEnabled: true,
+      preferredLanguage: 'zh',
+      persona: 'default',
+      newsRegion: 'Singapore',
+      newsLanguage: 'en-SG',
+      newsTimeZone: 'Mars/Olympus'
+    })
+  });
+  assert.equal(invalidResponse.status, 422);
+  assert.equal(db.getUserNewsSettings(telegramUser.id).region, 'SG');
+
+  const customNewsResponse = await fetch(`${base}/api/miniapp/settings`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({
+      providerId: 'auto',
+      modelId: '',
+      fallbackEnabled: true,
+      preferredLanguage: 'zh',
+      persona: 'default',
+      newsRegion: 'DE',
+      newsLanguage: 'de-DE',
+      newsTimeZone: 'Europe/Berlin'
+    })
+  });
+  assert.equal(customNewsResponse.status, 200);
+  const customNews = await customNewsResponse.json();
+  assert.deepEqual(customNews.news.effective, {
+    region: 'DE',
+    language: 'de-DE',
+    timeZone: 'Europe/Berlin'
+  });
+
+  const legacyUpdateResponse = await fetch(`${base}/api/miniapp/settings`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({
+      providerId: 'auto',
+      modelId: '',
+      fallbackEnabled: true,
+      preferredLanguage: 'en',
+      persona: 'default'
+    })
+  });
+  assert.equal(legacyUpdateResponse.status, 200);
+  assert.equal(db.getUserNewsSettings(telegramUser.id).region, 'DE');
+
+  const resetNewsResponse = await fetch(`${base}/api/miniapp/settings`, {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify({
+      providerId: 'auto',
+      modelId: '',
+      fallbackEnabled: true,
+      preferredLanguage: 'en',
+      persona: 'default',
+      newsRegion: '',
+      newsLanguage: '',
+      newsTimeZone: ''
+    })
+  });
+  assert.equal(resetNewsResponse.status, 200);
+  const resetNews = await resetNewsResponse.json();
+  assert.equal(resetNews.news.region, '');
+  assert.equal(resetNews.news.language, '');
+  assert.equal(resetNews.news.timeZone, '');
+  assert.equal(db.getUserNewsSettings(telegramUser.id).region, '');
 
   const removedAction = await fetch(`${base}/api/miniapp/action`, {
     method: 'POST',

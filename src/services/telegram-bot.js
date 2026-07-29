@@ -13,6 +13,7 @@ import {
   stripTelegramBotMentionsFromMessage
 } from '../utils/telegram.js';
 import { extractUrls, splitMessage, toDataUri, truncateText } from '../utils/text.js';
+import { resolveEffectiveNewsSettings } from '../utils/news-settings.js';
 import { personaPresets } from '../config.js';
 import { DocumentParser } from './document-parser.js';
 import { MultimodalActionService } from './multimodal-action-service.js';
@@ -284,6 +285,20 @@ function isEnglishLocale(locale = 'en') {
 
 function localText(locale = 'en', zh = '', en = '') {
   return isEnglishLocale(locale) ? en : zh;
+}
+
+function looksLikeImplicitNewsFollowUp(text = '') {
+  const value = String(text || '').trim();
+  if (!value) return false;
+  const explicitOtherIntent =
+    /(?:天气|气温|汇率|股价|价格|币价|金价|油价|航班|比分|翻译|背景|历史|介绍|资料|分析|趋势|走势|前景|基本面|weather|temperature|exchange\s*rate|stock|price|flight|score|translate|translation|background|history|profile|overview|information|analysis|trend|outlook|fundamentals?)/i;
+  if (explicitOtherIntent.test(value)) return false;
+
+  const explicitNewsContinuation =
+    /(?:最新|近期|最近).{0,8}(?:动态|进展|近况|消息|报道|更新)|(?:后续|最新)(?:进展|动态|消息)|(?:再|继续|另外|还有|补充|更多|换一批).{0,8}(?:新闻|消息|报道|头条|热点|资讯|动态|进展|几条)|(?:latest|recent|newest|breaking)\s+(?:news|updates?|developments?|headlines?|stories?|reports?)|(?:more|another|additional|similar|other|follow[-\s]?up).{0,20}(?:news|updates?|developments?|headlines?|stories?|articles?|reports?)/i;
+  const bareNewsContinuation =
+    /^(?:继续|更多|还有吗|还有呢|再来(?:几条)?|再找(?:几条)?|换一批|more(?:\s+please)?|another(?:\s+one)?|any\s+others?|continue)[\s?？!！.。]*$/i;
+  return explicitNewsContinuation.test(value) || bareNewsContinuation.test(value);
 }
 
 function localStatus(status = '', locale = 'zh') {
@@ -1572,6 +1587,75 @@ export class TelegramAIBot {
       manualProvider,
       manualModel,
       autoRouting
+    };
+  }
+
+  getEffectiveNewsSettings(userId, locale = '', telegramLanguageCode = '') {
+    let stored = {};
+    try {
+      stored = this.db.getUserNewsSettings?.(userId) || {};
+    } catch {
+      // News preferences are optional; global settings remain a safe fallback.
+    }
+    return resolveEffectiveNewsSettings({
+      stored,
+      config: this.config,
+      locale,
+      telegramLanguageCode
+    });
+  }
+
+  async searchPersonalizedNewsForTool(query, {
+    userId = '',
+    locale = '',
+    telegramLanguageCode = '',
+    forceNews = false,
+    signal,
+    timeoutMs
+  } = {}) {
+    const newsQuery = String(query || '').trim();
+    const isNewsQuery =
+      naturalAgentInternals.looksLikeNewsSearch(newsQuery) ||
+      (forceNews && looksLikeImplicitNewsFollowUp(newsQuery));
+    if (!isNewsQuery) return { handled: false, output: '' };
+
+    const newsSettings = this.getEffectiveNewsSettings(
+      userId,
+      locale,
+      telegramLanguageCode
+    );
+    const strictToday = naturalAgentInternals.isStrictTodayNewsQuery(newsQuery);
+    try {
+      const output = await naturalAgentInternals.fetchNewsFallback(newsQuery, {
+        signal,
+        timeoutMs: timeoutMs || this.config.requestTimeoutMs,
+        timeZone: newsSettings.timeZone,
+        region: newsSettings.region,
+        language: newsSettings.language,
+        todayOnly: strictToday
+      });
+      if (naturalAgentInternals.hasUsefulToolResult(output)) {
+        return { handled: true, output };
+      }
+    } catch (error) {
+      this.logger?.warn?.('Personalized news tool search unavailable', {
+        userId: String(userId || ''),
+        error: this.formatLogError(error)
+      });
+    }
+
+    if (!strictToday) return { handled: false, output: '' };
+    return {
+      handled: true,
+      output: JSON.stringify({
+        ok: false,
+        error: 'NEWS_RESULTS_EMPTY',
+        message: localText(
+          locale,
+          '没有找到可核验为今天发布的新闻，请稍后再试。',
+          'No news verified as published today was found. Please try again later.'
+        )
+      })
     };
   }
 
@@ -5005,8 +5089,20 @@ export class TelegramAIBot {
       });
 
       if (toolName === 'web_search' || toolName === 'fetch_url') {
+        const locale = this.getLocale(ctx);
+        const newsSettings = this.getEffectiveNewsSettings(
+          ctx.from?.id,
+          locale,
+          ctx.from?.language_code
+        );
         return {
-          text: naturalAgentInternals.appendClickableReferences(answer, raw),
+          text: naturalAgentInternals.appendClickableReferences(
+            answer,
+            raw,
+            locale,
+            Math.min(3500, Number(this.config.maxOutputChars) || 3500),
+            newsSettings.timeZone
+          ),
           html: true
         };
       }
@@ -5082,6 +5178,11 @@ export class TelegramAIBot {
 
   async runWebSearch(ctx, query = extractCommandArgs(ctx.message?.text || '')) {
     const locale = this.getLocale(ctx);
+    const newsSettings = this.getEffectiveNewsSettings(
+      ctx.from?.id,
+      locale,
+      ctx.from?.language_code
+    );
     if (!query) {
       await ctx.reply(this.t(locale, 'webUsage'));
       return;
@@ -5126,8 +5227,39 @@ export class TelegramAIBot {
         settings.autoRouting === true &&
         !settings.manualProvider &&
         !settings.manualModel;
+      const isNewsQuery = naturalAgentInternals.looksLikeNewsSearch(query);
+      const strictTodayNews =
+        isNewsQuery && naturalAgentInternals.isStrictTodayNewsQuery(query);
+      let raw = '';
+
+      if (isNewsQuery) {
+        try {
+          raw = await naturalAgentInternals.fetchNewsFallback(query, {
+            timeoutMs: this.config.requestTimeoutMs,
+            timeZone: newsSettings.timeZone,
+            region: newsSettings.region,
+            language: newsSettings.language,
+            todayOnly: strictTodayNews
+          });
+        } catch (error) {
+          this.logger.warn('Dated news RSS unavailable; trying another search path', {
+            error: this.formatLogError(error)
+          });
+        }
+      }
+
+      if (strictTodayNews && !naturalAgentInternals.hasUsefulToolResult(raw)) {
+        await this.refundQuotaForContext(ctx);
+        await ctx.reply(localText(
+          locale,
+          '暂未找到可验证为今天发布的新闻，请稍后再试。',
+          'No news verified as published today was found. Please try again later.'
+        ));
+        return;
+      }
 
       if (
+        !naturalAgentInternals.hasUsefulToolResult(raw) &&
         this.config.enableWebSearch &&
         this.config.enableGeminiGoogleSearch &&
         (selectedProvider === 'gemini' || trulyAutomaticProvider)
@@ -5182,23 +5314,30 @@ export class TelegramAIBot {
         }
       }
 
-      const raw = await this.toolRegistry.execute({
-        function: {
-          name: 'web_search',
-          arguments: JSON.stringify({ query })
-        }
-      }, {
-        source: 'telegram_command',
-        userId: ctx.from?.id,
-        chatId: ctx.chat?.id,
-        isAdmin: this.isAdmin(ctx),
-        toolUsage: { count: 0 }
-      });
+      if (!naturalAgentInternals.hasUsefulToolResult(raw)) {
+        raw = await this.toolRegistry.execute({
+          function: {
+            name: 'web_search',
+            arguments: JSON.stringify({ query })
+          }
+        }, {
+          source: 'telegram_command',
+          userId: ctx.from?.id,
+          chatId: ctx.chat?.id,
+          isAdmin: this.isAdmin(ctx),
+          toolUsage: { count: 0 }
+        });
+      }
+
       try {
         const parsed = JSON.parse(raw);
         if (parsed?.error) {
           await this.refundQuotaForContext(ctx);
-          await ctx.reply(this.formatUserFacingError(parsed.message || parsed.error, locale));
+          await ctx.reply(localText(
+            locale,
+            '联网搜索暂时不可用，请稍后再试。',
+            'Live search is temporarily unavailable. Please try again later.'
+          ));
           return;
         }
       } catch {
@@ -6836,7 +6975,14 @@ export class TelegramAIBot {
             userId: state.userId,
             chatId: state.chatId,
             isAdmin: this.config.adminUserIds.has(String(state.userId)),
-            toolUsage: state.toolUsage || (state.toolUsage = { count: 0 })
+            toolUsage: state.toolUsage || (state.toolUsage = { count: 0 }),
+            newsSearch: (query, options) => this.searchPersonalizedNewsForTool(query, {
+              ...options,
+              userId: state.userId,
+              locale: state.locale || 'zh',
+              telegramLanguageCode: state.telegramLanguageCode || '',
+              forceNews: naturalAgentInternals.looksLikeNewsSearch(routingText)
+            })
           });
           await this.db.incrementStats('toolCalls');
           return output;
@@ -7519,7 +7665,14 @@ export class TelegramAIBot {
               userId: ctx.from?.id,
               chatId: ctx.chat?.id,
               isAdmin: this.isAdmin(ctx),
-              toolUsage
+              toolUsage,
+              newsSearch: (query, options) => this.searchPersonalizedNewsForTool(query, {
+                ...options,
+                userId: ctx.from?.id,
+                locale,
+                telegramLanguageCode: ctx.from?.language_code,
+                forceNews: naturalAgentInternals.looksLikeNewsSearch(routingText)
+              })
             });
             await this.db.incrementStats('toolCalls');
             return output;
@@ -7584,6 +7737,7 @@ export class TelegramAIBot {
           messageId: reply.lastMessageId,
           sessionId,
           locale,
+          telegramLanguageCode: ctx.from?.language_code || '',
           model,
           preparedMessage: prepared.message,
           historyBefore: history,

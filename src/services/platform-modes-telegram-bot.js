@@ -616,6 +616,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     chatId = '',
     text = '',
     locale = 'zh',
+    telegramLanguageCode = '',
     scope = 'platform_mode',
     role = '',
     fallbackEnabled,
@@ -735,7 +736,14 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
               isAdmin: this.config.adminUserIds?.has(normalizedUserId) || false,
               toolUsage,
               signal,
-              requestTimeoutMs
+              requestTimeoutMs,
+              newsSearch: (query, options) => this.searchPersonalizedNewsForTool(query, {
+                ...options,
+                userId: normalizedUserId,
+                locale,
+                telegramLanguageCode,
+                forceNews: naturalAgentInternals.looksLikeNewsSearch(prompt)
+              })
             });
             await this.db.incrementStats?.('toolCalls');
             return output;
@@ -879,7 +887,11 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     return state;
   }
 
-  getInlineCacheFingerprint(userId = '', locale = '', { query = '', kind = 'answer' } = {}) {
+  getInlineCacheFingerprint(
+    userId = '',
+    locale = '',
+    { query = '', kind = 'answer', telegramLanguageCode = '' } = {}
+  ) {
     let user = {};
     let settings = {};
     try {
@@ -892,6 +904,15 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     } catch {
       // Use an empty settings fingerprint when storage is temporarily unavailable.
     }
+    const newsSettings = this.getEffectiveNewsSettings?.(
+      userId,
+      locale,
+      telegramLanguageCode
+    ) || {
+      region: this.config.newsRegion,
+      language: naturalAgentInternals.resolveNewsLanguage(locale, this.config.newsLanguage),
+      timeZone: this.config.newsTimeZone
+    };
     return createHash('sha256').update(JSON.stringify({
       locale: String(locale || ''),
       preferredLanguage: user.preferredLanguage || '',
@@ -917,9 +938,11 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
       translationProvider: kind === 'translation' ? this.config.translationProvider || '' : '',
       translationModel: kind === 'translation' ? this.config.translationModel || this.config.defaultModel || '' : '',
       strictNewsDate: kind === 'news' && naturalAgentInternals.isStrictTodayNewsQuery(query)
-        ? naturalAgentInternals.newsLocalDateKey(Date.now(), this.config.newsTimeZone)
+        ? naturalAgentInternals.newsLocalDateKey(Date.now(), newsSettings.timeZone)
         : '',
-      newsTimeZone: kind === 'news' ? this.config.newsTimeZone || '' : ''
+      newsRegion: kind === 'news' ? newsSettings.region || '' : '',
+      newsLanguage: kind === 'news' ? newsSettings.language || '' : '',
+      newsTimeZone: kind === 'news' ? newsSettings.timeZone || '' : ''
     })).digest('hex').slice(0, 20);
   }
 
@@ -1083,9 +1106,25 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     }
   }
 
-  async getInlineSearchContext({ userId = '', query = '', locale = 'zh', signal, timeoutMs } = {}) {
+  async getInlineSearchContext({
+    userId = '',
+    query = '',
+    locale = 'zh',
+    telegramLanguageCode = '',
+    signal,
+    timeoutMs
+  } = {}) {
     const searchQuery = inlineSearchQuery(query);
     const isNewsQuery = isInlineNewsQuery(searchQuery);
+    const newsSettings = this.getEffectiveNewsSettings?.(
+      userId,
+      locale,
+      telegramLanguageCode
+    ) || {
+      region: this.config.newsRegion,
+      language: naturalAgentInternals.resolveNewsLanguage(locale, this.config.newsLanguage),
+      timeZone: this.config.newsTimeZone
+    };
     const canUseToolSearch = Boolean(this.config.enableToolCalls && this.toolRegistry?.execute);
     if (
       !searchQuery ||
@@ -1149,9 +1188,9 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
         naturalAgentInternals.fetchNewsFallback(searchQuery, {
           signal: searchSignal,
           timeoutMs: searchBudgetMs,
-          timeZone: this.config.newsTimeZone,
-          region: this.config.newsRegion,
-          language: naturalAgentInternals.resolveNewsLanguage(locale, this.config.newsLanguage),
+          timeZone: newsSettings.timeZone,
+          region: newsSettings.region,
+          language: newsSettings.language,
           todayOnly: naturalAgentInternals.isStrictTodayNewsQuery(searchQuery)
         })
       )));
@@ -1194,6 +1233,15 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     const userId = String(user.id || 'anonymous');
     const queryId = String(ctx.update.inline_query?.id || randomUUID());
     const locale = this.getLocale(ctx, this.db.findUser?.(userId));
+    let newsSettings = this.getEffectiveNewsSettings?.(
+      userId,
+      locale,
+      user.language_code
+    ) || {
+      region: this.config.newsRegion,
+      language: naturalAgentInternals.resolveNewsLanguage(locale, this.config.newsLanguage),
+      timeZone: this.config.newsTimeZone
+    };
     const translationIncomplete = isIncompleteInlineTranslationQuery(query);
     const translationRequest = translationIncomplete ? null : this.parseTranslationRequest?.(query);
     const searchQuery = translationRequest ? '' : inlineSearchQuery(query);
@@ -1280,7 +1328,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
           } else {
             joinedResponse = {
               results: [inlineArticle(this.formatUserFacingError(error, locale), PLATFORM_MODE_NAMES.inline)],
-              extra: { cache_time: 5, is_personal: true },
+              extra: { cache_time: responseKind === 'news' ? 0 : 5, is_personal: true },
               chargeable: false
             };
           }
@@ -1384,13 +1432,19 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
         () => this.ensurePlatformUser(user),
         { deadlineAt, signal: abortController.signal }
       );
+      newsSettings = this.getEffectiveNewsSettings?.(
+        userId,
+        locale,
+        user.language_code
+      ) || newsSettings;
       await this.runInlineWork(
         () => this.assertPlatformRequestAllowed(userId, '', { checkRateLimit: false }),
         { deadlineAt, signal: abortController.signal }
       );
       cacheFingerprint = this.getInlineCacheFingerprint(userId, locale, {
         query: searchQuery || query,
-        kind: responseKind
+        kind: responseKind,
+        telegramLanguageCode: user.language_code
       });
       const cachedAnswer = this.getCachedInlineAnswer(userId, query, cacheFingerprint);
       if (cachedAnswer?.answer) {
@@ -1401,9 +1455,9 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
             kind: cachedAnswer.kind,
             context: cachedAnswer.context,
             locale,
-            timeZone: this.config.newsTimeZone
+            timeZone: newsSettings.timeZone
           }),
-          extra: { cache_time: 30, is_personal: true }
+          extra: { cache_time: cachedAnswer.kind === 'news' ? 0 : 30, is_personal: true }
         };
       }
       // Telegram may resend identical inline queries while focus changes. Cache
@@ -1434,6 +1488,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
                 userId,
                 query,
                 locale,
+                telegramLanguageCode: user.language_code,
                 signal: abortController.signal,
                 timeoutMs: searchWorkBudgetMs
               }),
@@ -1461,12 +1516,12 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
                 query
               )
             ],
-            extra: { cache_time: 5, is_personal: true }
+            extra: { cache_time: searchIsNews ? 0 : 5, is_personal: true }
           };
         } else {
           const useRetrievedSearchFallback = (error = null) => {
             const searchFallback = retrievedContext
-              ? formatInlineSearchFallback(retrievedContext, locale, this.config.newsTimeZone)
+              ? formatInlineSearchFallback(retrievedContext, locale, newsSettings.timeZone)
               : '';
             if (!searchFallback) return false;
             if (error) {
@@ -1495,9 +1550,9 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
                 kind: fallbackKind,
                 context: retrievedContext,
                 locale,
-                timeZone: this.config.newsTimeZone
+                timeZone: newsSettings.timeZone
               }),
-              extra: { cache_time: 10, is_personal: true }
+              extra: { cache_time: fallbackKind === 'news' ? 0 : 10, is_personal: true }
             };
             quotaShouldCommit = true;
             return true;
@@ -1524,6 +1579,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
                       userId,
                       text: query,
                       locale,
+                      telegramLanguageCode: user.language_code,
                       scope: 'telegram_inline',
                       role: retrievedContext ? 'inline live-search answer generator' : 'inline answer generator',
                       fallbackEnabled: true,
@@ -1552,9 +1608,9 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
                   kind: responseKind,
                   context: retrievedContext,
                   locale,
-                  timeZone: this.config.newsTimeZone
+                  timeZone: newsSettings.timeZone
                 }),
-                extra: { cache_time: 30, is_personal: true }
+                extra: { cache_time: responseKind === 'news' ? 0 : 30, is_personal: true }
               };
               quotaShouldCommit = true;
             } catch (error) {
@@ -1598,7 +1654,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
         this.logger?.warn?.('Inline query failed', { error: this.formatLogError(error) });
         response = {
           results: [inlineArticle(this.formatUserFacingError(error, locale), PLATFORM_MODE_NAMES.inline)],
-          extra: { cache_time: 5, is_personal: true }
+          extra: { cache_time: responseKind === 'news' ? 0 : 5, is_personal: true }
         };
       }
     } finally {
@@ -1671,6 +1727,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
         chatId: String(message.chat?.id || message.guest_bot_caller_chat?.id || ''),
         text: input,
         locale,
+        telegramLanguageCode: caller.language_code,
         scope: 'telegram_guest',
         role: 'one-turn guest assistant',
         quotaReservation
@@ -1957,6 +2014,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
         chatId: String(message.chat?.id || ''),
         text: input,
         locale,
+        telegramLanguageCode: owner.language_code,
         scope: 'telegram_secretary',
         role: 'business secretary replying on behalf of the connected account; never make binding commitments, payments, or disclosures without explicit owner approval',
         quotaReservation,
@@ -2009,6 +2067,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
         chatId: String(ctx.chat?.id || ''),
         text: prompt,
         locale: 'en',
+        telegramLanguageCode: ctx.from?.language_code,
         scope: 'telegram_bot_collaboration',
         role: 'bot collaboration peer; produce one self-contained final response and do not ask the other bot to reply again',
         quotaReservation

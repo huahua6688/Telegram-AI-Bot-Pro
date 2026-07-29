@@ -71,6 +71,41 @@ test('web search races DuckDuckGo paths and cancels the slower request', async (
   assert.equal(instantAborted, true);
 });
 
+test('web search uses a personalized news resolver before generic search', async () => {
+  let genericFetches = 0;
+  let receivedQuery = '';
+  globalThis.fetch = async () => {
+    genericFetches += 1;
+    throw new Error('generic search must not run');
+  };
+  const registry = createRegistry();
+  const raw = await registry.execute({
+    function: {
+      name: 'web_search',
+      arguments: JSON.stringify({ query: 'today news' })
+    }
+  }, {
+    source: 'assistant_chat',
+    userId: 'news-user',
+    chatId: 'news-chat',
+    toolUsage: { count: 0 },
+    newsSearch: async (query) => {
+      receivedQuery = query;
+      return {
+        handled: true,
+        output: JSON.stringify({
+          timeZone: 'Asia/Shanghai',
+          results: [{ title: 'Personalized headline', url: 'https://example.com/news' }]
+        })
+      };
+    }
+  });
+
+  assert.equal(receivedQuery, 'today news');
+  assert.equal(genericFetches, 0);
+  assert.equal(JSON.parse(raw).results[0].title, 'Personalized headline');
+});
+
 test('web search prefers configured Brave Search and preserves multiple sourced results', async () => {
   let subscriptionToken = '';
   globalThis.fetch = async (url, options = {}) => {

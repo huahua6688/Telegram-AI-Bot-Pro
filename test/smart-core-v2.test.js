@@ -9,7 +9,10 @@ import {
 import { ToolRegistry } from '../src/services/tool-registry.js';
 import { TelegramAIBot } from '../src/services/telegram-bot.js';
 import { PrivacyTelegramAIBot } from '../src/services/privacy-telegram-bot.js';
-import { tryHandleNaturalAgent } from '../src/services/natural-agent.js';
+import {
+  naturalAgentInternals,
+  tryHandleNaturalAgent
+} from '../src/services/natural-agent.js';
 import { MultimodalActionService } from '../src/services/multimodal-action-service.js';
 import { AudioOrchestrator } from '../src/services/audio-orchestrator.js';
 
@@ -875,17 +878,289 @@ test('search replies hide naked source URLs behind clickable titles', async () =
   await bot.runWebSearch({
     from: { id: 1, language_code: 'zh' },
     chat: { id: 1, type: 'private' },
-    message: { message_id: 10, text: 'today news' },
+    message: { message_id: 10, text: 'latest AI developments' },
     async sendChatAction() {},
     async reply(message, extra) {
       replies.push({ message, extra });
     }
-  }, 'today news');
+  }, 'latest AI developments');
 
   assert.equal(replies.length, 1);
   assert.equal(replies[0].extra.parse_mode, 'HTML');
   assert.match(replies[0].message, /<a href="https:\/\/example\.com\/current-news">Example News<\/a>/);
   assert.doesNotMatch(replies[0].message.replace(/href="[^"]+"/g, ''), /https:\/\//);
+});
+
+test('direct today-news search uses dated RSS before the failing generic search tool', async () => {
+  const replies = [];
+  const requested = [];
+  let genericSearchCalls = 0;
+  let refunds = 0;
+  const originalNewsFallback = naturalAgentInternals.fetchNewsFallback;
+  naturalAgentInternals.fetchNewsFallback = async (query, options) => {
+    requested.push({ query, options });
+    return JSON.stringify({
+      strictToday: true,
+      timeZone: 'Asia/Shanghai',
+      results: [{
+        title: '今天发布的重要新闻',
+        description: '示例通讯社 · 2026/07/29 12:00',
+        url: 'https://example.com/today-news',
+        sourceName: '示例通讯社',
+        publishedAt: '2026-07-29T04:00:00.000Z'
+      }]
+    });
+  };
+
+  try {
+    const bot = Object.create(TelegramAIBot.prototype);
+    bot.config = {
+      aiProvider: 'openai-compatible',
+      enableWebSearch: true,
+      enableGeminiGoogleSearch: false,
+      defaultModel: 'gpt-5-mini',
+      maxHistoryMessages: 20,
+      maxOutputChars: 3500,
+      requestTimeoutMs: 120000,
+      newsRegion: 'MY',
+      newsLanguage: 'auto',
+      newsTimeZone: 'Asia/Kuala_Lumpur'
+    };
+    bot.logger = logger();
+    bot.db = {
+      findUser() {
+        return { preferredLanguage: 'zh', persona: 'default' };
+      },
+      getUserNewsSettings() {
+        return {
+          region: 'CN',
+          language: 'zh-CN',
+          timeZone: 'Asia/Shanghai'
+        };
+      },
+      getConversation() {
+        return [];
+      },
+      async setConversation() {},
+      async incrementStats() {}
+    };
+    bot.toolRegistry = {
+      async execute() {
+        genericSearchCalls += 1;
+        return JSON.stringify({
+          ok: false,
+          error: 'TOOL_EXECUTION_FAILED',
+          message: 'The tool could not complete the request. Try another available approach or explain the limitation.'
+        });
+      }
+    };
+    bot.getLocale = () => 'zh';
+    bot.getEffectiveAISettings = () => ({
+      providerId: 'openai-compatible',
+      modelId: 'gpt-5-mini',
+      autoRouting: true,
+      fallbackEnabled: true
+    });
+    bot.resolveSmartModelRoute = () => ({
+      provider: 'openai-compatible',
+      model: 'gpt-5-mini'
+    });
+    bot.consumeQuotaForContext = async () => true;
+    bot.refundQuotaForContext = async () => {
+      refunds += 1;
+    };
+    bot.completeWithAiFallback = async () => ({
+      result: { text: '这是今天已核实的一条重要新闻摘要。' }
+    });
+
+    await bot.runWebSearch({
+      from: { id: 1, language_code: 'zh' },
+      chat: { id: 1, type: 'private' },
+      message: { message_id: 10, text: '今日新闻' },
+      async sendChatAction() {},
+      async reply(message, extra) {
+        replies.push({ message, extra });
+      }
+    }, '今日新闻');
+  } finally {
+    naturalAgentInternals.fetchNewsFallback = originalNewsFallback;
+  }
+
+  assert.equal(requested.length, 1);
+  assert.equal(requested[0].query, '今日新闻');
+  assert.equal(requested[0].options.todayOnly, true);
+  assert.equal(requested[0].options.region, 'CN');
+  assert.equal(requested[0].options.timeZone, 'Asia/Shanghai');
+  assert.equal(genericSearchCalls, 0);
+  assert.equal(refunds, 0);
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0].extra.parse_mode, 'HTML');
+  assert.match(replies[0].message, /这是今天已核实的一条重要新闻摘要/);
+  assert.match(replies[0].message, /示例通讯社/);
+  assert.match(replies[0].message, /https:\/\/example\.com\/today-news/);
+  assert.doesNotMatch(
+    replies[0].message,
+    /TOOL_EXECUTION_FAILED|The tool could not complete|处理失败/
+  );
+});
+
+test('model-initiated news tools keep personal news settings for follow-up wording', async () => {
+  const originalNewsFallback = naturalAgentInternals.fetchNewsFallback;
+  let received;
+  let newsCalls = 0;
+  naturalAgentInternals.fetchNewsFallback = async (query, options) => {
+    newsCalls += 1;
+    received = { query, options };
+    return JSON.stringify({
+      strictToday: true,
+      results: [{ title: 'Follow-up headline', url: 'https://example.com/follow-up' }]
+    });
+  };
+
+  try {
+    const bot = Object.create(TelegramAIBot.prototype);
+    bot.config = {
+      requestTimeoutMs: 4000,
+      newsRegion: 'MY',
+      newsLanguage: 'auto',
+      newsTimeZone: 'Asia/Kuala_Lumpur'
+    };
+    bot.logger = logger();
+    bot.formatLogError = (error) => ({ detail: String(error?.message || error) });
+    bot.db = {
+      getUserNewsSettings() {
+        return {
+          region: 'US',
+          language: 'en-US',
+          timeZone: 'America/New_York'
+        };
+      }
+    };
+
+    const result = await bot.searchPersonalizedNewsForTool('再找几条今天的', {
+      userId: 7,
+      locale: 'zh',
+      telegramLanguageCode: 'zh-CN',
+      forceNews: true
+    });
+
+    assert.equal(result.handled, true);
+    assert.match(result.output, /Follow-up headline/);
+    assert.equal(received.query, '再找几条今天的');
+    assert.equal(received.options.region, 'US');
+    assert.equal(received.options.language, 'en-US');
+    assert.equal(received.options.timeZone, 'America/New_York');
+    assert.equal(received.options.todayOnly, true);
+
+    const unrelated = await bot.searchPersonalizedNewsForTool('USD exchange rate', {
+      userId: 7,
+      locale: 'zh',
+      forceNews: true
+    });
+    assert.equal(unrelated.handled, false);
+
+    for (const query of [
+      'more information about Acme',
+      '再查这家公司背景',
+      '再查黄金走势'
+    ]) {
+      const nonNewsFollowUp = await bot.searchPersonalizedNewsForTool(query, {
+        userId: 7,
+        locale: 'zh',
+        forceNews: true
+      });
+      assert.equal(nonNewsFollowUp.handled, false, `${query} must stay a generic web search`);
+    }
+    assert.equal(newsCalls, 1);
+
+    const developmentFollowUp = await bot.searchPersonalizedNewsForTool(
+      'latest developments about Acme',
+      {
+        userId: 7,
+        locale: 'en',
+        forceNews: true
+      }
+    );
+    assert.equal(developmentFollowUp.handled, true);
+    assert.equal(newsCalls, 2);
+  } finally {
+    naturalAgentInternals.fetchNewsFallback = originalNewsFallback;
+  }
+});
+
+test('direct today-news search never leaks internal tool errors when dated news is unavailable', async () => {
+  const replies = [];
+  let genericSearchCalls = 0;
+  let refunds = 0;
+  const originalNewsFallback = naturalAgentInternals.fetchNewsFallback;
+  naturalAgentInternals.fetchNewsFallback = async () => '';
+
+  try {
+    const bot = Object.create(TelegramAIBot.prototype);
+    bot.config = {
+      aiProvider: 'openai-compatible',
+      enableWebSearch: true,
+      enableGeminiGoogleSearch: false,
+      defaultModel: 'gpt-5-mini',
+      maxOutputChars: 3500,
+      requestTimeoutMs: 120000,
+      newsRegion: 'CN',
+      newsLanguage: 'zh-CN',
+      newsTimeZone: 'Asia/Shanghai'
+    };
+    bot.logger = logger();
+    bot.db = {
+      findUser() {
+        return { preferredLanguage: 'zh' };
+      }
+    };
+    bot.toolRegistry = {
+      async execute() {
+        genericSearchCalls += 1;
+        return JSON.stringify({
+          ok: false,
+          error: 'TOOL_EXECUTION_FAILED',
+          message: 'The tool could not complete the request. Try another available approach or explain the limitation.'
+        });
+      }
+    };
+    bot.getLocale = () => 'zh';
+    bot.getEffectiveAISettings = () => ({
+      providerId: 'openai-compatible',
+      modelId: 'gpt-5-mini',
+      autoRouting: true,
+      fallbackEnabled: true
+    });
+    bot.resolveSmartModelRoute = () => ({
+      provider: 'openai-compatible',
+      model: 'gpt-5-mini'
+    });
+    bot.consumeQuotaForContext = async () => true;
+    bot.refundQuotaForContext = async () => {
+      refunds += 1;
+    };
+
+    await bot.runWebSearch({
+      from: { id: 1, language_code: 'zh' },
+      chat: { id: 1, type: 'private' },
+      message: { message_id: 10, text: '今日新闻' },
+      async sendChatAction() {},
+      async reply(message, extra) {
+        replies.push({ message, extra });
+      }
+    }, '今日新闻');
+  } finally {
+    naturalAgentInternals.fetchNewsFallback = originalNewsFallback;
+  }
+
+  assert.equal(genericSearchCalls, 0);
+  assert.equal(refunds, 1);
+  assert.equal(replies.length, 1);
+  assert.match(replies[0].message, /暂未找到可验证为今天发布的新闻/);
+  assert.doesNotMatch(
+    replies[0].message,
+    /TOOL_EXECUTION_FAILED|The tool could not complete|Try another available approach|处理失败/
+  );
 });
 
 test('capability provider selection stays request-scoped during overlapping requests', async () => {

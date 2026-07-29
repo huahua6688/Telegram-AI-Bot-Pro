@@ -682,7 +682,15 @@ async function executeTool(bot, ctx, name, args, source = 'natural_agent') {
       userId: ctx.from?.id,
       chatId: ctx.chat?.id,
       isAdmin: bot.isAdmin(ctx),
-      toolUsage: { count: 0 }
+      toolUsage: { count: 0 },
+      newsSearch: typeof bot.searchPersonalizedNewsForTool === 'function'
+        ? (query, options) => bot.searchPersonalizedNewsForTool(query, {
+            ...options,
+            userId: ctx.from?.id,
+            locale: bot.getLocale(ctx),
+            telegramLanguageCode: ctx.from?.language_code
+          })
+        : undefined
     }
   );
 }
@@ -839,6 +847,15 @@ async function composeHumanAnswer(bot, ctx, { userText, toolName, raw, title }) 
 async function runSearch(bot, ctx, query, originalText = query) {
   const locale = bot.getLocale(ctx);
   const keyword = String(query || '').trim();
+  const newsSettings = bot.getEffectiveNewsSettings?.(
+    ctx.from?.id,
+    locale,
+    ctx.from?.language_code
+  ) || {
+    region: bot.config?.newsRegion,
+    language: resolveNewsLanguage(locale, bot.config?.newsLanguage),
+    timeZone: bot.config?.newsTimeZone
+  };
 
   if (!keyword) return false;
   if (typeof bot.consumeQuotaForContext === 'function' && !(await bot.consumeQuotaForContext(ctx))) {
@@ -868,9 +885,9 @@ async function runSearch(bot, ctx, query, originalText = query) {
     if (!hasUsefulToolResult(raw) && looksLikeNewsSearch(keyword)) {
       const fallbackRaw = await fetchNewsFallback(keyword, {
         timeoutMs: bot.config?.requestTimeoutMs,
-        timeZone: bot.config?.newsTimeZone,
-        region: bot.config?.newsRegion,
-        language: resolveNewsLanguage(locale, bot.config?.newsLanguage)
+        timeZone: newsSettings.timeZone,
+        region: newsSettings.region,
+        language: newsSettings.language
       });
       if (fallbackRaw) raw = fallbackRaw;
     }
@@ -897,7 +914,7 @@ async function runSearch(bot, ctx, query, originalText = query) {
       raw,
       locale,
       Math.min(3500, Number(bot.config.maxOutputChars) || 3500),
-      bot.config.newsTimeZone
+      newsSettings.timeZone
     );
     await replyHtml(ctx, finalText, bot.config.maxOutputChars);
     await rememberHandledInteraction(bot, ctx, originalText, answer, modelName(bot, ctx));
@@ -912,6 +929,11 @@ async function runSearch(bot, ctx, query, originalText = query) {
 async function runUrl(bot, ctx, url, originalText = url) {
   const locale = bot.getLocale(ctx);
   const targetUrl = String(url || '').trim();
+  const newsSettings = bot.getEffectiveNewsSettings?.(
+    ctx.from?.id,
+    locale,
+    ctx.from?.language_code
+  ) || { timeZone: bot.config?.newsTimeZone };
 
   if (!/^https?:\/\//i.test(targetUrl)) return false;
   if (typeof bot.consumeQuotaForContext === 'function' && !(await bot.consumeQuotaForContext(ctx))) {
@@ -956,7 +978,7 @@ async function runUrl(bot, ctx, url, originalText = url) {
       raw || JSON.stringify({ results: [{ title: '打开网页', url: targetUrl }] }),
       locale,
       Math.min(3500, Number(bot.config.maxOutputChars) || 3500),
-      bot.config.newsTimeZone
+      newsSettings.timeZone
     );
     await replyHtml(ctx, finalText, bot.config.maxOutputChars);
     await rememberHandledInteraction(bot, ctx, originalText, answer, modelName(bot, ctx));
@@ -971,6 +993,11 @@ async function runUrl(bot, ctx, url, originalText = url) {
 async function runWeather(bot, ctx, location, originalText = location) {
   const locale = bot.getLocale(ctx);
   const place = String(location || '').trim();
+  const newsSettings = bot.getEffectiveNewsSettings?.(
+    ctx.from?.id,
+    locale,
+    ctx.from?.language_code
+  ) || { timeZone: bot.config?.newsTimeZone };
 
   if (!place) return false;
   if (typeof bot.consumeQuotaForContext === 'function' && !(await bot.consumeQuotaForContext(ctx))) {
@@ -1002,7 +1029,7 @@ async function runWeather(bot, ctx, location, originalText = location) {
       raw,
       locale,
       Math.min(3500, Number(bot.config.maxOutputChars) || 3500),
-      bot.config.newsTimeZone
+      newsSettings.timeZone
     );
     await replyHtml(ctx, finalText, bot.config.maxOutputChars);
     await rememberHandledInteraction(bot, ctx, originalText, answer, modelName(bot, ctx));

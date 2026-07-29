@@ -1084,6 +1084,73 @@ test('dated news RSS remains available when model tool calling is disabled', asy
   }
 });
 
+test('inline news uses each account news settings and invalidates cache across regions', async () => {
+  const originalNewsFallback = naturalAgentInternals.fetchNewsFallback;
+  const preferences = new Map([
+    ['user-a', { region: 'SG', language: 'en-SG', timeZone: 'Asia/Singapore' }],
+    ['user-b', { region: 'CN', language: 'zh-CN', timeZone: 'Asia/Shanghai' }]
+  ]);
+  const received = [];
+  const bot = createBot({
+    config: {
+      newsRegion: 'MY',
+      newsLanguage: 'auto',
+      newsTimeZone: 'Asia/Kuala_Lumpur'
+    },
+    db: {
+      findUser(userId) {
+        return { id: String(userId), preferredLanguage: userId === 'user-a' ? 'en' : 'zh' };
+      },
+      getUserNewsSettings(userId) {
+        return preferences.get(String(userId)) || {};
+      }
+    }
+  });
+  naturalAgentInternals.fetchNewsFallback = async (_query, options) => {
+    received.push(options);
+    return JSON.stringify({
+      results: [{ title: 'Per-user news', url: 'https://example.com/per-user' }]
+    });
+  };
+
+  try {
+    await bot.getInlineSearchContext({
+      userId: 'user-a',
+      query: 'today news',
+      locale: 'en',
+      telegramLanguageCode: 'en'
+    });
+    await bot.getInlineSearchContext({
+      userId: 'user-b',
+      query: '今日新闻',
+      locale: 'zh',
+      telegramLanguageCode: 'zh-CN'
+    });
+  } finally {
+    naturalAgentInternals.fetchNewsFallback = originalNewsFallback;
+  }
+
+  assert.equal(received[0].region, 'SG');
+  assert.equal(received[0].language, 'en-SG');
+  assert.equal(received[0].timeZone, 'Asia/Singapore');
+  assert.equal(received[1].region, 'CN');
+  assert.equal(received[1].language, 'zh-CN');
+  assert.equal(received[1].timeZone, 'Asia/Shanghai');
+
+  const before = bot.getInlineCacheFingerprint('user-a', 'en', {
+    query: 'today news',
+    kind: 'news',
+    telegramLanguageCode: 'en'
+  });
+  preferences.set('user-a', { region: 'US', language: 'en', timeZone: 'America/New_York' });
+  const after = bot.getInlineCacheFingerprint('user-a', 'en', {
+    query: 'today news',
+    kind: 'news',
+    telegramLanguageCode: 'en'
+  });
+  assert.notEqual(before, after);
+});
+
 test('quota guard only charges one expensive action per Telegram update', async () => {
   let consumeCalls = 0;
   let accessChecks = 0;
@@ -1419,11 +1486,15 @@ test('inline current-information query prefetches web results and forces provide
     });
   };
   const answers = [];
+  const answerExtras = [];
 
   try {
     await bot.handleInlineQuery({
       update: { inline_query: { id: 'live-1', query: '今日新闻', from: { id: 80, language_code: 'zh-CN' } } },
-      answerInlineQuery: async (results) => answers.push(results)
+      answerInlineQuery: async (results, extra) => {
+        answers.push(results);
+        answerExtras.push(extra);
+      }
     });
   } finally {
     naturalAgentInternals.fetchNewsFallback = originalNewsFallback;
@@ -1455,6 +1526,7 @@ test('inline current-information query prefetches web results and forces provide
   assert.match(message.message_text, /https:\/\/example\.com\/news-1/);
   assert.doesNotMatch(message.message_text, /fake\.example|\*\*\*/);
   assert.equal(message.parse_mode, 'HTML');
+  assert.deepEqual(answerExtras[0], { cache_time: 0, is_personal: true });
 });
 
 test('inline search sends sourced results without starting doomed AI work near the deadline', async () => {
@@ -1534,17 +1606,18 @@ test('strict today news never falls back to an old undated web result', async ()
   try {
     await bot.handleInlineQuery({
       update: { inline_query: { id: 'today-empty', query: '今日新闻', from: { id: 80, language_code: 'zh-CN' } } },
-      answerInlineQuery: async (results) => answers.push(results)
+      answerInlineQuery: async (results, extra) => answers.push({ results, extra })
     });
   } finally {
     naturalAgentInternals.fetchNewsFallback = originalNewsFallback;
   }
 
-  const text = answers[0][0].input_message_content.message_text;
+  const text = answers[0].results[0].input_message_content.message_text;
   assert.equal(toolCalls, 0);
   assert.equal(aiCalls, 0);
   assert.match(text, /不会用旧闻冒充今日结果/);
   assert.doesNotMatch(text, /Old story/);
+  assert.deepEqual(answers[0].extra, { cache_time: 0, is_personal: true });
 });
 
 test('inline search formats retrieved results when AI generation fails', async () => {
