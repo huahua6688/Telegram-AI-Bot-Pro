@@ -437,6 +437,7 @@ export function loadConfig() {
     inlineQuerySearchTimeoutMs: parseInteger(process.env.INLINE_QUERY_SEARCH_TIMEOUT_MS, 2300),
     inlineQueryAiAttemptTimeoutMs: parseInteger(process.env.INLINE_QUERY_AI_ATTEMPT_TIMEOUT_MS, 2200),
     inlineQueryCacheTtlMs: parseInteger(process.env.INLINE_QUERY_CACHE_TTL_MS, 60000),
+    tavilySearchApiKey: process.env.TAVILY_API_KEY || '',
     braveSearchApiKey: process.env.BRAVE_SEARCH_API_KEY || '',
     newsRegion: normalizeNewsRegion(process.env.NEWS_REGION),
     newsLanguage: normalizeNewsLanguage(process.env.NEWS_LANGUAGE),

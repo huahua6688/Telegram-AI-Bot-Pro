@@ -187,7 +187,46 @@ async function searchBrave(query, apiKey, options = {}) {
     .slice(0, 8);
 }
 
-async function searchWeb(query, { signal, timeoutMs, braveApiKey } = {}) {
+
+async function searchTavily(query, apiKey, options = {}) {
+  const token = String(apiKey || '').trim();
+  if (!token) return [];
+
+  const response = await fetchWithTimeout('https://api.tavily.com/search', {
+    method: 'POST',
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+      'User-Agent': USER_AGENT
+    },
+    body: JSON.stringify({
+      query,
+      search_depth: 'basic',
+      include_answer: false,
+      include_raw_content: false,
+      max_results: 8
+    })
+  }, options);
+
+  if (!response.ok) {
+    throw new Error(`Tavily Search request failed (${response.status})`);
+  }
+
+  const data = await response.json();
+
+  return (data.results || [])
+    .map((item) => ({
+      title: String(item.title || '').trim(),
+      url: String(item.url || '').trim(),
+      snippet: decodeSearchText(item.content || ''),
+      publishedAt: String(item.published_date || '').trim()
+    }))
+    .filter((item) => item.title && /^https?:\/\//i.test(item.url))
+    .slice(0, 8);
+}
+
+async function searchWeb(query, { signal, timeoutMs, braveApiKey, tavilyApiKey } = {}) {
   const totalBudgetMs = boundedTimeoutMs(timeoutMs);
   const deadlineAt = Date.now() + totalBudgetMs;
   const remainingBudgetMs = () => Math.max(0, deadlineAt - Date.now());
@@ -200,6 +239,50 @@ async function searchWeb(query, { signal, timeoutMs, braveApiKey } = {}) {
     }
     return remaining;
   };
+  const configuredTavilyKey = String(tavilyApiKey || '').trim();
+  if (configuredTavilyKey) {
+    try {
+      const remaining = requireRemainingBudget();
+      const tavilyBudgetMs = Math.max(
+        50,
+        Math.min(1800, remaining)
+      );
+
+      const tavilyResults = await searchTavily(
+        query,
+        configuredTavilyKey,
+        {
+          signal,
+          timeoutMs: tavilyBudgetMs
+        }
+      );
+
+      if (tavilyResults.length > 0) {
+        return truncateText(
+          JSON.stringify(
+            {
+              provider: 'tavily',
+              query,
+              results: tavilyResults
+            },
+            null,
+            2
+          ),
+          6000
+        );
+      }
+    } catch (error) {
+      if (
+        signal?.aborted ||
+        error?.name === 'AbortError'
+      ) {
+        throw error;
+      }
+
+      // Tavily 失败时继续使用 Brave 或 DuckDuckGo。
+    }
+  }
+
   const configuredBraveKey = String(braveApiKey || '').trim();
   if (configuredBraveKey) {
     try {
@@ -507,7 +590,8 @@ export class ToolRegistry {
           return await searchWeb(args.query, {
             signal: context.signal,
             timeoutMs: boundedTimeoutMs(context.requestTimeoutMs ?? this.config.requestTimeoutMs),
-            braveApiKey: this.config.braveSearchApiKey
+            braveApiKey: this.config.braveSearchApiKey,
+            tavilyApiKey: this.config.tavilySearchApiKey
           });
         case 'get_weather':
           usage.count += 1;
