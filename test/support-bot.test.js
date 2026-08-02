@@ -506,6 +506,260 @@ test('sliding-window rate limiter remains active', async () => {
   assert.equal(fixture.bot.getActiveTicket('55').messageRefs.length, 3);
 });
 
+test('ticket auto closes when user stays silent after an admin reply', async () => {
+  let now = Date.parse(
+    '2026-08-02T00:00:00.000Z'
+  );
+
+  const fixture = createFixture({
+    config: {
+      supportTicketAutoCloseMinutes: 1
+    },
+    now: () => now
+  });
+
+  await fixture.bot.init();
+
+  const telegram = createTelegram();
+
+  await fixture.bot.handleUserRequest(
+    userContext(telegram).ctx
+  );
+
+  const ticket =
+    fixture.bot.getActiveTicket('42');
+
+  await fixture.bot.handleClaim(
+    actionContext(telegram, '100').ctx,
+    ticket.ticketId
+  );
+
+  const ownerCopy = telegram.copied.find(
+    (item) => item.chatId === '100'
+  );
+
+  await fixture.bot.handleAdminReply({
+    from: { id: 100 },
+    chat: { id: 100 },
+    message: {
+      message_id: 900,
+      text: 'please confirm',
+      reply_to_message: {
+        message_id:
+          ownerCopy.result.message_id
+      }
+    },
+    telegram,
+    reply: async () => {}
+  });
+
+  assert.ok(ticket.autoCloseAt);
+  assert.equal(
+    fixture.bot.ticketAutoCloseTimers.has(
+      ticket.ticketId
+    ),
+    true
+  );
+
+  now += 60_001;
+
+  const closed =
+    await fixture.bot.handleTicketAutoClose(
+      telegram,
+      ticket.ticketId
+    );
+
+  assert.equal(closed, true);
+  assert.equal(ticket.status, 'closed');
+  assert.equal(
+    fixture.bot.getActiveTicket('42'),
+    null
+  );
+});
+
+test('user reply cancels pending automatic closure', async () => {
+  const fixture = createFixture({
+    config: {
+      supportTicketAutoCloseMinutes: 1
+    }
+  });
+
+  await fixture.bot.init();
+
+  const telegram = createTelegram();
+
+  await fixture.bot.handleUserRequest(
+    userContext(telegram).ctx
+  );
+
+  const ticket =
+    fixture.bot.getActiveTicket('42');
+
+  await fixture.bot.handleClaim(
+    actionContext(telegram, '100').ctx,
+    ticket.ticketId
+  );
+
+  const ownerCopy = telegram.copied.find(
+    (item) => item.chatId === '100'
+  );
+
+  await fixture.bot.handleAdminReply({
+    from: { id: 100 },
+    chat: { id: 100 },
+    message: {
+      message_id: 901,
+      text: 'waiting for user',
+      reply_to_message: {
+        message_id:
+          ownerCopy.result.message_id
+      }
+    },
+    telegram,
+    reply: async () => {}
+  });
+
+  assert.ok(ticket.autoCloseAt);
+
+  await fixture.bot.handleUserRequest(
+    userContext(
+      telegram,
+      {
+        message_id: 8,
+        text: 'user replied'
+      },
+      42
+    ).ctx
+  );
+
+  assert.equal(ticket.autoCloseAt, null);
+  assert.equal(
+    fixture.bot.ticketAutoCloseTimers.has(
+      ticket.ticketId
+    ),
+    false
+  );
+  assert.equal(ticket.status, 'assigned');
+});
+
+test('ticket with removed owner returns to the queue', async () => {
+  const fixture = createFixture();
+  await fixture.bot.init();
+
+  const telegram = createTelegram();
+
+  await fixture.bot.handleUserRequest(
+    userContext(telegram).ctx
+  );
+
+  const ticket =
+    fixture.bot.getActiveTicket('42');
+
+  ticket.status = 'assigned';
+  ticket.assignedAdminId = '999999';
+
+  await fixture.bot.handleUserRequest(
+    userContext(
+      telegram,
+      {
+        message_id: 8,
+        text: 'still need help'
+      },
+      42
+    ).ctx
+  );
+
+  assert.equal(ticket.status, 'open');
+  assert.equal(ticket.assignedAdminId, null);
+
+  assert.ok(
+    fixture.logger.entries.some(
+      (entry) =>
+        entry.message ===
+        'Support ticket owner removed from configuration'
+    )
+  );
+});
+
+test('message labels show identity only to level-one administrators', async () => {
+  const fixture = createFixture();
+  await fixture.bot.init();
+
+  const telegram = createTelegram();
+
+  await fixture.bot.handleUserRequest(
+    userContext(
+      telegram,
+      {
+        message_id: 7,
+        text: 'first user'
+      },
+      42
+    ).ctx
+  );
+
+  const firstTicket =
+    fixture.bot.getActiveTicket('42');
+
+  await fixture.bot.handleClaim(
+    actionContext(telegram, '100').ctx,
+    firstTicket.ticketId
+  );
+
+  const levelOneLabel = telegram.sent.find(
+    (item) =>
+      item.chatId === '100' &&
+      /\u8bf7\u76f4\u63a5\u56de\u590d\u4e0b\u65b9/.test(
+        item.text
+      )
+  );
+
+  assert.ok(levelOneLabel);
+  assert.match(levelOneLabel.text, /@alice/);
+  assert.match(levelOneLabel.text, /Alice/);
+  assert.match(
+    levelOneLabel.text,
+    /\u7528\u6237 ID\uff1a42/
+  );
+
+  await fixture.bot.handleUserRequest(
+    userContext(
+      telegram,
+      {
+        message_id: 17,
+        text: 'second user'
+      },
+      43
+    ).ctx
+  );
+
+  const secondTicket =
+    fixture.bot.getActiveTicket('43');
+
+  await fixture.bot.handleClaim(
+    actionContext(telegram, '200').ctx,
+    secondTicket.ticketId
+  );
+
+  const levelTwoLabel = telegram.sent.find(
+    (item) =>
+      item.chatId === '200' &&
+      /\u8bf7\u76f4\u63a5\u56de\u590d\u4e0b\u65b9/.test(
+        item.text
+      )
+  );
+
+  assert.ok(levelTwoLabel);
+  assert.match(
+    levelTwoLabel.text,
+    /\u533f\u540d\u8bbf\u5ba2/
+  );
+  assert.doesNotMatch(
+    levelTwoLabel.text,
+    /@alice|Alice|\u7528\u6237 ID/
+  );
+});
+
 test('legacy parser helpers remain compatible without being used for authorization', () => {
   assert.equal(supportBotInternals.parseSupportTicketUserId({ text: '[support-ticket:user=42]' }), '42');
   assert.match(supportBotInternals.buildSupportTicketText({ user: { id: 42 }, message: { text: 'x' }, now: new Date(0) }), /user=42/);
