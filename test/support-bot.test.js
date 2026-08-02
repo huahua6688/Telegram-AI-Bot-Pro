@@ -154,7 +154,7 @@ test('user text is delivered to all administrators with durable ticket metadata'
   assert.match(adminDeliveries[0].text, /Username: @alice/);
   assert.match(adminDeliveries[0].text, /Stars 已扣除但额度没到账/);
   assert.match(adminDeliveries[0].text, /2026-08-02T00:00:00\.000Z/);
-  assert.match(replies[0], /已发送给客服/);
+  assert.deepEqual(replies, []);
   assert.equal(fixture.logger.entries.at(-1).meta.deliveredAdminCount, 1);
   assert.doesNotMatch(JSON.stringify(fixture.logger.entries), /Stars 已扣除但额度没到账/);
 });
