@@ -292,9 +292,7 @@ export class SupportTelegramBot {
       return;
     }
 
-    await ctx.reply(english
-      ? 'Your request was sent to support. Please wait for a reply and avoid sending the same issue repeatedly.'
-      : '你的问题已发送给客服，请等待回复，同一问题无需重复发送。');
+    // 工单发送成功后保持静默，等待人工客服回复。
   }
 
   async sendTicketToAdmin(ctx, adminId, type, ticketText) {
