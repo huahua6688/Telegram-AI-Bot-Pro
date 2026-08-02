@@ -54,6 +54,43 @@ export async function stopApplicationResources(
   if (failures.length > 0) throw failures[0].error;
 }
 
+function launchResource(resourceName, resource, logger) {
+  if (!resource || typeof resource.launch !== 'function') {
+    return Promise.resolve();
+  }
+
+  return new Promise((resolve, reject) => {
+    let ready = false;
+
+    const markReady = () => {
+      if (ready) return;
+      ready = true;
+      resolve();
+    };
+
+    let launchPromise;
+
+    try {
+      launchPromise = Promise.resolve(resource.launch(markReady));
+    } catch (error) {
+      reject(error);
+      return;
+    }
+
+    launchPromise.then(markReady, (error) => {
+      if (!ready) {
+        reject(error);
+        return;
+      }
+
+      logger?.error?.('Bot polling stopped unexpectedly', {
+        resource: resourceName,
+        error: error?.message || String(error)
+      });
+    });
+  });
+}
+
 export function createApplicationLifecycle(resources) {
   let stopPromise = null;
 
@@ -67,8 +104,10 @@ export function createApplicationLifecycle(resources) {
   return {
     async start() {
       try {
-        await resources.bot?.launch?.();
-        await resources.supportBot?.launch?.();
+        await Promise.all([
+          launchResource('telegram-bot', resources.bot, resources.logger),
+          launchResource('support-bot', resources.supportBot, resources.logger)
+        ]);
       } catch (error) {
         try {
           await stop('STARTUP_FAILED');

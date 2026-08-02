@@ -7992,9 +7992,18 @@ export class TelegramAIBot {
     };
   }
 
-  async launch() {
-    await this.bot.launch();
-    this.logger.info('Telegram bot started');
+  async launch(onLaunch) {
+    let announced = false;
+
+    const markLaunched = () => {
+      if (announced) return;
+      announced = true;
+      this.logger.info('Telegram bot started');
+      onLaunch?.();
+    };
+
+    await this.bot.launch(markLaunched);
+    markLaunched();
   }
 
   async stop(reason) {
