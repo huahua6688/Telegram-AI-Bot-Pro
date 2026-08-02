@@ -261,12 +261,13 @@ test('Mini App administrators can manage per-user daily quota and paid credit ba
 
   const appResponse = await fetch(`${base}/app`);
   const appHtml = await appResponse.text();
-  assert.match(appHtml, /全局默认额度/);
-  assert.match(appHtml, /保存个人额度/);
-  assert.match(appHtml, /恢复全局默认/);
+  assert.match(appHtml, /默认免费聊天/);
+  assert.match(appHtml, /保存个人免费聊天额度/);
+  assert.match(appHtml, /恢复默认免费聊天额度/);
   assert.match(appHtml, /已购额度余额/);
   assert.match(appHtml, /保存已购额度/);
   assert.match(appHtml, /不影响每日免费额度/);
+  assert.match(appHtml, /购买暂未开放；每日免费额度和已有余额仍可使用/);
 
   const forbidden = await fetch(`${base}/api/miniapp/admin/users`, {
     headers: userHeaders

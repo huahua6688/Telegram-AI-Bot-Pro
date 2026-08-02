@@ -31,6 +31,14 @@ test('Admin API authenticates token and enforces RBAC', async (t) => {
     availableModels: ['gpt-4.1-mini'],
     defaultModel: 'gpt-4.1-mini',
     dailyQuota: 200,
+    starsFreeQuota: {
+      chat: 20,
+      vision: 3,
+      image_generation: 1,
+      tts: 2,
+      live_voice: 2,
+      video: 0
+    },
     adminUserIds: new Set(),
     blockedUserIds: new Set(),
     allowedUserIds: new Set(),
@@ -82,8 +90,9 @@ test('Admin API authenticates token and enforces RBAC', async (t) => {
     userId: '9002',
     dailyUsageDate: '',
     dailyUsageCount: 0,
-    globalDailyQuota: 200,
-    dailyQuota: 200,
+    globalDailyQuota: 20,
+    freeQuota: config.starsFreeQuota,
+    dailyQuota: 20,
     dailyQuotaOverride: null,
     usesGlobalQuota: true
   });
@@ -105,7 +114,7 @@ test('Admin API authenticates token and enforces RBAC', async (t) => {
     dailyQuotaOverride: 7,
     usesGlobalQuota: false
   });
-  assert.equal(db.consumeDailyQuota('9002', config.dailyQuota).quota, 7);
+  assert.equal(db.consumeDailyQuota('9002', config.starsFreeQuota.chat).quota, 7);
 
   const malformedQuota = await fetch(`http://127.0.0.1:${port}/admin/api/v1/quota`, {
     method: 'PATCH',
@@ -131,7 +140,7 @@ test('Admin API authenticates token and enforces RBAC', async (t) => {
   });
   assert.equal(resetQuota.status, 200);
   const resetQuotaBody = await resetQuota.json();
-  assert.equal(resetQuotaBody.quota.dailyQuota, 200);
+  assert.equal(resetQuotaBody.quota.dailyQuota, 20);
   assert.equal(resetQuotaBody.quota.usesGlobalQuota, true);
 
   const accidentalReset = await fetch(`http://127.0.0.1:${port}/admin/api/v1/quota`, {

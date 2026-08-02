@@ -35,6 +35,9 @@ jobs:
       - name: Quick tests
         run: npm run test:quick
 
+      - name: Startup, support, and billing tests
+        run: npm run test:feature
+
       - name: Deployment doctor
         env:
           BOT_TOKEN: dummy_bot_token

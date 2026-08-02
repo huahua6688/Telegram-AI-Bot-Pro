@@ -101,15 +101,17 @@ export class PrivacyTelegramAIBot extends TelegramAIBot {
 
   createBottomKeyboard(locale = 'zh') {
     if (this.config?.miniAppEnabled !== false) {
+      const rows = [
+        [this.getPrivacyLabel(locale)],
+        [
+          localText(locale, '⭐ 购买额度', '⭐ Buy credits'),
+          localText(locale, '💰 我的余额', '💰 My balance')
+        ]
+      ];
+      if (this.getSupportUrl()) rows[0].push(this.getSupportLabel(locale));
       return {
         reply_markup: {
-          keyboard: [
-            [this.getPrivacyLabel(locale)],
-            [
-              localText(locale, '⭐ 购买额度', '⭐ Buy credits'),
-              localText(locale, '💰 我的余额', '💰 My balance')
-            ]
-          ],
+          keyboard: rows,
           resize_keyboard: true,
           is_persistent: true,
           input_field_placeholder: localText(locale, '直接输入需求，我会自动判断…', 'Ask naturally; I will route it automatically…')
@@ -429,7 +431,10 @@ export class PrivacyTelegramAIBot extends TelegramAIBot {
     } catch (error) {
       await this.refundQuotaForContext(ctx);
       this.logger?.warn?.('Privacy chat request failed', safeErrorMeta(error));
-      await ctx.reply(this.formatUserFacingError(error, locale), this.createPrivacyModeKeyboard(locale, mode.contextMode));
+      await ctx.reply(
+        this.formatUserFacingError(error, locale),
+        this.withSupportButton(this.createPrivacyModeKeyboard(locale, mode.contextMode), locale)
+      );
     }
 
     return true;

@@ -469,3 +469,79 @@ test('loadConfig parses admin API options', () => {
   assert.equal(config.adminApiPrefix, '/admin/api/v2');
   assert.equal(config.adminApiToken, 'token-123');
 });
+
+test('loadConfig exposes the current free-credit and support defaults', () => {
+  resetEnv();
+  for (const key of [
+    'DAILY_QUOTA',
+    'STARS_PRODUCTS_JSON',
+    'STARS_FREE_CHAT_DAILY',
+    'STARS_FREE_VISION_DAILY',
+    'STARS_FREE_IMAGE_DAILY',
+    'STARS_FREE_TTS_DAILY',
+    'STARS_FREE_LIVE_VOICE_DAILY',
+    'STARS_FREE_VIDEO_DAILY',
+    'SUPPORT_ENABLED',
+    'SUPPORT_BOT_TOKEN',
+    'SUPPORT_BOT_USERNAME',
+    'SUPPORT_CONTACT_URL',
+    'SUPPORT_ADMIN_IDS',
+    'SUPPORT_RATE_LIMIT_WINDOW_MS',
+    'SUPPORT_RATE_LIMIT_MAX_MESSAGES',
+    'ENABLE_STARTUP_DIAGNOSTICS',
+    'SHOW_VERSION_INFO',
+    'HEALTH_CHECK_ENABLED'
+  ]) delete process.env[key];
+
+  const config = loadConfig();
+  assert.equal(config.dailyQuota, 20);
+  assert.deepEqual(config.starsFreeQuota, {
+    chat: 20,
+    vision: 3,
+    image_generation: 1,
+    tts: 2,
+    live_voice: 2,
+    video: 0
+  });
+  assert.deepEqual(config.starsProducts, []);
+  assert.equal(config.starsFreeChatZeroMeansUnlimited, false);
+  assert.equal(config.supportEnabled, true);
+  assert.equal(config.supportBotToken, '');
+  assert.equal(config.supportBotUsername, '');
+  assert.equal(config.supportContactUrl, '');
+  assert.deepEqual(config.supportAdminIds, new Set());
+  assert.equal(config.supportRateLimitWindowMs, 60_000);
+  assert.equal(config.supportRateLimitMaxMessages, 6);
+  assert.equal(config.enableStartupDiagnostics, true);
+  assert.equal(config.showVersionInfo, true);
+  assert.equal(config.healthCheckEnabled, true);
+});
+
+test('loadConfig keeps explicit Stars zero finite and parses bounded support settings', () => {
+  resetEnv();
+  process.env.DAILY_QUOTA = '0';
+  delete process.env.STARS_FREE_CHAT_DAILY;
+  let config = loadConfig();
+  assert.equal(config.starsFreeQuota.chat, 0);
+  assert.equal(config.starsFreeChatZeroMeansUnlimited, true);
+
+  process.env.STARS_FREE_CHAT_DAILY = '0';
+  process.env.SUPPORT_ENABLED = 'false';
+  process.env.SUPPORT_BOT_TOKEN = 'support-token';
+  process.env.SUPPORT_BOT_USERNAME = '@ExampleSupportBot';
+  process.env.SUPPORT_CONTACT_URL = 'https://support.example/help';
+  process.env.SUPPORT_ADMIN_IDS = '10001, 10002';
+  process.env.SUPPORT_RATE_LIMIT_WINDOW_MS = '500';
+  process.env.SUPPORT_RATE_LIMIT_MAX_MESSAGES = '0';
+  config = loadConfig();
+
+  assert.equal(config.starsFreeQuota.chat, 0);
+  assert.equal(config.starsFreeChatZeroMeansUnlimited, false);
+  assert.equal(config.supportEnabled, false);
+  assert.equal(config.supportBotToken, 'support-token');
+  assert.equal(config.supportBotUsername, '@ExampleSupportBot');
+  assert.equal(config.supportContactUrl, 'https://support.example/help');
+  assert.deepEqual(config.supportAdminIds, new Set(['10001', '10002']));
+  assert.equal(config.supportRateLimitWindowMs, 1_000);
+  assert.equal(config.supportRateLimitMaxMessages, 1);
+});

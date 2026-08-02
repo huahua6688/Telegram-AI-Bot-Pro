@@ -8,7 +8,7 @@
 
 ```env
 STARS_PAYMENTS_ENABLED=true
-STARS_PRODUCTS_JSON=[{"id":"starter","title":"入门额度包","titleEn":"Starter credits","description":"聊天、图片和语音综合额度","descriptionEn":"Credits for chat, images and voice","price":50,"credits":{"chat":200,"vision":20,"image_generation":5,"tts":20,"live_voice":10,"video":0}}]
+STARS_PRODUCTS_JSON=[{"id":"starter","title":"入门额度包","titleEn":"Starter credits","description":"适合轻量聊天、图片和语音使用","descriptionEn":"Starter credits for chat, images and voice","price":50,"credits":{"chat":200,"vision":20,"image_generation":5,"tts":20,"live_voice":10,"video":0}},{"id":"standard","title":"标准额度包","titleEn":"Standard credits","description":"适合日常聊天、识图、画图和语音","descriptionEn":"Balanced credits for regular AI use","price":150,"credits":{"chat":800,"vision":80,"image_generation":20,"tts":80,"live_voice":40,"video":0}},{"id":"pro","title":"高级额度包","titleEn":"Pro credits","description":"适合高频使用全部已开放能力","descriptionEn":"Larger credits for frequent AI use","price":500,"credits":{"chat":3000,"vision":300,"image_generation":75,"tts":300,"live_voice":150,"video":0}}]
 ```
 
 字段说明：
@@ -20,6 +20,8 @@ STARS_PRODUCTS_JSON=[{"id":"starter","title":"入门额度包","titleEn":"Starte
 - `credits`：六类独立额度：`chat`、`vision`、`image_generation`、`tts`、`live_voice`、`video`。
 
 修改商品价格不会影响已经创建的订单；每张订单会保存当时的价格和赠送额度快照。
+
+这份 JSON 是商品标题、价格和额度的唯一配置源。主 Bot 商店、Mini App 用户页和管理员页面都会读取相同目录；修改后重新部署即可同步显示，无需再改页面常量。
 
 ## 2. 配置每日免费额度
 

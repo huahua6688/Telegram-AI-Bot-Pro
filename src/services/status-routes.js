@@ -1,7 +1,4 @@
-import { createRequire } from 'node:module';
-
-const require = createRequire(import.meta.url);
-const packageJson = require('../../package.json');
+import { getBuildInfo } from '../app/build-info.js';
 
 function sendJson(res, statusCode, payload) {
   res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -23,33 +20,6 @@ function sendHtml(res, statusCode, html) {
     'Content-Security-Policy': "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:"
   });
   res.end(html);
-}
-
-function firstNonEmpty(...values) {
-  return values.map((value) => String(value || '').trim()).find(Boolean) || '';
-}
-
-function getBuildInfo() {
-  const version = firstNonEmpty(
-    process.env.APP_VERSION,
-    process.env.npm_package_version,
-    packageJson.version,
-    'unknown'
-  );
-  const revision = firstNonEmpty(
-    process.env.GIT_COMMIT_SHA,
-    process.env.ZEABUR_GIT_COMMIT_SHA,
-    process.env.RAILWAY_GIT_COMMIT_SHA,
-    process.env.RENDER_GIT_COMMIT,
-    process.env.SOURCE_VERSION,
-    process.env.COMMIT_SHA
-  );
-
-  return {
-    version,
-    revision,
-    shortRevision: revision ? revision.slice(0, 12) : ''
-  };
 }
 
 function providerSupports(providerManager, capability, preferredProvider = '') {
@@ -342,7 +312,10 @@ export function buildCapabilities(
 export function buildHealthPayload(context) {
   const { db, config } = context;
   const stats = db.getStats();
-  const build = getBuildInfo();
+  const build = context.buildInfo || getBuildInfo(context.buildInfoOptions);
+  const timestamp = typeof context.now === 'function'
+    ? new Date(context.now()).toISOString()
+    : new Date().toISOString();
   const capabilityDetails = buildCapabilityDetails(context);
   const capabilityStatuses = Object.fromEntries(
     Object.entries(capabilityDetails).map(([name, detail]) => [name, detail.status])
@@ -352,10 +325,16 @@ export function buildHealthPayload(context) {
   return {
     ok: true,
     online: true,
+    status: 'ok',
     service: 'telegram-ai-bot-pro',
+    timestamp,
     version: build.version,
     revision: build.revision,
     shortRevision: build.shortRevision,
+    node: build.nodeVersion,
+    environment: build.environment,
+    deployedAt: build.deployedAt,
+    startedAt: build.startedAt,
     provider: config.aiProvider,
     model: config.defaultModel,
     translationModel: config.translationModel,
@@ -556,7 +535,16 @@ export function installEnhancedStatusRoutes({ server, db, config, bot, providerM
       return;
     }
 
-    if ((url.pathname === '/' || url.pathname === '/health') && req.method === 'GET') {
+    if (url.pathname === '/' || url.pathname === '/health') {
+      if (config.healthCheckEnabled === false) {
+        sendJson(res, 404, { ok: false, status: 'disabled', error: 'HEALTH_CHECK_DISABLED' });
+        return;
+      }
+      if (req.method !== 'GET') {
+        res.setHeader('Allow', 'GET');
+        sendJson(res, 405, { ok: false, error: 'METHOD_NOT_ALLOWED' });
+        return;
+      }
       try {
         sendJson(res, 200, buildHealthPayload(context));
       } catch (error) {
@@ -566,7 +554,12 @@ export function installEnhancedStatusRoutes({ server, db, config, bot, providerM
       return;
     }
 
-    if (url.pathname === '/ready' && req.method === 'GET') {
+    if (url.pathname === '/ready') {
+      if (req.method !== 'GET') {
+        res.setHeader('Allow', 'GET');
+        sendJson(res, 405, { ok: false, error: 'METHOD_NOT_ALLOWED' });
+        return;
+      }
       try {
         db.getStats();
         const build = getBuildInfo();
@@ -596,7 +589,7 @@ export function installEnhancedStatusRoutes({ server, db, config, bot, providerM
   });
 
   logger?.info?.('Enhanced status routes installed', {
-    routes: ['/status', '/health', '/ready']
+    routes: ['/status', ...(config.healthCheckEnabled === false ? [] : ['/health']), '/ready']
   });
 
   return server;

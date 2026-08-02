@@ -37,8 +37,37 @@ GEMINI_FALLBACK_MODELS=gemini-2.5-flash-lite
 DATABASE_FILE=/data/bot-data.db
 PORT=8080
 HEALTH_PORT=8080
+ENABLE_STARTUP_DIAGNOSTICS=true
+SHOW_VERSION_INFO=true
+HEALTH_CHECK_ENABLED=true
 
 真正跨平台回退还必须填写独立的 `GROQ_API_KEY` 或 `OPENROUTER_API_KEY`。若使用 OpenRouter 免费动态路由，设置 `OPENROUTER_MODEL=openrouter/free`。稳定实时搜索建议配置 `BRAVE_SEARCH_API_KEY`；免密搜索只作为尽力而为的回退。
+
+## 启动诊断与客服 Bot
+
+建议保持启动诊断和平台健康检查开启：
+
+```env
+ENABLE_STARTUP_DIAGNOSTICS=true
+SHOW_VERSION_INFO=true
+HEALTH_CHECK_ENABLED=true
+```
+
+诊断失败时，Runtime Logs 会显示 `MISSING_TELEGRAM_BOT_TOKEN`、`MISSING_AI_PROVIDER_CONFIG`、`INVALID_PORT`、`DATABASE_PATH_NOT_FOUND` 或 `GEMINI_LIVE_CONFIG_MISSING` 等稳定错误码。日志中的 Token / Key 只显示前 4 位和后 4 位。
+
+如需独立客服 Bot，先在 BotFather 新建第二个 Bot，再配置：
+
+```env
+SUPPORT_ENABLED=true
+SUPPORT_BOT_TOKEN=
+SUPPORT_BOT_USERNAME=
+SUPPORT_CONTACT_URL=
+SUPPORT_ADMIN_IDS=
+```
+
+`SUPPORT_BOT_TOKEN` 不能复用主 `BOT_TOKEN`。`SUPPORT_ADMIN_IDS` 填可接收并回复工单的 Telegram 数字 ID；`SUPPORT_CONTACT_URL` 优先于用户名链接。只想跳转现有客服页面时，可以留空 `SUPPORT_BOT_TOKEN`。
+
+每天的六类免费额度及三档 Stars 套餐请直接从 `.env.zeabur.example` 复制；主 Bot、Mini App 和管理员页会读取同一份 `STARS_FREE_*` / `STARS_PRODUCTS_JSON` 配置。
 
 ## Smart AI Router
 
@@ -94,6 +123,8 @@ ENABLE_LIVE_TRANSLATE=false
 - API Key 是否填写
 - PORT / HEALTH_PORT 是否为 8080
 - DATABASE_FILE 是否指向 /data
+- 启动日志是否给出稳定诊断错误码
+- `SUPPORT_BOT_TOKEN` 是否错误地复用了 `BOT_TOKEN`
 
 ### pdf-parse 报错
 

@@ -1,10 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { once } from 'node:events';
 
 import {
   buildCapabilityDetails,
-  buildHealthPayload
+  buildHealthPayload,
+  installEnhancedStatusRoutes
 } from '../src/services/status-routes.js';
+import { startHealthServer } from '../src/services/health-server.js';
+
+async function getServerUrl(server) {
+  if (!server.listening) await once(server, 'listening');
+  const address = server.address();
+  return `http://127.0.0.1:${address.port}`;
+}
+
+function closeServer(server) {
+  return new Promise((resolve, reject) => {
+    server.close((error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
 
 function createProviderManager(rows = []) {
   const providers = rows.map((row) => ({
@@ -206,6 +224,9 @@ test('health payload keeps legacy boolean capabilities and adds status details',
     }
   ]);
   const config = baseConfig({
+    botToken: '1234-sensitive-telegram-token-5678',
+    geminiApiKey: 'gemi-sensitive-provider-key-9876',
+    adminApiToken: 'admin-sensitive-token',
     enableGeminiGoogleSearch: false,
     enableProviderFallback: true,
     enableUrlFetch: true,
@@ -223,9 +244,26 @@ test('health payload keeps legacy boolean capabilities and adds status details',
     db: {
       chatEncryption: { enabled: true, version: '1' },
       getStats: () => ({ messagesHandled: 3 })
+    },
+    now: () => '2026-08-02T02:03:04.000Z',
+    buildInfo: {
+      version: '2.3.4',
+      revision: 'abcdef0123456789abcdef0123456789abcdef01',
+      shortRevision: 'abcdef012345',
+      nodeVersion: 'v22.5.0',
+      environment: 'production',
+      deployedAt: '2026-08-01T00:00:00.000Z',
+      startedAt: '2026-08-02T00:00:00.000Z'
     }
   });
 
+  assert.equal(payload.status, 'ok');
+  assert.equal(payload.timestamp, '2026-08-02T02:03:04.000Z');
+  assert.equal(payload.version, '2.3.4');
+  assert.equal(payload.node, 'v22.5.0');
+  assert.equal(payload.environment, 'production');
+  assert.equal(payload.deployedAt, '2026-08-01T00:00:00.000Z');
+  assert.equal(payload.startedAt, '2026-08-02T00:00:00.000Z');
   assert.equal(typeof payload.capabilities.webSearch, 'boolean');
   assert.equal(payload.capabilities.webSearch, true);
   assert.equal(payload.capabilityStatuses.webSearch, 'degraded');
@@ -236,4 +274,83 @@ test('health payload keeps legacy boolean capabilities and adds status details',
   assert.equal(payload.capabilityStatuses.video, 'unsupported');
   assert.ok(payload.enabledCapabilities.includes('webSearch'));
   assert.ok(!payload.enabledCapabilities.includes('video'));
+  const serialized = JSON.stringify(payload);
+  assert.doesNotMatch(serialized, /1234-sensitive-telegram-token-5678/);
+  assert.doesNotMatch(serialized, /gemi-sensitive-provider-key-9876/);
+  assert.doesNotMatch(serialized, /admin-sensitive-token/);
+});
+
+test('base health route exposes safe build metadata and rejects non-GET methods', async () => {
+  const config = baseConfig({
+    healthCheckEnabled: true,
+    botToken: '1234-sensitive-telegram-token-5678',
+    geminiApiKey: 'gemi-sensitive-provider-key-9876'
+  });
+  const server = startHealthServer({
+    port: 0,
+    config,
+    db: { getStats: () => ({ messagesHandled: 7 }) },
+    logger: { info() {}, error() {} }
+  });
+
+  try {
+    const url = await getServerUrl(server);
+    const response = await fetch(`${url}/health`);
+    const payload = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(payload.status, 'ok');
+    assert.equal(payload.service, 'telegram-ai-bot-pro');
+    assert.equal(typeof payload.timestamp, 'string');
+    assert.equal(typeof payload.version, 'string');
+    assert.equal(payload.node, process.version);
+    assert.equal(typeof payload.startedAt, 'string');
+    assert.doesNotMatch(JSON.stringify(payload), /sensitive/);
+
+    const healthPost = await fetch(`${url}/health`, { method: 'POST' });
+    assert.equal(healthPost.status, 405);
+    assert.equal(healthPost.headers.get('allow'), 'GET');
+
+    const readyPost = await fetch(`${url}/ready`, { method: 'POST' });
+    assert.equal(readyPost.status, 405);
+    assert.equal(readyPost.headers.get('allow'), 'GET');
+  } finally {
+    await closeServer(server);
+  }
+});
+
+test('disabled enhanced health route stays disabled without taking down readiness or Mini App', async () => {
+  const config = baseConfig({ healthCheckEnabled: false });
+  const db = {
+    chatEncryption: { enabled: false },
+    getStats: () => ({ messagesHandled: 0 })
+  };
+  const logger = { info() {}, error() {} };
+  const server = startHealthServer({ port: 0, config, db, logger });
+  installEnhancedStatusRoutes({
+    server,
+    config,
+    db,
+    logger,
+    bot: null,
+    providerManager: createProviderManager([])
+  });
+
+  try {
+    const url = await getServerUrl(server);
+    for (const method of ['GET', 'POST']) {
+      const response = await fetch(`${url}/health`, { method });
+      assert.equal(response.status, 404);
+      assert.equal((await response.json()).error, 'HEALTH_CHECK_DISABLED');
+    }
+
+    const ready = await fetch(`${url}/ready`);
+    assert.equal(ready.status, 200);
+    assert.equal((await ready.json()).ready, true);
+
+    const miniApp = await fetch(`${url}/app`);
+    assert.equal(miniApp.status, 200);
+    assert.match(await miniApp.text(), /<!doctype html>/i);
+  } finally {
+    await closeServer(server);
+  }
 });

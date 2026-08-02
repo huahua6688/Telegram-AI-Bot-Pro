@@ -25,6 +25,7 @@ jobs:
         run: |
           set -o pipefail
           npm run test:quick | tee reports/quick.txt
+          npm run test:feature | tee reports/feature.txt
           npm run test:smoke | tee reports/smoke.txt
       - uses: actions/upload-artifact@v4
         with:
