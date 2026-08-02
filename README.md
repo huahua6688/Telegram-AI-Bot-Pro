@@ -557,3 +557,14 @@ Gemini Live remains official-only: use Google’s Gemini Live API with a separat
 - Never paste API keys into Telegram chats
 - Keep unused paid providers blank
 - Verify current model IDs in provider dashboards before deployment
+
+
+## 客服工单隐私与协作
+
+- 新工单先向全部客服发送不含用户身份和正文的摘要。
+- 接单后只有当前负责客服收到完整历史消息和后续消息。
+- 支持重复转交、退回待接单和关闭；非负责客服的回复不会发给用户。
+- 工单状态只保存在单实例进程内存中，不保存正文或附件；重新部署后旧工单失效。
+- 客服消息启用 Telegram 内容保护，但无法阻止已获授权客服截图。
+- Telegram Bot 私聊不是端到端加密，不得宣传为端到端加密客服。
+- 部署时保持单实例；多个副本会产生互不一致的内存工单状态。
