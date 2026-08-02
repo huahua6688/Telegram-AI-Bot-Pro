@@ -1,13 +1,14 @@
+import { buildUserBillingSnapshot } from './billing-catalog.js';
 import crypto from 'node:crypto';
 import http from 'node:http';
 import { getBuildInfo } from '../app/build-info.js';
 import { BILLING_CREDIT_TYPES } from '../db.js';
 import {
   buildBillingCatalog,
-  buildUserBillingSnapshot,
   getDefaultChatFreeQuota
 } from './billing-catalog.js';
 import { resolveSupportContactUrl } from './support-contact.js';
+import { serializeAdminUser } from './admin-user-serializer.js';
 import {
   isValidNewsLanguage,
   isValidNewsRegion,
@@ -2738,70 +2739,6 @@ function buildAdminProviderStatus(config) {
         ? config.providerModels[providerId].length
         : 0
     }));
-}
-
-function resolveAdminUserQuota(db, userId, defaultQuota) {
-  const safeDefaultQuota = Math.max(0, Math.trunc(Number(defaultQuota) || 0));
-
-  if (typeof db.getUserDailyQuota !== 'function') {
-    return {
-      dailyQuota: safeDefaultQuota,
-      dailyQuotaOverride: null,
-      usesGlobalQuota: true
-    };
-  }
-
-  const resolved = db.getUserDailyQuota(userId, safeDefaultQuota) || {};
-  const override = resolved.dailyQuotaOverride == null
-    ? null
-    : Math.max(0, Math.trunc(Number(resolved.dailyQuotaOverride) || 0));
-
-  return {
-    dailyQuota: Math.max(
-      0,
-      Math.trunc(Number(resolved.dailyQuota ?? override ?? safeDefaultQuota) || 0)
-    ),
-    dailyQuotaOverride: override,
-    usesGlobalQuota: resolved.usesGlobalQuota !== false && override == null
-  };
-}
-
-function serializeAdminUser(db, user, config = {}) {
-  const aiSettings = db.getUserAISettings(user.id);
-  const defaultQuota = getDefaultChatFreeQuota(config);
-  const quota = resolveAdminUserQuota(db, user.id, defaultQuota);
-  const billing = buildUserBillingSnapshot({
-    db,
-    config,
-    userId: user.id,
-    isAdmin: Boolean(user.isAdmin)
-  });
-  const creditBalances = Object.fromEntries(
-    BILLING_CREDIT_TYPES.map((creditType) => [creditType, billing.credits[creditType].purchased])
-  );
-
-  return {
-    id: String(user.id),
-    username: user.username || '',
-    firstName: user.firstName || '',
-    lastName: user.lastName || '',
-    isAdmin: Boolean(user.isAdmin),
-    isBlocked: Boolean(user.isBlocked),
-    isAllowed: Boolean(user.isAllowed),
-    preferredLanguage: user.preferredLanguage || 'auto',
-    persona: user.persona || 'default',
-    dailyUsageDate: user.dailyUsageDate || '',
-    dailyUsageCount: Number(user.dailyUsageCount || 0),
-    dailyQuota: quota.dailyQuota,
-    dailyQuotaOverride: quota.dailyQuotaOverride,
-    usesGlobalQuota: quota.usesGlobalQuota,
-    totalMessages: Number(user.totalMessages || 0),
-    lastSeenAt: user.lastSeenAt || '',
-    aiProvider: aiSettings.providerId || 'auto',
-    aiModel: aiSettings.modelId || '',
-    creditBalances,
-    billing
-  };
 }
 
 function normalizeAdminCreditMutation(payload) {

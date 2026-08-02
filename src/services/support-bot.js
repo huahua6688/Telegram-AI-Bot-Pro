@@ -1,10 +1,12 @@
+import crypto from 'node:crypto';
 import { Telegraf } from 'telegraf';
 
 const SUPPORT_TICKET_PATTERN = /^\[support-ticket:user=(\d{1,20})\]/m;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
 const DEFAULT_RATE_LIMIT_MAX_MESSAGES = 5;
 const TELEGRAM_TEXT_LIMIT = 4096;
-const TELEGRAM_CAPTION_LIMIT = 1024;
+const PRIVACY_NOTICE_ZH = '为保护隐私，请勿发送密码、Telegram 登录验证码、二步验证密码、API Key、钱包助记词或私钥、银行卡完整资料或证件原图。你的问题可能由授权客服人员查看和处理。';
+const PRIVACY_NOTICE_EN = 'For your privacy, do not send passwords, Telegram login codes, two-step verification passwords, API keys, wallet seed phrases or private keys, full bank-card details, or identity-document images. Your request may be viewed and handled by authorized support staff.';
 
 function createConfigurationError(code, message) {
   const error = new Error(message);
@@ -83,16 +85,42 @@ function truncateTelegramText(value = '', limit = TELEGRAM_TEXT_LIMIT) {
   return `${text.slice(0, Math.max(0, limit - 1))}…`;
 }
 
+function makeTicketId() {
+  return crypto.randomBytes(5).toString('hex');
+}
+
+function messageReference(ctx, type, timestamp) {
+  const chatId = String(ctx.chat?.id || '');
+  const messageId = Number(ctx.message?.message_id || 0);
+  return {
+    key: `${chatId}:${messageId}`,
+    chatId,
+    messageId,
+    type,
+    receivedAt: new Date(timestamp).toISOString()
+  };
+}
+
+function adminMessageKey(chatId, messageId) {
+  return `${String(chatId || '')}:${Number(messageId || 0)}`;
+}
+
+function inlineKeyboard(rows) {
+  return { inline_keyboard: rows };
+}
+
 export class SupportTelegramBot {
   constructor({
     config = {},
     logger = null,
     telegrafFactory = (token) => new Telegraf(token),
-    now = () => Date.now()
+    now = () => Date.now(),
+    ticketIdFactory = makeTicketId
   } = {}) {
     this.config = config;
     this.logger = logger;
     this.now = now;
+    this.ticketIdFactory = ticketIdFactory;
     this.adminIds = normalizeAdminIds(config.supportAdminIds);
     this.adminIdSet = new Set(this.adminIds);
     this.rateLimitWindowMs = asPositiveInteger(
@@ -106,6 +134,9 @@ export class SupportTelegramBot {
       1000
     );
     this.rateLimitHits = new Map();
+    this.tickets = new Map();
+    this.activeTicketByUser = new Map();
+    this.adminMessageIndex = new Map();
     this.bot = telegrafFactory(String(config.supportBotToken || '').trim());
     this.botInfo = null;
     this.initialized = false;
@@ -141,6 +172,12 @@ export class SupportTelegramBot {
 
     this.bot.start((ctx) => this.handleStart(ctx));
     this.bot.on('message', (ctx) => this.handleMessage(ctx));
+    this.bot.action(/^s:c:([a-f0-9]+)$/i, (ctx) => this.handleClaim(ctx, ctx.match?.[1]));
+    this.bot.action(/^s:m:([a-f0-9]+)$/i, (ctx) => this.handleTransferMenu(ctx, ctx.match?.[1]));
+    this.bot.action(/^s:t:([a-f0-9]+):(\d+)$/i, (ctx) => this.handleTransfer(ctx, ctx.match?.[1], Number(ctx.match?.[2])));
+    this.bot.action(/^s:r:([a-f0-9]+)$/i, (ctx) => this.handleReturnToQueue(ctx, ctx.match?.[1]));
+    this.bot.action(/^s:z:([a-f0-9]+)$/i, (ctx) => this.handleClose(ctx, ctx.match?.[1]));
+    this.bot.action(/^s:n:([a-f0-9]+)$/i, (ctx) => this.handleCancelMenu(ctx, ctx.match?.[1]));
     this.bot.catch((error, ctx) => {
       this.logger?.error?.('Support bot handler failed', {
         updateId: ctx?.update?.update_id ?? null,
@@ -168,16 +205,11 @@ export class SupportTelegramBot {
     }
 
     let announced = false;
-
     const markLaunched = () => {
       if (announced) return;
       announced = true;
       this.launched = true;
-
-      this.logger?.info?.('Support bot launched', {
-        botId: String(this.botInfo?.id || '')
-      });
-
+      this.logger?.info?.('Support bot launched', { botId: String(this.botInfo?.id || '') });
       onLaunch?.();
     };
 
@@ -191,11 +223,19 @@ export class SupportTelegramBot {
     if (this.launched) await this.bot.stop(reason);
     this.launched = false;
     this.rateLimitHits.clear();
+    this.tickets.clear();
+    this.activeTicketByUser.clear();
+    this.adminMessageIndex.clear();
     this.logger?.info?.('Support bot stopped', { reason: safeDisplayText(reason, 80) });
   }
 
   isAdmin(userId) {
     return this.adminIdSet.has(String(userId || ''));
+  }
+
+  adminLabel(adminId) {
+    const index = this.adminIds.indexOf(String(adminId || ''));
+    return index >= 0 ? `客服 ${index + 1}` : '客服';
   }
 
   checkUserRateLimit(userId) {
@@ -224,14 +264,8 @@ export class SupportTelegramBot {
   async handleStart(ctx) {
     const english = isEnglishUser(ctx.from);
     await ctx.reply(english
-      ? 'Hello, this is customer support. Describe the problem directly, such as the bot not replying, incorrect credit balance, a payment or package issue, file parsing failure, or an image/voice problem. We will handle it as soon as possible.'
-      : '你好，这里是客服支持。请直接描述你遇到的问题，例如：Bot 无法回复、额度显示错误、充值/套餐问题、文件解析失败、语音或图片功能异常。我们会尽快处理。');
-  }
-
-  isOwnTicketMessage(message = {}) {
-    const authorId = String(message.from?.id || '');
-    const botId = String(this.botInfo?.id || '');
-    return Boolean(botId && authorId === botId && parseSupportTicketUserId(message));
+      ? `Hello, this is customer support. Describe the problem directly. We will handle it as soon as possible.\n\n${PRIVACY_NOTICE_EN}`
+      : `你好，这里是客服支持。请直接描述你遇到的问题，我们会尽快处理。\n\n${PRIVACY_NOTICE_ZH}`);
   }
 
   async handleMessage(ctx) {
@@ -246,6 +280,157 @@ export class SupportTelegramBot {
     }
 
     await this.handleUserRequest(ctx);
+  }
+
+  createTicket(userId, ref, timestamp) {
+    let ticketId = String(this.ticketIdFactory() || '').toLowerCase().replace(/[^a-f0-9]/g, '').slice(0, 20);
+    while (!ticketId || this.tickets.has(ticketId)) {
+      ticketId = makeTicketId();
+    }
+    const ticket = {
+      ticketId,
+      userId: String(userId),
+      status: 'open',
+      assignedAdminId: null,
+      createdAt: new Date(timestamp).toISOString(),
+      updatedAt: new Date(timestamp).toISOString(),
+      lastReplyAt: null,
+      replyCount: 0,
+      messageRefs: [ref],
+      summaryDeliveries: new Map(),
+      transferHistory: [],
+      deliveredMessageKeysByAdmin: new Map()
+    };
+    this.tickets.set(ticketId, ticket);
+    this.activeTicketByUser.set(String(userId), ticketId);
+    return ticket;
+  }
+
+  getActiveTicket(userId) {
+    const ticketId = this.activeTicketByUser.get(String(userId || ''));
+    if (!ticketId) return null;
+    const ticket = this.tickets.get(ticketId) || null;
+    if (!ticket || ticket.status === 'closed') {
+      this.activeTicketByUser.delete(String(userId || ''));
+      return null;
+    }
+    return ticket;
+  }
+
+  summaryText(ticket) {
+    const latest = ticket.messageRefs.at(-1);
+    const lines = [
+      `客服工单 #${ticket.ticketId}`,
+      `状态：${ticket.status === 'open' ? '🟡 等待接单' : ticket.status === 'assigned' ? '🔵 处理中' : '✅ 已关闭'}`,
+      `消息数量：${ticket.messageRefs.length}`,
+      `最新类型：${latest?.type || 'unknown'}`,
+      `创建时间：${ticket.createdAt}`,
+      `回复次数：${ticket.replyCount}`
+    ];
+    if (ticket.status === 'assigned') lines.push(`当前负责：${this.adminLabel(ticket.assignedAdminId)}`);
+    if (ticket.lastReplyAt) lines.push(`最后回复：${ticket.lastReplyAt}`);
+    lines.push('', '为保护用户隐私，完整内容仅向当前负责客服显示。');
+    return truncateTelegramText(lines.join('\n'));
+  }
+
+  summaryReplyMarkup(ticket, adminId) {
+    if (ticket.status === 'open') {
+      return inlineKeyboard([[{ text: '接单', callback_data: `s:c:${ticket.ticketId}` }]]);
+    }
+    if (ticket.status === 'assigned' && ticket.assignedAdminId === String(adminId)) {
+      return inlineKeyboard([
+        [
+          { text: '转交', callback_data: `s:m:${ticket.ticketId}` },
+          { text: '退回待接单', callback_data: `s:r:${ticket.ticketId}` }
+        ],
+        [{ text: '关闭工单', callback_data: `s:z:${ticket.ticketId}` }]
+      ]);
+    }
+    return inlineKeyboard([]);
+  }
+
+  async sendSummaryToAdmin(telegram, ticket, adminId) {
+    const result = await telegram.sendMessage(
+      adminId,
+      this.summaryText(ticket),
+      {
+        protect_content: true,
+        link_preview_options: { is_disabled: true },
+        reply_markup: this.summaryReplyMarkup(ticket, adminId)
+      }
+    );
+    const messageId = Number(result?.message_id || 0);
+    if (messageId) {
+      ticket.summaryDeliveries.set(String(adminId), messageId);
+      this.adminMessageIndex.set(adminMessageKey(adminId, messageId), ticket.ticketId);
+    }
+    return result;
+  }
+
+  async updateAllSummaries(telegram, ticket) {
+    const operations = Array.from(ticket.summaryDeliveries.entries()).map(async ([adminId, messageId]) => {
+      try {
+        await telegram.editMessageText(
+          adminId,
+          messageId,
+          undefined,
+          this.summaryText(ticket),
+          {
+            link_preview_options: { is_disabled: true },
+            reply_markup: this.summaryReplyMarkup(ticket, adminId)
+          }
+        );
+      } catch (error) {
+        this.logger?.warn?.('Support summary update failed', {
+          ticketId: ticket.ticketId,
+          adminId,
+          error: String(error?.message || error).slice(0, 200)
+        });
+      }
+    });
+    await Promise.allSettled(operations);
+  }
+
+  deliveredSet(ticket, adminId) {
+    const key = String(adminId);
+    let delivered = ticket.deliveredMessageKeysByAdmin.get(key);
+    if (!delivered) {
+      delivered = new Set();
+      ticket.deliveredMessageKeysByAdmin.set(key, delivered);
+    }
+    return delivered;
+  }
+
+  async deliverReferenceToAdmin(telegram, ticket, adminId, ref) {
+    const delivered = this.deliveredSet(ticket, adminId);
+    if (delivered.has(ref.key)) return false;
+    const result = await telegram.copyMessage(
+      adminId,
+      ref.chatId,
+      ref.messageId,
+      { protect_content: true }
+    );
+    delivered.add(ref.key);
+    const copiedMessageId = Number(result?.message_id || 0);
+    if (copiedMessageId) {
+      this.adminMessageIndex.set(adminMessageKey(adminId, copiedMessageId), ticket.ticketId);
+    }
+    return true;
+  }
+
+  async deliverUnreadHistory(telegram, ticket, adminId) {
+    for (const ref of ticket.messageRefs) {
+      try {
+        await this.deliverReferenceToAdmin(telegram, ticket, adminId, ref);
+      } catch (error) {
+        this.logger?.warn?.('Support private message delivery failed', {
+          ticketId: ticket.ticketId,
+          adminId: String(adminId),
+          messageType: ref.type,
+          error: String(error?.message || error).slice(0, 200)
+        });
+      }
+    }
   }
 
   async handleUserRequest(ctx) {
@@ -268,72 +453,211 @@ export class SupportTelegramBot {
       return;
     }
 
-    const ticketText = buildSupportTicketText({
-      user: ctx.from,
-      message: ctx.message,
-      now: new Date(Number(this.now()) || Date.now())
-    });
-    const deliveries = await Promise.allSettled(
-      this.adminIds.map((adminId) => this.sendTicketToAdmin(ctx, adminId, type, ticketText))
-    );
-    const delivered = deliveries.filter((result) => result.status === 'fulfilled').length;
+    const timestamp = Number(this.now()) || Date.now();
+    const ref = messageReference(ctx, type, timestamp);
+    let ticket = this.getActiveTicket(userId);
+    const isNew = !ticket;
+    if (isNew) ticket = this.createTicket(userId, ref, timestamp);
+    else {
+      ticket.messageRefs.push(ref);
+      ticket.updatedAt = new Date(timestamp).toISOString();
+    }
 
-    this.logger?.info?.('Support request relayed', {
-      userId,
-      type,
-      deliveredAdminCount: delivered,
-      failedAdminCount: deliveries.length - delivered
-    });
-
-    if (delivered === 0) {
-      await ctx.reply(english
-        ? 'Support is temporarily unavailable. Please try again later.'
-        : '客服暂时无法接收消息，请稍后再试。');
+    if (isNew) {
+      const deliveries = await Promise.allSettled(
+        this.adminIds.map((adminId) => this.sendSummaryToAdmin(ctx.telegram, ticket, adminId))
+      );
+      const delivered = deliveries.filter((result) => result.status === 'fulfilled').length;
+      this.logger?.info?.('Support request relayed', {
+        ticketId: ticket.ticketId,
+        userId,
+        type,
+        deliveredAdminCount: delivered,
+        failedAdminCount: deliveries.length - delivered
+      });
+      if (delivered === 0) {
+        this.tickets.delete(ticket.ticketId);
+        this.activeTicketByUser.delete(userId);
+        await ctx.reply(english
+          ? 'Support is temporarily unavailable. Please try again later.'
+          : '客服暂时无法接收消息，请稍后再试。');
+      }
       return;
     }
 
-    // 工单发送成功后保持静默，等待人工客服回复。
+    if (ticket.status === 'assigned' && ticket.assignedAdminId) {
+      try {
+        await this.deliverReferenceToAdmin(ctx.telegram, ticket, ticket.assignedAdminId, ref);
+      } catch (error) {
+        this.logger?.warn?.('Support follow-up delivery failed', {
+          ticketId: ticket.ticketId,
+          userId,
+          type,
+          error: String(error?.message || error).slice(0, 200)
+        });
+      }
+    }
+    await this.updateAllSummaries(ctx.telegram, ticket);
+    this.logger?.info?.('Support request appended', { ticketId: ticket.ticketId, userId, type, status: ticket.status });
   }
 
-  async sendTicketToAdmin(ctx, adminId, type, ticketText) {
-    if (type === 'text') {
-      return ctx.telegram.sendMessage(
-        adminId,
-        truncateTelegramText(ticketText, TELEGRAM_TEXT_LIMIT),
-        { link_preview_options: { is_disabled: true } }
-      );
+  getTicketForAction(ctx, ticketId) {
+    const adminId = String(ctx.from?.id || '');
+    if (!this.isAdmin(adminId)) return { adminId, ticket: null, error: '无权操作客服工单。' };
+    const ticket = this.tickets.get(String(ticketId || ''));
+    if (!ticket) return { adminId, ticket: null, error: '该工单状态已失效，可能是服务重新部署导致，请让用户重新发送问题。' };
+    return { adminId, ticket, error: '' };
+  }
+
+  async answerAction(ctx, text, alert = false) {
+    try {
+      await ctx.answerCbQuery(text, { show_alert: alert });
+    } catch {
+      // Callback may already be answered; the state change remains valid.
+    }
+  }
+
+  async handleClaim(ctx, ticketId) {
+    const { adminId, ticket, error } = this.getTicketForAction(ctx, ticketId);
+    if (error) return this.answerAction(ctx, error, true);
+    if (ticket.status === 'closed') return this.answerAction(ctx, '该工单已关闭。', true);
+    if (ticket.status === 'assigned') {
+      const message = ticket.assignedAdminId === adminId ? '你已经是该工单的负责客服。' : '该工单已由其他客服接单。';
+      return this.answerAction(ctx, message, true);
     }
 
-    return ctx.telegram.copyMessage(
-      adminId,
-      ctx.chat.id,
-      ctx.message.message_id,
-      { caption: truncateTelegramText(ticketText, TELEGRAM_CAPTION_LIMIT) }
-    );
+    // Set ownership synchronously before the first await so only one callback wins.
+    ticket.status = 'assigned';
+    ticket.assignedAdminId = adminId;
+    ticket.updatedAt = new Date(Number(this.now()) || Date.now()).toISOString();
+
+    await this.answerAction(ctx, '接单成功。');
+    await this.updateAllSummaries(ctx.telegram, ticket);
+    await this.deliverUnreadHistory(ctx.telegram, ticket, adminId);
+    this.logger?.info?.('Support ticket claimed', { ticketId: ticket.ticketId, adminId });
+  }
+
+  async handleTransferMenu(ctx, ticketId) {
+    const { adminId, ticket, error } = this.getTicketForAction(ctx, ticketId);
+    if (error) return this.answerAction(ctx, error, true);
+    if (ticket.status !== 'assigned' || ticket.assignedAdminId !== adminId) {
+      return this.answerAction(ctx, '只有当前负责客服可以转交工单。', true);
+    }
+    const rows = this.adminIds
+      .map((candidate, index) => ({ candidate, index }))
+      .filter(({ candidate }) => candidate !== adminId)
+      .map(({ candidate, index }) => [{ text: `转交给${this.adminLabel(candidate)}`, callback_data: `s:t:${ticket.ticketId}:${index}` }]);
+    rows.push([{ text: '取消', callback_data: `s:n:${ticket.ticketId}` }]);
+    await ctx.editMessageReplyMarkup(inlineKeyboard(rows));
+    await this.answerAction(ctx, '请选择新的负责客服。');
+  }
+
+  async handleCancelMenu(ctx, ticketId) {
+    const { adminId, ticket, error } = this.getTicketForAction(ctx, ticketId);
+    if (error) return this.answerAction(ctx, error, true);
+    await ctx.editMessageReplyMarkup(this.summaryReplyMarkup(ticket, adminId));
+    await this.answerAction(ctx, '已取消。');
+  }
+
+  async handleTransfer(ctx, ticketId, targetIndex) {
+    const { adminId, ticket, error } = this.getTicketForAction(ctx, ticketId);
+    if (error) return this.answerAction(ctx, error, true);
+    const targetAdminId = this.adminIds[targetIndex];
+    if (!targetAdminId || targetAdminId === adminId) return this.answerAction(ctx, '转交目标无效。', true);
+    if (ticket.status !== 'assigned' || ticket.assignedAdminId !== adminId) {
+      return this.answerAction(ctx, '工单负责人已经变化，无法继续转交。', true);
+    }
+
+    const timestamp = Number(this.now()) || Date.now();
+    ticket.assignedAdminId = targetAdminId;
+    ticket.updatedAt = new Date(timestamp).toISOString();
+    ticket.transferHistory.push({ fromAdminId: adminId, toAdminId: targetAdminId, transferredAt: ticket.updatedAt });
+
+    await this.answerAction(ctx, `已转交给${this.adminLabel(targetAdminId)}。`);
+    await this.updateAllSummaries(ctx.telegram, ticket);
+    await this.deliverUnreadHistory(ctx.telegram, ticket, targetAdminId);
+    this.logger?.info?.('Support ticket transferred', { ticketId: ticket.ticketId, fromAdminId: adminId, toAdminId: targetAdminId });
+  }
+
+  async handleReturnToQueue(ctx, ticketId) {
+    const { adminId, ticket, error } = this.getTicketForAction(ctx, ticketId);
+    if (error) return this.answerAction(ctx, error, true);
+    if (ticket.status !== 'assigned' || ticket.assignedAdminId !== adminId) {
+      return this.answerAction(ctx, '只有当前负责客服可以退回工单。', true);
+    }
+    ticket.status = 'open';
+    ticket.assignedAdminId = null;
+    ticket.updatedAt = new Date(Number(this.now()) || Date.now()).toISOString();
+    await this.answerAction(ctx, '工单已退回待接单。');
+    await this.updateAllSummaries(ctx.telegram, ticket);
+    this.logger?.info?.('Support ticket returned to queue', { ticketId: ticket.ticketId, adminId });
+  }
+
+  async handleClose(ctx, ticketId) {
+    const { adminId, ticket, error } = this.getTicketForAction(ctx, ticketId);
+    if (error) return this.answerAction(ctx, error, true);
+    if (ticket.status !== 'assigned' || ticket.assignedAdminId !== adminId) {
+      return this.answerAction(ctx, '只有当前负责客服可以关闭工单。', true);
+    }
+    ticket.status = 'closed';
+    ticket.updatedAt = new Date(Number(this.now()) || Date.now()).toISOString();
+    this.activeTicketByUser.delete(ticket.userId);
+    await this.answerAction(ctx, '工单已关闭。');
+    await this.updateAllSummaries(ctx.telegram, ticket);
+    this.logger?.info?.('Support ticket closed', { ticketId: ticket.ticketId, adminId, replyCount: ticket.replyCount });
   }
 
   async handleAdminReply(ctx) {
-    const repliedMessage = ctx.message?.reply_to_message;
-    const targetUserId = parseSupportTicketUserId(repliedMessage);
-    if (!targetUserId || !this.isOwnTicketMessage(repliedMessage)) {
-      await ctx.reply('请直接回复客服 Bot 发出的工单消息，系统才能安全地把内容转给用户。');
+    const adminId = String(ctx.from?.id || '');
+    const repliedMessageId = Number(ctx.message?.reply_to_message?.message_id || 0);
+    if (!repliedMessageId) {
+      await ctx.reply('请直接回复客服 Bot 发出的工单摘要或用户消息。');
+      return;
+    }
+    const ticketId = this.adminMessageIndex.get(adminMessageKey(ctx.chat?.id, repliedMessageId));
+    const ticket = ticketId ? this.tickets.get(ticketId) : null;
+    if (!ticket) {
+      await ctx.reply('该工单状态已失效，可能是服务重新部署导致，请让用户重新发送问题。');
+      return;
+    }
+    if (ticket.status === 'closed') {
+      await ctx.reply('该工单已关闭，不能继续回复。');
+      return;
+    }
+    if (ticket.status !== 'assigned' || !ticket.assignedAdminId) {
+      await ctx.reply('该工单尚未接单，请先点击“接单”。');
+      return;
+    }
+    if (ticket.assignedAdminId !== adminId) {
+      await ctx.reply('该工单当前由其他客服处理，你的消息没有发送给用户。');
       return;
     }
 
     try {
       await ctx.telegram.copyMessage(
-        targetUserId,
+        ticket.userId,
         ctx.chat.id,
-        ctx.message.message_id
+        ctx.message.message_id,
+        { protect_content: true }
       );
+      const timestamp = Number(this.now()) || Date.now();
+      ticket.replyCount += 1;
+      ticket.lastReplyAt = new Date(timestamp).toISOString();
+      ticket.updatedAt = ticket.lastReplyAt;
       await ctx.reply('✅ 已发送给用户。');
+      await this.updateAllSummaries(ctx.telegram, ticket);
       this.logger?.info?.('Support reply delivered', {
-        targetUserId,
-        replyType: supportMessageType(ctx.message)
+        ticketId: ticket.ticketId,
+        targetUserId: ticket.userId,
+        adminId,
+        replyType: supportMessageType(ctx.message),
+        replyCount: ticket.replyCount
       });
     } catch (error) {
       this.logger?.warn?.('Support reply delivery failed', {
-        targetUserId,
+        ticketId: ticket.ticketId,
+        targetUserId: ticket.userId,
+        adminId,
         replyType: supportMessageType(ctx.message),
         error: String(error?.message || error).slice(0, 300)
       });
@@ -356,5 +680,8 @@ export const supportBotInternals = {
   parseSupportTicketUserId,
   buildSupportTicketText,
   truncateTelegramText,
-  createConfigurationError
+  createConfigurationError,
+  makeTicketId,
+  messageReference,
+  adminMessageKey
 };
