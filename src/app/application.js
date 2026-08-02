@@ -16,6 +16,16 @@ import { startAdminApiServer } from '../services/admin-api-server.js';
 import { assertRuntimeConfig } from './runtime-config-validation.js';
 import { AccessControlService } from '../services/access-control-service.js';
 import { createStructuredLogger } from '../core/observability/structured-logger.js';
+import {
+  StartupDiagnosticsError,
+  collectStartupDiagnostics,
+  logStartupDiagnostics
+} from './startup-diagnostics.js';
+import {
+  createApplicationLifecycle,
+  stopApplicationResources
+} from './application-lifecycle.js';
+import { createSupportBot } from '../services/support-bot.js';
 
 function ensureRuntimeFileDirectory(filePath = '', label = 'file') {
   const raw = String(filePath || '').trim();
@@ -30,6 +40,11 @@ function ensureRuntimeFileDirectory(filePath = '', label = 'file') {
 
 export async function createApplication() {
   const logger = createStructuredLogger();
+  let db;
+  let bot;
+  let supportBot;
+  let healthServer;
+  let adminServer;
 
   try {
     const rawConfig = loadEnvConfig();
@@ -41,14 +56,32 @@ export async function createApplication() {
     ensureRuntimeFileDirectory(runtimeConfig.databaseFile, 'DATABASE_FILE');
     ensureRuntimeFileDirectory(runtimeConfig.legacyDataFile, 'DATA_FILE');
 
-    const db = await createDatabase(runtimeConfig);
+    let startupDiagnostics = null;
+    if (runtimeConfig.enableStartupDiagnostics !== false) {
+      startupDiagnostics = collectStartupDiagnostics({
+        config: runtimeConfig,
+        env: process.env,
+        cwd: process.cwd()
+      });
+      logStartupDiagnostics(startupDiagnostics, { logger });
+      if (!startupDiagnostics.ok) throw new StartupDiagnosticsError(startupDiagnostics);
+    }
+
+    db = await createDatabase(runtimeConfig);
     const accessControl = new AccessControlService({ config: runtimeConfig, db, logger });
     const aiClient = createAIProviderClient(runtimeConfig, logger);
     const providerManager = createAIProviderManager(runtimeConfig, logger, db);
     const toolRegistry = createToolRegistry(runtimeConfig, logger, accessControl);
     const pluginManager = await createPluginManager(runtimeConfig, logger);
+    supportBot = createSupportBot({ config: runtimeConfig, logger });
+    if (supportBot) {
+      await supportBot.init();
+      if (!String(runtimeConfig.supportBotUsername || '').trim() && supportBot.botInfo?.username) {
+        runtimeConfig.supportBotUsername = supportBot.botInfo.username;
+      }
+    }
 
-    const bot = createTelegramBot({
+    bot = createTelegramBot({
       config: runtimeConfig,
       db,
       aiClient,
@@ -74,7 +107,7 @@ export async function createApplication() {
       memorySummaryInterval: runtimeConfig.memorySummaryInterval
     });
 
-    const healthServer = startHealthServer({
+    healthServer = startHealthServer({
       port: runtimeConfig.healthPort,
       db,
       config: runtimeConfig,
@@ -90,7 +123,7 @@ export async function createApplication() {
       logger
     });
 
-    const adminServer = startAdminApiServer({
+    adminServer = startAdminApiServer({
       port: runtimeConfig.adminApiPort,
       db,
       config: runtimeConfig,
@@ -98,33 +131,48 @@ export async function createApplication() {
       accessControl
     });
 
+    const lifecycle = createApplicationLifecycle({
+      bot,
+      supportBot,
+      healthServer,
+      adminServer,
+      db,
+      logger
+    });
+
     return {
       configCenter,
       logger,
       bot,
+      supportBot,
+      startupDiagnostics,
       healthServer,
       adminServer,
       async start() {
-        await bot.launch();
+        await lifecycle.start();
         logger.info('Telegram bot launched', {
           provider: runtimeConfig.aiProvider,
           defaultModel: runtimeConfig.defaultModel,
-          healthPort: runtimeConfig.healthPort
+          healthPort: runtimeConfig.healthPort,
+          supportBot: Boolean(supportBot),
+          diagnostics: startupDiagnostics?.status || 'disabled'
         });
       },
       async stop(signal) {
-        try {
-          await bot.stop(signal);
-        } finally {
-          await Promise.all([
-            new Promise((resolve) => healthServer.close(resolve)),
-            adminServer ? new Promise((resolve) => adminServer.close(resolve)) : Promise.resolve()
-          ]);
-          db.close?.();
-        }
+        await lifecycle.stop(signal);
       }
     };
   } catch (error) {
+    try {
+      await stopApplicationResources(
+        { bot, supportBot, healthServer, adminServer, db, logger },
+        'INITIALIZATION_FAILED'
+      );
+    } catch (cleanupError) {
+      logger.error('Initialization cleanup failed', {
+        error: cleanupError?.message || String(cleanupError)
+      });
+    }
     throw AppError.wrap(error, {
       code: ErrorCodes.STARTUP_FAILED,
       message: 'Failed to bootstrap application.'

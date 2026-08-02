@@ -13,6 +13,18 @@
     DEFAULT_AI_MODEL 配置错误或对应 Provider 没有可用模型
     ADMIN_API_ENABLED=true 但 ADMIN_API_TOKEN 没填
 
+新启动诊断会在 BackOff 前打印稳定错误码：
+
+- `MISSING_TELEGRAM_BOT_TOKEN`：主 Bot Token 缺失或仍是示例值。
+- `MISSING_AI_PROVIDER_CONFIG`：默认 Provider 未配置完整，或自动模式下没有任何可用聊天 Provider。
+- `INVALID_PORT`：`PORT` / `HEALTH_PORT` 不是 1–65535 的整数。
+- `DATABASE_PATH_NOT_FOUND`：数据库父目录不存在或无法准备。
+- `GEMINI_LIVE_CONFIG_MISSING`：已开启 Live 功能但缺少独立 Gemini Live Key 或兼容模型。
+- `SUPPORT_BOT_TOKEN_CONFLICT`：客服 Bot 错误地复用了主 Bot Token。
+- `MISSING_SUPPORT_ADMIN_IDS`：启动了客服 Bot，但没有配置可处理工单的管理员 ID。
+
+日志只会显示掩码后的 Token / Key，不要为了排错把完整密钥复制到公开日志或工单中。
+
 ## Gemini 429
 
 这是当前 Gemini API Key 的额度或频率限制。同一 Key 收到 `RESOURCE_EXHAUSTED` 后，继续切换 Gemini 模型通常也无法恢复；程序会立即跳过该 Provider 的其余模型。

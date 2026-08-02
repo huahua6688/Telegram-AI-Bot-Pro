@@ -1,6 +1,11 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
+import {
+  collectStartupDiagnostics,
+  StartupDiagnosticCodes
+} from '../src/app/startup-diagnostics.js';
+import { getRuntimeConfigErrors } from '../src/app/runtime-config-validation.js';
 
 function mask(value = '') {
   const raw = String(value || '');
@@ -76,6 +81,9 @@ ok(`DEFAULT_AI_MODEL: ${config.defaultModel || 'missing'}`);
 ok(`AI_PROVIDER_FALLBACK_ORDER: ${(config.aiProviderFallbackOrder || []).join(' -> ') || 'none'}`);
 ok(`TRANSLATION_PROVIDER: ${config.translationProvider || '-'}`);
 ok(`ROUTER_PROVIDER: ${config.routerProvider || '-'}`);
+ok(`ENABLE_STARTUP_DIAGNOSTICS: ${config.enableStartupDiagnostics}`);
+ok(`SHOW_VERSION_INFO: ${config.showVersionInfo}`);
+ok(`HEALTH_CHECK_ENABLED: ${config.healthCheckEnabled}`);
 
 const providerChecks = [
   ['Gemini', 'gemini', 'geminiApiKey'],
@@ -100,14 +108,12 @@ const providerChecks = [
 
 console.log('');
 console.log('AI Providers:');
-let configuredProviderCount = 0;
 const configuredProviders = [];
 for (const [label, providerId, configKey] of providerChecks) {
   const configuredKey = String(config[configKey] || '').trim();
   const configured = Boolean(configuredKey);
   const models = config.providerModels?.[providerId]?.join(', ') || '';
   if (configured) {
-    configuredProviderCount += 1;
     configuredProviders.push({ providerId, configuredKey });
   }
   const summary = `${label}: ${configured ? 'configured' : 'not configured'}${models ? ` / ${models}` : ''}`;
@@ -118,8 +124,20 @@ for (const [label, providerId, configKey] of providerChecks) {
   }
 }
 
-if (configuredProviderCount === 0) {
-  warnings.push('No AI provider API key is configured. The bot can start, but AI replies will fail until at least one provider key and model are set.');
+const providerDiagnostic = collectStartupDiagnostics({
+  config,
+  env: process.env,
+  cwd: process.cwd()
+}).errors.find((item) => item.code === StartupDiagnosticCodes.MISSING_AI_PROVIDER_CONFIG);
+if (providerDiagnostic) {
+  const message = `${providerDiagnostic.code}: ${providerDiagnostic.message}`;
+  if (config.enableStartupDiagnostics) {
+    errors.push(message);
+  } else {
+    warnings.push(
+      `ENABLE_STARTUP_DIAGNOSTICS=false; ${message} AI replies will fail until the selected provider has a key and model.`
+    );
+  }
 }
 const independentChatKeys = new Set(
   configuredProviders
@@ -155,6 +173,12 @@ if (!hasEnv('ADMIN_USER_IDS')) {
 
 if (String(process.env.ADMIN_API_ENABLED || '').trim().toLowerCase() === 'true' && !hasEnv('ADMIN_API_TOKEN')) {
   warnings.push('ADMIN_API_ENABLED=true but ADMIN_API_TOKEN is missing.');
+}
+
+for (const error of getRuntimeConfigErrors(config)) {
+  if (/^(SUPPORT_BOT_TOKEN_CONFLICT|MISSING_SUPPORT_ADMIN_IDS|INVALID_SUPPORT_ADMIN_IDS):/.test(error)) {
+    errors.push(error);
+  }
 }
 
 if (config.aiProvider === 'gemini' && String(config.defaultModel || '').includes('live')) {

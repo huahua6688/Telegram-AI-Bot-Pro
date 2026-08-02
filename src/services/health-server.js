@@ -1,6 +1,13 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
+import { getBuildInfo } from '../app/build-info.js';
 import { BILLING_CREDIT_TYPES } from '../db.js';
+import {
+  buildBillingCatalog,
+  buildUserBillingSnapshot,
+  getDefaultChatFreeQuota
+} from './billing-catalog.js';
+import { resolveSupportContactUrl } from './support-contact.js';
 import {
   isValidNewsLanguage,
   isValidNewsRegion,
@@ -608,6 +615,37 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       margin-top: 8px;
     }
 
+    .balance-grid,
+    .product-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .balance-item,
+    .product-item {
+      padding: 13px;
+      border-radius: 14px;
+      background: var(--tg-theme-bg-color, #f9fafb);
+    }
+
+    .balance-item strong,
+    .product-item strong {
+      display: block;
+      margin-bottom: 5px;
+    }
+
+    .balance-item span,
+    .product-item span,
+    .product-item p {
+      color: var(--tg-theme-hint-color, #6b7280);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .product-item p { margin: 6px 0 0; }
+
     @media (max-width: 520px) {
       .quota-editor {
         grid-template-columns: 1fr 1fr;
@@ -619,6 +657,11 @@ const MINI_APP_HTML = String.raw`<!doctype html>
 
       .credit-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .balance-grid,
+      .product-list {
+        grid-template-columns: 1fr;
       }
     }
 
@@ -852,6 +895,25 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       </form>
     </section>
 
+    <section class="card" id="billingPanel">
+      <div class="section-head">
+        <h2>我的余额与用量</h2>
+        <span class="badge" id="billingBadge">读取中</span>
+      </div>
+      <p class="small" style="text-align:left;margin-top:0">
+        每项能力先使用当天免费额度，再使用已购余额；失败请求会自动归还。
+      </p>
+      <div class="balance-grid" id="billingSummary"></div>
+      <div class="subsection">
+        <h3 class="subsection-title">可购买额度包</h3>
+        <div class="product-list" id="productList"></div>
+        <p class="small" id="purchaseHint" style="text-align:left">付款请回到机器人，点击输入框下方的“⭐ 购买额度”。</p>
+        <div class="actions">
+          <button class="secondary hidden" id="supportButton" type="button">🧑‍💻 联系客服</button>
+        </div>
+      </div>
+    </section>
+
     <section class="card" id="historyPanel">
       <div class="section-head">
         <h2>聊天记录</h2>
@@ -890,7 +952,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
           <strong id="adminTotalUsers">—</strong>
         </div>
         <div class="stat-box">
-          <span>全局默认额度</span>
+          <span>每日免费聊天</span>
           <strong id="adminDailyQuota">—</strong>
         </div>
         <div class="stat-box">
@@ -910,7 +972,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
 
       <div class="subsection">
         <h3 class="subsection-title">用户管理</h3>
-        <p class="small">全局额度是账号的默认值；可以在下方为每个账号单独覆盖，0 表示不限。</p>
+        <p class="small">这里单独覆盖的是账号的每日免费聊天额度；其他五类每日免费额度由部署环境统一配置，0 表示不限。</p>
         <p class="small">六类已购额度余额可按账号独立修改，与每日免费额度分开计算；管理员使用仍然免费。</p>
         <div class="admin-toolbar">
           <input id="adminUserSearch" type="search" placeholder="搜索 ID、用户名或姓名" />
@@ -965,7 +1027,8 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       sessions: [],
       adminLoaded: false,
       adminUsers: [],
-      adminSessions: []
+      adminSessions: [],
+      supportUrl: ''
     };
 
     const elements = {
@@ -976,6 +1039,11 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       uptime: document.getElementById('uptime'),
       messages: document.getElementById('messages'),
       aiCalls: document.getElementById('aiCalls'),
+      billingBadge: document.getElementById('billingBadge'),
+      billingSummary: document.getElementById('billingSummary'),
+      productList: document.getElementById('productList'),
+      purchaseHint: document.getElementById('purchaseHint'),
+      supportButton: document.getElementById('supportButton'),
       userIdLabel: document.getElementById('userIdLabel'),
       telegramRequired: document.getElementById('telegramRequired'),
       settingsForm: document.getElementById('settingsForm'),
@@ -1033,6 +1101,65 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       if (days > 0) return days + ' 天 ' + hours + ' 小时';
       if (hours > 0) return hours + ' 小时 ' + minutes + ' 分钟';
       return minutes + ' 分钟';
+    }
+
+    function renderBilling(billing) {
+      const credits = billing && billing.credits ? billing.credits : {};
+      const catalog = billing && billing.catalog ? billing.catalog : {};
+      elements.billingSummary.innerHTML = '';
+      elements.productList.innerHTML = '';
+
+      creditDefinitions.forEach(function (definition) {
+        const credit = credits[definition.id] || {};
+        const item = document.createElement('div');
+        const title = document.createElement('strong');
+        const free = document.createElement('span');
+        const paid = document.createElement('span');
+        item.className = 'balance-item';
+        title.textContent = definition.label + (credit.enabled === false ? '（未启用）' : '');
+        free.textContent = credit.unlimited
+          ? '今日免费：不限'
+          : '今日免费：剩余 ' + Number(credit.freeRemaining || 0) + ' / ' + Number(credit.freeDaily || 0) + '（已用 ' + Number(credit.freeUsed || 0) + '）';
+        paid.textContent = '已购余额：' + Number(credit.purchased || 0);
+        item.appendChild(title);
+        item.appendChild(free);
+        item.appendChild(document.createElement('br'));
+        item.appendChild(paid);
+        elements.billingSummary.appendChild(item);
+      });
+
+      const purchasesEnabled = catalog.enabled !== false;
+      const products = purchasesEnabled && Array.isArray(catalog.products) ? catalog.products : [];
+      products.forEach(function (product) {
+        const item = document.createElement('div');
+        const title = document.createElement('strong');
+        const price = document.createElement('span');
+        const grants = document.createElement('p');
+        item.className = 'product-item';
+        title.textContent = product.title || product.titleEn || product.id;
+        price.textContent = Number(product.price || 0) + ' Telegram Stars';
+        grants.textContent = creditDefinitions
+          .filter(function (definition) { return Number(product.credits && product.credits[definition.id] || 0) > 0; })
+          .map(function (definition) { return definition.label + ' ' + Number(product.credits[definition.id]); })
+          .join(' · ');
+        item.appendChild(title);
+        item.appendChild(price);
+        item.appendChild(grants);
+        elements.productList.appendChild(item);
+      });
+
+      if (!products.length) {
+        const empty = document.createElement('div');
+        empty.className = 'notice';
+        empty.textContent = purchasesEnabled
+          ? '管理员尚未配置可购买额度包；每日免费额度仍可使用。'
+          : '购买暂未开放；每日免费额度和已有余额仍可使用。';
+        elements.productList.appendChild(empty);
+      }
+      elements.purchaseHint.classList.toggle('hidden', !purchasesEnabled || products.length === 0);
+
+      elements.billingBadge.textContent = billing && billing.admin ? '管理员不限额' : '已同步';
+      elements.billingBadge.className = 'badge';
     }
 
     function showNotice(message, type) {
@@ -1093,6 +1220,9 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       state.catalog = data.providers || [];
       state.settings = data.settings || {};
       state.profile = data.profile || {};
+      state.supportUrl = String(data.support && data.support.url || '');
+      elements.supportButton.classList.toggle('hidden', !state.supportUrl);
+      renderBilling(data.billing || {});
 
       const providerId = state.settings.providerId || 'auto';
       buildOptions(
@@ -1576,10 +1706,10 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         const parts = [
           'ID ' + user.id,
           user.username ? '@' + user.username : '',
-          '今日使用 ' + Number(user.dailyUsageCount || 0) + ' / ' + quotaDisplayValue(user.dailyQuota),
+          '今日免费聊天 ' + Number(user.dailyUsageCount || 0) + ' / ' + quotaDisplayValue(user.dailyQuota),
           user.usesGlobalQuota
-            ? '使用全局默认额度'
-            : '个人额度 ' + quotaDisplayValue(user.dailyQuotaOverride),
+            ? '使用默认免费聊天额度'
+            : '个人免费聊天额度 ' + quotaDisplayValue(user.dailyQuotaOverride),
           '累计请求 ' + Number(user.totalMessages || 0)
         ].filter(Boolean);
         meta.textContent = parts.join(' · ');
@@ -1627,7 +1757,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
 
         const quotaField = document.createElement('label');
         quotaField.className = 'quota-field';
-        quotaField.textContent = '个人每日额度（0 表示不限）';
+        quotaField.textContent = '个人每日免费聊天额度（0 表示不限）';
 
         const quotaInput = document.createElement('input');
         quotaInput.type = 'number';
@@ -1637,20 +1767,20 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         quotaInput.inputMode = 'numeric';
         quotaInput.dataset.userQuotaInput = String(user.id);
         quotaInput.value = user.usesGlobalQuota ? '' : String(Number(user.dailyQuotaOverride || 0));
-        quotaInput.placeholder = '全局默认：' + quotaDisplayValue(user.dailyQuota);
+        quotaInput.placeholder = '默认免费聊天：' + quotaDisplayValue(user.dailyQuota);
         quotaField.appendChild(quotaInput);
 
         const saveQuota = document.createElement('button');
         saveQuota.type = 'button';
         saveQuota.className = 'primary compact-button';
-        saveQuota.textContent = '保存个人额度';
+        saveQuota.textContent = '保存个人免费聊天额度';
         saveQuota.dataset.userId = String(user.id);
         saveQuota.dataset.userAction = 'save-quota';
 
         const resetQuota = document.createElement('button');
         resetQuota.type = 'button';
         resetQuota.className = 'secondary compact-button';
-        resetQuota.textContent = '恢复全局默认';
+        resetQuota.textContent = '恢复默认免费聊天额度';
         resetQuota.dataset.userId = String(user.id);
         resetQuota.dataset.userAction = 'reset-quota';
         resetQuota.disabled = Boolean(user.usesGlobalQuota);
@@ -1834,12 +1964,15 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         dailyQuota = Number(rawValue);
 
         if (!rawValue || !Number.isInteger(dailyQuota) || dailyQuota < 0 || dailyQuota > 1000000) {
-          showAdminNotice('个人每日额度必须是 0 到 1000000 之间的整数。', 'failure');
+          showAdminNotice('个人每日免费聊天额度必须是 0 到 1000000 之间的整数。', 'failure');
           return;
         }
       }
 
-      showAdminNotice(resetToGlobal ? '正在恢复全局默认额度…' : '正在保存个人额度…', '');
+      showAdminNotice(
+        resetToGlobal ? '正在恢复默认每日免费聊天额度…' : '正在保存个人每日免费聊天额度…',
+        ''
+      );
 
       try {
         const response = await fetch(
@@ -1858,7 +1991,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
 
         await fetchAdminUsers(elements.adminUserSearch.value.trim());
         showAdminNotice(
-          resetToGlobal ? '已恢复使用全局默认额度。' : '个人每日额度已保存。',
+          resetToGlobal ? '已恢复默认每日免费聊天额度。' : '个人每日免费聊天额度已保存。',
           'success'
         );
 
@@ -2137,6 +2270,19 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       }
     });
 
+    elements.supportButton.addEventListener('click', function () {
+      if (!state.supportUrl) return;
+      if (tg && state.supportUrl.startsWith('https://t.me/') && typeof tg.openTelegramLink === 'function') {
+        tg.openTelegramLink(state.supportUrl);
+        return;
+      }
+      if (tg && typeof tg.openLink === 'function') {
+        tg.openLink(state.supportUrl);
+        return;
+      }
+      window.open(state.supportUrl, '_blank', 'noopener,noreferrer');
+    });
+
     setupTelegram();
     loadStatus();
     loadSettings();
@@ -2177,10 +2323,20 @@ function sendHtml(res, statusCode, html) {
 
 function buildHealthPayload({ db, config }) {
   const stats = db.getStats();
+  const build = getBuildInfo();
 
   return {
     ok: true,
+    status: 'ok',
     service: 'telegram-ai-bot-pro',
+    timestamp: new Date().toISOString(),
+    version: build.version,
+    revision: build.revision,
+    shortRevision: build.shortRevision,
+    node: build.nodeVersion,
+    environment: build.environment,
+    deployedAt: build.deployedAt,
+    startedAt: build.startedAt,
     provider: config.aiProvider,
     model: config.defaultModel,
     translationModel: config.translationModel,
@@ -2196,7 +2352,7 @@ function buildHealthPayload({ db, config }) {
 function hasProviderCredential(config, providerId) {
   const credentialMap = {
     gemini: config.geminiApiKey,
-    'gemini-live': config.geminiLiveApiKey || config.geminiApiKey,
+    'gemini-live': config.geminiLiveApiKey,
     groq: config.groqApiKey,
     openrouter: config.openrouterApiKey,
     'github-models': config.githubModelsApiKey,
@@ -2420,6 +2576,13 @@ function serializeSettingsResponse({ db, config, userId, telegramLanguageCode = 
     locale: user?.preferredLanguage || telegramLanguageCode,
     telegramLanguageCode
   });
+  const billing = buildUserBillingSnapshot({
+    db,
+    config,
+    userId,
+    isAdmin: Boolean(user?.isAdmin)
+  });
+  const supportUrl = resolveSupportContactUrl(config);
 
   return {
     ok: true,
@@ -2448,6 +2611,11 @@ function serializeSettingsResponse({ db, config, userId, telegramLanguageCode = 
         language: effectiveNews.language,
         timeZone: effectiveNews.timeZone
       }
+    },
+    billing,
+    support: {
+      enabled: Boolean(supportUrl),
+      url: supportUrl
     },
     providers: buildProviderCatalog(config),
     languages: LANGUAGE_OPTIONS,
@@ -2598,14 +2766,18 @@ function resolveAdminUserQuota(db, userId, defaultQuota) {
   };
 }
 
-function serializeAdminUser(db, user, defaultQuota = 0) {
+function serializeAdminUser(db, user, config = {}) {
   const aiSettings = db.getUserAISettings(user.id);
+  const defaultQuota = getDefaultChatFreeQuota(config);
   const quota = resolveAdminUserQuota(db, user.id, defaultQuota);
-  const storedBalances = typeof db.getUserCreditBalances === 'function'
-    ? db.getUserCreditBalances(user.id)?.balances || {}
-    : {};
+  const billing = buildUserBillingSnapshot({
+    db,
+    config,
+    userId: user.id,
+    isAdmin: Boolean(user.isAdmin)
+  });
   const creditBalances = Object.fromEntries(
-    BILLING_CREDIT_TYPES.map((creditType) => [creditType, Number(storedBalances[creditType] || 0)])
+    BILLING_CREDIT_TYPES.map((creditType) => [creditType, billing.credits[creditType].purchased])
   );
 
   return {
@@ -2627,7 +2799,8 @@ function serializeAdminUser(db, user, defaultQuota = 0) {
     lastSeenAt: user.lastSeenAt || '',
     aiProvider: aiSettings.providerId || 'auto',
     aiModel: aiSettings.modelId || '',
-    creditBalances
+    creditBalances,
+    billing
   };
 }
 
@@ -2908,10 +3081,12 @@ async function handleMiniAppAdminApi(req, res, context, url) {
   const pathname = url.pathname;
 
   if (pathname === '/api/miniapp/admin/overview' && req.method === 'GET') {
+    const billingCatalog = buildBillingCatalog(context.config);
     sendJson(res, 200, {
       ok: true,
       totalUsers: context.db.countUsers(),
-      dailyQuota: Number(context.config.dailyQuota || 0),
+      dailyQuota: Number(billingCatalog.freeQuota.chat || 0),
+      billingCatalog,
       stats: context.db.getStats(),
       currentProvider: context.config.aiProvider || '',
       currentModel: context.config.defaultModel || '',
@@ -2926,7 +3101,7 @@ async function handleMiniAppAdminApi(req, res, context, url) {
     const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
     const items = context.db
       .listUsers({ q, limit, offset })
-      .map((user) => serializeAdminUser(context.db, user, context.config.dailyQuota));
+      .map((user) => serializeAdminUser(context.db, user, context.config));
 
     sendJson(res, 200, {
       ok: true,
@@ -3056,7 +3231,7 @@ async function handleMiniAppAdminApi(req, res, context, url) {
           operation: result.operation,
           balances: result.balances,
           changes: result.changes,
-          user: serializeAdminUser(context.db, context.db.findUser(targetUserId), context.config.dailyQuota)
+          user: serializeAdminUser(context.db, context.db.findUser(targetUserId), context.config)
         });
       } catch (error) {
         const code = String(error?.code || error?.message || 'CREDIT_BALANCE_UPDATE_FAILED');
@@ -3155,13 +3330,14 @@ async function handleMiniAppAdminApi(req, res, context, url) {
           throw new Error('DAILY_QUOTA_NOT_SUPPORTED');
         }
 
+        const defaultChatQuota = getDefaultChatFreeQuota(context.config);
         if (payload.dailyQuota === null) {
-          await context.db.clearUserDailyQuota(targetUserId, context.config.dailyQuota);
+          await context.db.clearUserDailyQuota(targetUserId, defaultChatQuota);
         } else {
           await context.db.setUserDailyQuota(
             targetUserId,
             payload.dailyQuota,
-            context.config.dailyQuota
+            defaultChatQuota
           );
         }
 
@@ -3191,7 +3367,7 @@ async function handleMiniAppAdminApi(req, res, context, url) {
 
       sendJson(res, 200, {
         ok: true,
-        user: serializeAdminUser(context.db, updated, context.config.dailyQuota)
+        user: serializeAdminUser(context.db, updated, context.config)
       });
     } catch (error) {
       const code = String(error?.message || 'ADMIN_USER_UPDATE_FAILED');
@@ -3199,7 +3375,7 @@ async function handleMiniAppAdminApi(req, res, context, url) {
         ok: false,
         error: code,
         message: code === 'INVALID_DAILY_QUOTA'
-          ? '个人每日额度必须是 0 到 1000000 之间的整数，null 表示恢复全局默认。'
+          ? '个人每日免费聊天额度必须是 0 到 1000000 之间的整数，null 表示恢复默认值。'
           : '用户设置更新失败。'
       });
     }
@@ -3316,6 +3492,24 @@ export function startHealthServer({ port, db, config, logger }) {
       }
 
       if (pathname === '/' || pathname === '/health') {
+        if (config.healthCheckEnabled === false) {
+          sendJson(res, 404, {
+            ok: false,
+            status: 'disabled',
+            error: 'HEALTH_CHECK_DISABLED'
+          });
+          return;
+        }
+
+        if (req.method !== 'GET') {
+          res.setHeader('Allow', 'GET');
+          sendJson(res, 405, {
+            ok: false,
+            error: 'METHOD_NOT_ALLOWED'
+          });
+          return;
+        }
+
         try {
           sendJson(res, 200, buildHealthPayload({ db, config }));
         } catch (error) {
@@ -3329,6 +3523,15 @@ export function startHealthServer({ port, db, config, logger }) {
       }
 
       if (pathname === '/ready') {
+        if (req.method !== 'GET') {
+          res.setHeader('Allow', 'GET');
+          sendJson(res, 405, {
+            ok: false,
+            error: 'METHOD_NOT_ALLOWED'
+          });
+          return;
+        }
+
         try {
           db.getStats();
           sendJson(res, 200, {
@@ -3351,7 +3554,7 @@ export function startHealthServer({ port, db, config, logger }) {
         ok: false,
         error: 'NOT_FOUND',
         availableRoutes: [
-          '/',
+          ...(config.healthCheckEnabled === false ? [] : ['/']),
           '/app',
           '/api/miniapp/settings',
           '/api/miniapp/sessions',
@@ -3360,7 +3563,7 @@ export function startHealthServer({ port, db, config, logger }) {
           '/api/miniapp/admin/users',
           '/api/miniapp/admin/users/:id/credits',
           '/api/miniapp/admin/sessions',
-          '/health',
+          ...(config.healthCheckEnabled === false ? [] : ['/health']),
           '/ready'
         ]
       });
@@ -3385,7 +3588,7 @@ export function startHealthServer({ port, db, config, logger }) {
   server.listen(port, () => {
     logger.info(`Health server listening on :${port}`, {
       routes: [
-        '/',
+        ...(config.healthCheckEnabled === false ? [] : ['/']),
         '/app',
         '/api/miniapp/settings',
         '/api/miniapp/sessions',
@@ -3394,7 +3597,7 @@ export function startHealthServer({ port, db, config, logger }) {
         '/api/miniapp/admin/users',
         '/api/miniapp/admin/users/:id/credits',
         '/api/miniapp/admin/sessions',
-        '/health',
+        ...(config.healthCheckEnabled === false ? [] : ['/health']),
         '/ready'
       ]
     });

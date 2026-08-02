@@ -54,3 +54,52 @@ test('runtime config accepts enabled Admin API with token', () => {
 
   assert.deepEqual(errors, []);
 });
+
+test('runtime config accepts a separately configured support bot', () => {
+  const errors = getRuntimeConfigErrors(validConfig({
+    supportEnabled: true,
+    supportBotToken: '654321:support-token',
+    supportAdminIds: '10001, 10002'
+  }));
+
+  assert.deepEqual(errors, []);
+});
+
+test('runtime config rejects a reused main token and missing support administrators', () => {
+  const errors = getRuntimeConfigErrors(validConfig({
+    supportEnabled: true,
+    supportBotToken: '123456:telegram-token',
+    supportAdminIds: new Set()
+  }));
+
+  assert.ok(errors.some((item) => item.includes('SUPPORT_BOT_TOKEN_CONFLICT')));
+  assert.ok(errors.some((item) => item.includes('MISSING_SUPPORT_ADMIN_IDS')));
+  assert.throws(
+    () => assertRuntimeConfig(validConfig({
+      supportEnabled: true,
+      supportBotToken: '123456:telegram-token',
+      supportAdminIds: []
+    })),
+    /SUPPORT_BOT_TOKEN_CONFLICT[\s\S]*MISSING_SUPPORT_ADMIN_IDS/
+  );
+});
+
+test('runtime config rejects malformed support administrator IDs', () => {
+  const errors = getRuntimeConfigErrors(validConfig({
+    supportEnabled: true,
+    supportBotToken: '654321:support-token',
+    supportAdminIds: new Set(['10001', '@admin'])
+  }));
+
+  assert.ok(errors.some((item) => item.includes('INVALID_SUPPORT_ADMIN_IDS')));
+});
+
+test('runtime config ignores dormant support bot credentials when support is disabled', () => {
+  const errors = getRuntimeConfigErrors(validConfig({
+    supportEnabled: false,
+    supportBotToken: '123456:telegram-token',
+    supportAdminIds: []
+  }));
+
+  assert.deepEqual(errors, []);
+});

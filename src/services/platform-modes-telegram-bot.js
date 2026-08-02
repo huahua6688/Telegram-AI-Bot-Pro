@@ -469,8 +469,8 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     return super.createWhoamiKeyboard(ctx, locale);
   }
 
-  createPlatformModesKeyboard() {
-    return Markup.inlineKeyboard([
+  createPlatformModesKeyboard(locale = 'zh') {
+    return this.withSupportButton(Markup.inlineKeyboard([
       [
         Markup.button.callback(PLATFORM_MODE_NAMES.inline, 'platform_mode:inline'),
         Markup.button.callback(PLATFORM_MODE_NAMES.guest, 'platform_mode:guest')
@@ -480,7 +480,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
         Markup.button.callback(PLATFORM_MODE_NAMES.secretary, 'platform_mode:secretary')
       ],
       [Markup.button.callback(PLATFORM_MODE_NAMES.bot_to_bot, 'platform_mode:bot_to_bot')]
-    ]);
+    ]), locale);
   }
 
   createPlatformModeDetailKeyboard(locale = 'zh', mode = '', ctx = null) {

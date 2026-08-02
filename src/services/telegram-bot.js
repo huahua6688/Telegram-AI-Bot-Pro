@@ -22,6 +22,18 @@ import { MemoryManager } from './memory-manager.js';
 import { naturalAgentInternals, tryHandleNaturalAgent } from './natural-agent.js';
 import { PROVIDER_LABELS } from './ai-provider-manager.js';
 import { createAIModelRouter } from './ai-model-router.js';
+import { getBuildInfo } from '../app/build-info.js';
+import {
+  BILLING_CREDIT_TYPES,
+  buildUserBillingSnapshot,
+  getDefaultChatFreeQuota,
+  resolveUserFreeQuota
+} from './billing-catalog.js';
+import {
+  appendSupportInlineKeyboardRow,
+  createSupportButtonData,
+  resolveSupportContactUrl
+} from './support-contact.js';
 
 const LANGUAGE_NAMES = {
   auto: 'Auto / Telegram',
@@ -57,15 +69,6 @@ const BOT_COMMAND_NAMES = [
   'reset',
   'whoami'
 ];
-
-const BILLING_CREDIT_TYPES = Object.freeze([
-  'chat',
-  'vision',
-  'image_generation',
-  'tts',
-  'live_voice',
-  'video'
-]);
 
 const KNOWN_TRANSLATION_TARGETS = new Set([
   'simplified chinese',
@@ -388,7 +391,7 @@ const UI_TEXT = {
     ttsUsage: '用法：/tts 你想转换成语音的文本',
     ttsUnsupported: '当前提供商 {provider} 不支持文字转语音。请切换到支持语音能力的平台。',
     ttsFailed: 'TTS 失败：{error}',
-    personalStats: '你的今日额度已用：{used}/{quota}\n累计请求：{total}',
+    personalStats: '你的今日免费聊天额度已用：{used}/{quota}\n累计请求：{total}',
     globalStats: '全局统计：',
     privateOnlyCommand: '该命令仅用于群聊。',
     chatmodeUsage: '用法：/chatmode {modes}',
@@ -512,7 +515,7 @@ const UI_TEXT = {
     ttsUsage: 'Usage: /tts the text you want to speak',
     ttsUnsupported: 'The current provider {provider} does not support text-to-speech. Please switch to a provider that does.',
     ttsFailed: 'TTS failed: {error}',
-    personalStats: 'Today used: {used}/{quota}\nTotal requests: {total}',
+    personalStats: 'Daily free chat used: {used}/{quota}\nTotal requests: {total}',
     globalStats: 'Global stats:',
     privateOnlyCommand: 'This command is only for group chats.',
     chatmodeUsage: 'Usage: /chatmode {modes}',
@@ -1206,10 +1209,10 @@ export class TelegramAIBot {
 
   isBottomKeyboardActionText(ctx) {
     const normalized = String(ctx.message?.text || '')
-      .replace(/[🆘⚙️🛠❌⭐💫💰]/g, '')
+      .replace(/[🆘⚙️🛠❌⭐💫💰🧑‍💻☎️\uFE0F\u200D]/gu, '')
       .trim()
       .toLowerCase();
-    return /^(?:退出模式|退出|结束模式|结束|exit mode|exit|stop|cancel|帮助|help|设置|设置中心|settings?|setting|管理|管理员|后台|admin|购买额度|购买|充值|buy credits?|buy|我的余额|余额|balance)$/.test(normalized);
+    return /^(?:退出模式|退出|结束模式|结束|exit mode|exit|stop|cancel|帮助|help|设置|设置中心|settings?|setting|管理|管理员|后台|admin|购买额度|购买|充值|buy credits?|buy|我的余额|余额|balance|联系客服|联系支持|客服|contact support|support)$/.test(normalized);
   }
 
   async handleBottomKeyboardAction(ctx) {
@@ -1217,7 +1220,18 @@ export class TelegramAIBot {
     if (!text) return false;
 
     const locale = this.getLocale(ctx);
-    const normalized = text.replace(/[🆘⚙️🛠❌⭐💫💰]/g, '').trim().toLowerCase();
+    const normalized = text.replace(/[🆘⚙️🛠❌⭐💫💰🧑‍💻☎️\uFE0F\u200D]/gu, '').trim().toLowerCase();
+
+    if (/^(联系客服|联系支持|客服|contact support|support)$/.test(normalized)) {
+      const keyboard = this.createSupportKeyboard(locale);
+      if (keyboard) {
+        await ctx.reply(
+          localText(locale, '需要人工协助时，请点击下方按钮联系支持。', 'For human assistance, use the button below to contact support.'),
+          keyboard
+        );
+      }
+      return Boolean(keyboard);
+    }
 
     if (/^(购买额度|购买|充值|buy credits?|buy)$/.test(normalized)) {
       await this.handleStarsStore(ctx);
@@ -1303,13 +1317,16 @@ export class TelegramAIBot {
       return Markup.removeKeyboard();
     }
 
+    const rows = [
+      [localText(locale, '⭐ 购买额度', '⭐ Buy credits'), localText(locale, '💰 我的余额', '💰 My balance')],
+      [this.ui(locale, 'help'), this.ui(locale, 'settings')],
+      [this.ui(locale, 'admin'), this.ui(locale, 'exit')]
+    ];
+    if (this.getSupportUrl()) rows.push([this.getSupportLabel(locale)]);
+
     return {
       reply_markup: {
-        keyboard: [
-          [localText(locale, '⭐ 购买额度', '⭐ Buy credits'), localText(locale, '💰 我的余额', '💰 My balance')],
-          [this.ui(locale, 'help'), this.ui(locale, 'settings')],
-          [this.ui(locale, 'admin'), this.ui(locale, 'exit')]
-        ],
+        keyboard: rows,
         resize_keyboard: true,
         is_persistent: true,
         input_field_placeholder: localText(locale, '直接输入任何问题，我会自动判断…', 'Ask anything naturally…')
@@ -1322,7 +1339,7 @@ export class TelegramAIBot {
       return undefined;
     }
 
-    return Markup.inlineKeyboard([
+    return this.withSupportButton(Markup.inlineKeyboard([
       [
         Markup.button.callback(this.ui(locale, 'help'), 'menu:help'),
         Markup.button.callback(this.ui(locale, 'settings'), 'menu:settings')
@@ -1331,7 +1348,7 @@ export class TelegramAIBot {
         Markup.button.callback(this.ui(locale, 'admin'), 'menu:admin'),
         Markup.button.callback(this.ui(locale, 'close'), 'menu:close')
       ]
-    ]);
+    ]), locale);
   }
 
   createEssentialMenuKeyboard(locale = 'zh') {
@@ -1340,7 +1357,7 @@ export class TelegramAIBot {
     }
 
     const labels = this.getMenuLabels(locale);
-    return Markup.inlineKeyboard([
+    return this.withSupportButton(Markup.inlineKeyboard([
       [
         Markup.button.callback(localText(locale, '⭐ 购买额度', '⭐ Buy credits'), 'billing:store'),
         Markup.button.callback(localText(locale, '💰 我的余额', '💰 My balance'), 'billing:balance')
@@ -1354,7 +1371,7 @@ export class TelegramAIBot {
         Markup.button.callback(labels.toolbox, 'menu:toolbox')
       ],
       [Markup.button.callback(this.ui(locale, 'close'), 'menu:close')]
-    ]);
+    ]), locale);
   }
 
 
@@ -1478,7 +1495,7 @@ export class TelegramAIBot {
             cancel: '取消'
           };
 
-    return Markup.inlineKeyboard([
+    const rows = [
       [
         Markup.button.callback(labels.status, 'admin_pick:status'),
         Markup.button.callback(labels.whoami, 'admin_pick:whoami')
@@ -1496,15 +1513,18 @@ export class TelegramAIBot {
         Markup.button.callback(localText(locale, '测试全部', 'Test all'), 'admin_pick:ai_test_all')
       ],
       [
-        Markup.button.callback(labels.version, 'admin_pick:version'),
-        Markup.button.callback(labels.docs, 'admin_pick:docs')
-      ],
-      [
         Markup.button.callback(labels.quickHelp, 'admin_pick:quick_help')
       ],
       [Markup.button.callback(labels.cancel, 'admin_pick:cancel')],
       ...this.createSettingsNavigationRows(locale)
-    ]);
+    ];
+    rows.splice(4, 0, this.config.showVersionInfo !== false
+      ? [
+          Markup.button.callback(labels.version, 'admin_pick:version'),
+          Markup.button.callback(labels.docs, 'admin_pick:docs')
+        ]
+      : [Markup.button.callback(labels.docs, 'admin_pick:docs')]);
+    return this.withSupportButton(Markup.inlineKeyboard(rows), locale);
   }
 
   createDeployDocsKeyboard(locale = 'zh') {
@@ -1540,7 +1560,7 @@ export class TelegramAIBot {
       rows.push([Markup.button.callback(localText(locale, '返回管理', 'Admin panel'), 'admin_pick:back')]);
     }
     rows.push(...this.createSettingsNavigationRows(locale));
-    return Markup.inlineKeyboard(rows);
+    return this.withSupportButton(Markup.inlineKeyboard(rows), locale);
   }
 
   createModelKeyboard(currentModel, locale = 'zh') {
@@ -1588,6 +1608,42 @@ export class TelegramAIBot {
       manualModel,
       autoRouting
     };
+  }
+
+  getSupportLabel(locale = 'zh') {
+    return localText(locale, '🧑‍💻 联系客服', '🧑‍💻 Contact support');
+  }
+
+  getSupportUrl() {
+    return resolveSupportContactUrl(this.config);
+  }
+
+  createSupportKeyboard(locale = 'zh', text = '') {
+    const button = createSupportButtonData(this.config, {
+      locale,
+      text: text || this.getSupportLabel(locale)
+    });
+    return button ? Markup.inlineKeyboard([[button]]) : undefined;
+  }
+
+  withSupportButton(extra, locale = 'zh', text = '') {
+    if (!this.getSupportUrl()) return extra;
+    const existingRows = extra?.reply_markup?.inline_keyboard || [];
+    const rows = appendSupportInlineKeyboardRow(existingRows, this.config, {
+      locale,
+      text: text || this.getSupportLabel(locale)
+    });
+    return {
+      ...(extra || {}),
+      reply_markup: {
+        ...(extra?.reply_markup || {}),
+        inline_keyboard: rows
+      }
+    };
+  }
+
+  async replyWithSupport(ctx, text, extra, locale = this.getLocale(ctx)) {
+    return ctx.reply(text, this.withSupportButton(extra, locale));
   }
 
   getEffectiveNewsSettings(userId, locale = '', telegramLanguageCode = '') {
@@ -1857,8 +1913,9 @@ export class TelegramAIBot {
   }
 
   getEffectiveDailyQuota(userId) {
-    const quota = this.db.getUserDailyQuota?.(userId, this.config.dailyQuota);
-    return quota?.dailyQuota ?? this.config.dailyQuota;
+    const defaultQuota = getDefaultChatFreeQuota(this.config);
+    const quota = this.db.getUserDailyQuota?.(userId, defaultQuota);
+    return quota?.dailyQuota ?? defaultQuota;
   }
 
   formatDailyQuotaValue(quota, locale = 'zh') {
@@ -1905,20 +1962,16 @@ export class TelegramAIBot {
 
   getBillingFreeQuota(userId, creditType = 'chat') {
     const type = this.normalizeBillingCreditType(creditType);
-    let dailyFreeQuota = Math.max(0, Number(this.config.starsFreeQuota?.[type]) || 0);
-    let zeroFreeQuotaMeansUnlimited = false;
-
-    if (type === 'chat') {
-      const quota = this.db.getUserDailyQuota?.(userId, dailyFreeQuota);
-      if (quota) {
-        dailyFreeQuota = Math.max(0, Number(quota.dailyQuota) || 0);
-        zeroFreeQuotaMeansUnlimited = quota.dailyQuotaOverride === 0 || (
-          quota.usesGlobalQuota && Boolean(this.config.starsFreeChatZeroMeansUnlimited)
-        );
-      }
-    }
-
-    return { dailyFreeQuota, zeroFreeQuotaMeansUnlimited };
+    const free = resolveUserFreeQuota({
+      db: this.db,
+      config: this.config,
+      userId,
+      creditType: type
+    });
+    return {
+      dailyFreeQuota: free.dailyFreeQuota,
+      zeroFreeQuotaMeansUnlimited: free.unlimited
+    };
   }
 
   isAdminUserId(userId) {
@@ -1938,10 +1991,10 @@ export class TelegramAIBot {
   }
 
   createQuotaPurchaseKeyboard(locale = 'zh') {
-    return Markup.inlineKeyboard([[
+    return this.withSupportButton(Markup.inlineKeyboard([[
       Markup.button.callback(localText(locale, '⭐ 购买额度', '⭐ Buy credits'), 'billing:store'),
       Markup.button.callback(localText(locale, '💰 我的余额', '💰 My balance'), 'billing:balance')
-    ]]);
+    ]]), locale);
   }
 
   createStarsStoreKeyboard(locale = 'zh') {
@@ -1954,9 +2007,15 @@ export class TelegramAIBot {
     rows.push([
       Markup.button.callback(localText(locale, '💰 我的余额', '💰 My balance'), 'billing:balance')
     ]);
+    const supportButton = createSupportButtonData(this.config, {
+      locale,
+      text: localText(locale, '🧑‍💻 联系客服', '🧑‍💻 Contact support')
+    });
     rows.push([
       Markup.button.callback(localText(locale, '📄 服务条款', '📄 Terms'), 'billing:terms'),
-      Markup.button.callback(localText(locale, '🆘 支付支持', '🆘 Payment support'), 'billing:support')
+      supportButton
+        ? Markup.button.url(supportButton.text, supportButton.url)
+        : Markup.button.callback(localText(locale, '🆘 支付支持', '🆘 Payment support'), 'billing:support')
     ]);
     return Markup.inlineKeyboard(rows);
   }
@@ -1982,7 +2041,7 @@ export class TelegramAIBot {
     }
 
     if (!this.config.starsPaymentsEnabled || !(this.config.starsProducts || []).length) {
-      await ctx.reply(localText(
+      await this.replyWithSupport(ctx, localText(
         locale,
         '购买功能暂未开放。管理员需要先配置 STARS_PRODUCTS_JSON。每日免费额度仍可正常使用。',
         'Purchases are not available yet. The administrator must configure STARS_PRODUCTS_JSON. Daily free credits remain available.'
@@ -2010,24 +2069,26 @@ export class TelegramAIBot {
         locale,
         '💰 我的余额\n\n管理员账号：全部能力不限额，不扣除免费额度或已购额度。',
         '💰 My balance\n\nAdministrator account: all capabilities are unlimited and no credits are deducted.'
-      ));
+      ), this.createSupportKeyboard(locale));
       return;
     }
 
-    const balances = this.db.getUserCreditBalances?.(userId) || this.db.getCreditBalances?.(userId) || {};
+    const snapshot = buildUserBillingSnapshot({
+      db: this.db,
+      config: this.config,
+      userId,
+      isAdmin: false
+    });
     const lines = [localText(locale, '💰 我的余额', '💰 My balance'), ''];
     for (const type of BILLING_CREDIT_TYPES) {
-      const { dailyFreeQuota, zeroFreeQuotaMeansUnlimited } = this.getBillingFreeQuota(userId, type);
-      const daily = this.db.getDailyCreditUsage?.(userId, type);
-      const used = Math.max(0, Number(daily?.used ?? daily?.units ?? daily ?? 0) || 0);
-      const freeRemaining = zeroFreeQuotaMeansUnlimited
+      const credit = snapshot.credits[type];
+      const freeRemaining = credit.unlimited
         ? localText(locale, '不限', 'unlimited')
-        : Math.max(0, dailyFreeQuota - used);
-      const paid = Math.max(0, Number(balances?.[type]?.balance ?? balances?.[type] ?? 0) || 0);
-      const suffix = type === 'video' && !this.config.enableVideo
+        : credit.freeRemaining;
+      const suffix = !credit.enabled
         ? localText(locale, '（未启用）', ' (disabled)')
         : '';
-      lines.push(`${this.getBillingCreditLabel(type, locale)}${suffix}: ${localText(locale, '今日免费剩余', 'daily free')} ${freeRemaining} · ${localText(locale, '已购', 'purchased')} ${paid}`);
+      lines.push(`${this.getBillingCreditLabel(type, locale)}${suffix}: ${localText(locale, '今日免费剩余', 'daily free')} ${freeRemaining} · ${localText(locale, '已购', 'purchased')} ${credit.purchased}`);
     }
     await ctx.reply(lines.join('\n'), this.createQuotaPurchaseKeyboard(locale));
   }
@@ -2254,7 +2315,7 @@ export class TelegramAIBot {
         locale,
         '付款已经由 Telegram 确认，但额度入账出现异常。请使用“支付支持”联系管理员；系统会保留付款单号以便核对。',
         'Telegram confirmed the payment, but crediting failed. Contact Payment support; the charge ID is retained for reconciliation.'
-      ), Markup.inlineKeyboard([[
+      ), this.createSupportKeyboard(locale) || Markup.inlineKeyboard([[
         Markup.button.callback(localText(locale, '🆘 支付支持', '🆘 Payment support'), 'billing:support')
       ]]));
     }
@@ -2402,7 +2463,7 @@ export class TelegramAIBot {
       return { allowed: true, reserved: false, admin: true, source: 'admin', userId: normalizedUserId, creditType: type };
     }
     if (typeof this.db.consumeDailyQuota !== 'function') return { allowed: true, reserved: false, creditType: type };
-    const legacy = this.db.consumeDailyQuota(normalizedUserId, this.config.dailyQuota);
+    const legacy = this.db.consumeDailyQuota(normalizedUserId, getDefaultChatFreeQuota(this.config));
     return { ...legacy, reserved: Boolean(legacy.allowed), legacy: true, userId: normalizedUserId, creditType: type };
   }
 
@@ -2619,12 +2680,15 @@ export class TelegramAIBot {
         `ai:m:${index}`
       )
     );
-    return Markup.inlineKeyboard([
+    const keyboard = Markup.inlineKeyboard([
       [Markup.button.callback(localText(locale, '🤖 自动选择', '🤖 Auto select'), 'ai:auto')],
       ...chunkItems(buttons, 1),
       [Markup.button.callback(localText(locale, '返回', 'Back'), 'ai:back')],
       ...this.createSettingsNavigationRows(locale)
     ]);
+    return typeof this.withSupportButton === 'function'
+      ? this.withSupportButton(keyboard, locale)
+      : keyboard;
   }
 
   formatAISettingsPanel(settings = {}, locale = 'zh') {
@@ -3302,7 +3366,7 @@ export class TelegramAIBot {
       }
 
       this.logger.error('Translation failed', { error: this.formatLogError(error) });
-      await ctx.reply(this.formatUserFacingError(error, locale));
+      await this.replyWithSupport(ctx, this.formatUserFacingError(error, locale), undefined, locale);
     }
   }
 
@@ -4178,7 +4242,7 @@ export class TelegramAIBot {
       }
 
       try {
-        await originalReply(message, this.createMenuKeyboard(locale));
+        await originalReply(message, this.withSupportButton(this.createMenuKeyboard(locale), locale));
       } catch (replyError) {
         this.logger.warn('Failed to send callback error reply', {
           chatId: ctx.chat?.id,
@@ -4234,8 +4298,23 @@ export class TelegramAIBot {
   }
 
   async init() {
-    this.bot.catch((error, ctx) => {
+    this.bot.catch(async (error, ctx) => {
       this.logger.error('Telegram handler error', { chatId: ctx.chat?.id, error: this.formatLogError(error) });
+      if (
+        ctx.chat &&
+        typeof ctx.reply === 'function' &&
+        !['inline_query', 'pre_checkout_query'].includes(String(ctx.updateType || ''))
+      ) {
+        try {
+          const locale = this.getLocale(ctx);
+          await this.replyWithSupport(ctx, this.formatUserFacingError(error, locale), undefined, locale);
+        } catch (replyError) {
+          this.logger?.warn?.('Failed to send global Telegram error reply', {
+            chatId: ctx.chat?.id,
+            error: this.formatLogError(replyError)
+          });
+        }
+      }
     });
 
     this.bot.use(async (ctx, next) => {
@@ -4480,7 +4559,12 @@ export class TelegramAIBot {
             '查询 Telegram ID：/whoami',
             'Provider/模型、人格、语言、聊天记录和管理：打开输入框旁的「控制台」。'
           ].join('\n');
-      await sendTextReply(ctx, helpText, this.config.maxOutputChars, this.createBottomKeyboard(locale));
+      await sendTextReply(
+        ctx,
+        helpText,
+        this.config.maxOutputChars,
+        this.createSupportKeyboard(locale) || this.createBottomKeyboard(locale)
+      );
       return;
     }
 
@@ -4896,11 +4980,11 @@ export class TelegramAIBot {
               ? 'documentParseFailed'
               : 'unsupportedDocument';
 
-        await ctx.reply(this.t(locale, key, {
+        await this.replyWithSupport(ctx, this.t(locale, key, {
           filename: document.file_name || 'document',
           mimeType: document.mime_type || 'unknown',
           error: parsed.error?.message || ''
-        }));
+        }), undefined, locale);
 
         return;
       }
@@ -4908,7 +4992,12 @@ export class TelegramAIBot {
       const extracted = truncateText(parsed.text || '', this.config.maxInputChars);
       if (!extracted) {
         await this.refundQuotaForContext(ctx);
-        await ctx.reply(localText(locale, '文件里没有提取到可处理的文字内容。', 'No readable text could be extracted from the file.'));
+        await this.replyWithSupport(
+          ctx,
+          localText(locale, '文件里没有提取到可处理的文字内容。', 'No readable text could be extracted from the file.'),
+          undefined,
+          locale
+        );
         return;
       }
 
@@ -5021,7 +5110,7 @@ export class TelegramAIBot {
         error: this.formatLogError(error)
       });
 
-      await ctx.reply(this.formatUserFacingError(error, locale));
+      await this.replyWithSupport(ctx, this.formatUserFacingError(error, locale), undefined, locale);
     }
   }
 
@@ -5381,7 +5470,7 @@ export class TelegramAIBot {
         '实时搜索需要 ENABLE_WEB_SEARCH=true、ENABLE_TOOL_CALLS=true，并且 Zeabur 能访问外网；Gemini 原生搜索还需要可用的 Gemini Key 和支持搜索的模型。',
         'Live search needs ENABLE_WEB_SEARCH=true, ENABLE_TOOL_CALLS=true, and outbound network access on Zeabur; Gemini grounded search also needs a valid Gemini key and search-capable model.'
       );
-      await ctx.reply(`${this.formatUserFacingError(error, locale)}\n\n${hint}`);
+      await this.replyWithSupport(ctx, `${this.formatUserFacingError(error, locale)}\n\n${hint}`, undefined, locale);
     }
   }
 
@@ -5398,7 +5487,7 @@ export class TelegramAIBot {
       : Boolean(this.getProviderCapabilities()[capability]);
     if (!supportsImage) {
       const textKey = mode === 'edit' ? 'imageEditUnsupported' : 'imageUnsupported';
-      await ctx.reply(this.t(locale, textKey, { provider: this.getProviderName() }));
+      await this.replyWithSupport(ctx, this.t(locale, textKey, { provider: this.getProviderName() }), undefined, locale);
       return;
     }
     if (!(await this.consumeQuotaForContext(ctx, 'image_generation'))) return;
@@ -5435,7 +5524,7 @@ export class TelegramAIBot {
       await ctx.reply(this.t(locale, 'imageEmpty'));
     } catch (error) {
       await this.refundQuotaForContext(ctx);
-      await ctx.reply(this.formatUserFacingError(error, locale));
+      await this.replyWithSupport(ctx, this.formatUserFacingError(error, locale), undefined, locale);
     }
   }
 
@@ -5490,7 +5579,7 @@ export class TelegramAIBot {
       await ctx.reply(this.t(locale, 'imageEmpty'));
     } catch (error) {
       await this.refundQuotaForContext(ctx);
-      await ctx.reply(this.formatUserFacingError(error, locale));
+      await this.replyWithSupport(ctx, this.formatUserFacingError(error, locale), undefined, locale);
     }
   }
 
@@ -5511,7 +5600,7 @@ export class TelegramAIBot {
       ? this.providerManager.hasAvailableProvider('speechTranscription', this.config.transcriptionProvider)
       : Boolean(this.getProviderCapabilities().speechTranscription);
     if (!supportsTranscription) {
-      await ctx.reply(this.formatUserFacingError('voice transcription is not supported', locale));
+      await this.replyWithSupport(ctx, this.formatUserFacingError('voice transcription is not supported', locale), undefined, locale);
       return;
     }
     if (!(await this.consumeQuotaForContext(ctx, 'live_voice'))) return;
@@ -5542,7 +5631,7 @@ export class TelegramAIBot {
 
       if (!result.ok) {
         await this.refundQuotaForContext(ctx);
-        await ctx.reply(this.formatUserFacingError(result.error || 'voice transcription failed', locale));
+        await this.replyWithSupport(ctx, this.formatUserFacingError(result.error || 'voice transcription failed', locale), undefined, locale);
         return;
       }
 
@@ -5560,7 +5649,7 @@ export class TelegramAIBot {
         chatId: ctx.chat?.id,
         error: this.formatLogError(error)
       });
-      await ctx.reply(this.formatUserFacingError(error, locale));
+      await this.replyWithSupport(ctx, this.formatUserFacingError(error, locale), undefined, locale);
     }
   }
 
@@ -5595,14 +5684,14 @@ export class TelegramAIBot {
       );
       if (!result.ok) {
         await this.refundQuotaForContext(ctx);
-        await ctx.reply(this.formatUserFacingError(result.error || 'unknown error', locale));
+        await this.replyWithSupport(ctx, this.formatUserFacingError(result.error || 'unknown error', locale), undefined, locale);
         return;
       }
       await this.db.incrementStats('aiCalls');
       await ctx.replyWithAudio({ source: result.audio, filename: 'speech.mp3' });
     } catch (error) {
       await this.refundQuotaForContext(ctx);
-      await ctx.reply(this.formatUserFacingError(error, locale));
+      await this.replyWithSupport(ctx, this.formatUserFacingError(error, locale), undefined, locale);
     }
   }
 
@@ -5856,27 +5945,25 @@ export class TelegramAIBot {
       return;
     }
 
-    const commit =
-      process.env.ZEABUR_GIT_COMMIT_SHA ||
-      process.env.GIT_COMMIT_SHA ||
-      process.env.COMMIT_SHA ||
-      process.env.SOURCE_COMMIT ||
-      'unknown';
+    if (this.config.showVersionInfo === false) {
+      await ctx.reply(localText(locale, '版本信息已由部署配置关闭。', 'Version information is disabled by deployment configuration.'));
+      return;
+    }
 
-    const branch =
-      process.env.ZEABUR_GIT_BRANCH ||
-      process.env.GIT_BRANCH ||
-      process.env.BRANCH ||
-      'main';
+    const build = getBuildInfo();
 
     const lines =
       isEnglishLocale(locale)
         ? [
             'ℹ️ Version info',
             '',
-            `Node: ${process.version}`,
-            `Branch: ${branch}`,
-            `Commit: ${String(commit).slice(0, 12)}`,
+            `Application: ${build.version || '-'}`,
+            `Node: ${build.nodeVersion || '-'}`,
+            `Environment: ${build.environment || '-'}`,
+            `Branch: ${build.branch || '-'}`,
+            `Commit: ${build.shortRevision || '-'}`,
+            `Deployed: ${build.deployedAt || '-'}`,
+            `Started: ${build.startedAt || '-'}`,
             `Uptime: ${this.formatUptime(process.uptime())}`,
             `Provider: ${this.getProviderName()}`,
             `Model: ${this.config.defaultModel || '-'}`
@@ -5884,9 +5971,13 @@ export class TelegramAIBot {
         : [
             'ℹ️ 版本信息',
             '',
-            `Node：${process.version}`,
-            `分支：${branch}`,
-            `提交：${String(commit).slice(0, 12)}`,
+            `应用版本：${build.version || '-'}`,
+            `Node：${build.nodeVersion || '-'}`,
+            `环境：${build.environment || '-'}`,
+            `分支：${build.branch || '-'}`,
+            `提交：${build.shortRevision || '-'}`,
+            `部署时间：${build.deployedAt || '-'}`,
+            `启动时间：${build.startedAt || '-'}`,
             `运行时间：${this.formatUptime(process.uptime())}`,
             `平台：${this.getProviderName()}`,
             `模型：${this.config.defaultModel || '-'}`
@@ -6072,7 +6163,7 @@ export class TelegramAIBot {
       const lines = [
         '📊 Quota status',
         '',
-        `Today used: ${user?.dailyUsageCount || 0}/${userDailyQuotaLabel}`,
+        `Daily free chat usage: ${user?.dailyUsageCount || 0}/${userDailyQuotaLabel}`,
         `Total requests: ${user?.totalMessages || 0}`,
         '',
         'AI cooldown:',
@@ -6096,7 +6187,7 @@ export class TelegramAIBot {
     const lines = [
       '📊 额度状态',
       '',
-      `今日用量：${user?.dailyUsageCount || 0}/${userDailyQuotaLabel}`,
+      `今日免费聊天用量：${user?.dailyUsageCount || 0}/${userDailyQuotaLabel}`,
       `累计请求数：${user?.totalMessages || 0}`,
       '',
       'AI 冷却：',
@@ -6277,7 +6368,7 @@ export class TelegramAIBot {
             `Model: ${currentModel}`,
             `Persona: ${persona}`,
             `Language: ${languageName}`,
-            `Daily usage: ${dailyUsed}/${dailyQuotaLabel}`,
+            `Daily free chat usage: ${dailyUsed}/${dailyQuotaLabel}`,
             `Total requests: ${totalMessages}`,
             `Admin: ${isAdmin ? 'yes' : 'no'}`,
             '',
@@ -6290,7 +6381,7 @@ export class TelegramAIBot {
             `模型：${currentModel}`,
             `人格：${persona}`,
             `语言：${languageName}`,
-            `今日用量：${dailyUsed}/${dailyQuotaLabel}`,
+            `今日免费聊天用量：${dailyUsed}/${dailyQuotaLabel}`,
             `累计请求数：${totalMessages}`,
             `管理员：${isAdmin ? '是' : '否'}`,
             '',
@@ -6824,7 +6915,7 @@ export class TelegramAIBot {
       try {
         await ctx.answerCbQuery(message.slice(0, 180));
       } catch {
-        await ctx.reply(message);
+        await this.replyWithSupport(ctx, message, undefined, state?.locale || locale);
       }
     }
   }
@@ -7140,7 +7231,11 @@ export class TelegramAIBot {
           `${localText(locale, '模型', 'Model')}: ${completion.model || settings.modelId}`,
           `${localText(locale, '回复', 'Reply')}: ${completion.result?.text || ''}`
         ];
-        await this.editAssistantMessageText(ctx, lines.join('\n'), this.createAIProviderKeyboard(settings, locale));
+        await this.editAssistantMessageText(
+          ctx,
+          lines.join('\n'),
+          this.withSupportButton(this.createAIProviderKeyboard(settings, locale), locale)
+        );
       } catch (error) {
         await this.refundQuotaForContext(ctx);
         const lines = [
@@ -7148,7 +7243,11 @@ export class TelegramAIBot {
           '',
           this.formatUserFacingError(error, locale)
         ];
-        await this.editAssistantMessageText(ctx, lines.join('\n'), this.createAIProviderKeyboard(settings, locale));
+        await this.editAssistantMessageText(
+          ctx,
+          lines.join('\n'),
+          this.withSupportButton(this.createAIProviderKeyboard(settings, locale), locale)
+        );
       }
       return;
     }
@@ -7766,7 +7865,7 @@ export class TelegramAIBot {
       }
 
       this.logger.error('Failed to handle message', { error: this.formatLogError(error) });
-      await ctx.reply(this.formatUserFacingError(error, locale));
+      await this.replyWithSupport(ctx, this.formatUserFacingError(error, locale), undefined, locale);
     }
   }
 

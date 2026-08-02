@@ -1,3 +1,12 @@
+function normalizeConfiguredIds(value) {
+  const source = value instanceof Set
+    ? Array.from(value)
+    : Array.isArray(value)
+      ? value
+      : String(value || '').split(',');
+  return source.map((item) => String(item || '').trim()).filter(Boolean);
+}
+
 export function getRuntimeConfigErrors(config = {}) {
   const errors = [];
 
@@ -12,6 +21,19 @@ export function getRuntimeConfigErrors(config = {}) {
 
   if (config.adminApiEnabled && !String(config.adminApiToken || '').trim()) {
     errors.push('ADMIN_API_ENABLED=true requires ADMIN_API_TOKEN.');
+  }
+
+  const supportBotToken = String(config.supportBotToken || '').trim();
+  if (config.supportEnabled && supportBotToken) {
+    if (supportBotToken === botToken) {
+      errors.push('SUPPORT_BOT_TOKEN_CONFLICT: SUPPORT_BOT_TOKEN must be different from BOT_TOKEN.');
+    }
+    const supportAdminIds = normalizeConfiguredIds(config.supportAdminIds);
+    if (supportAdminIds.length === 0) {
+      errors.push('MISSING_SUPPORT_ADMIN_IDS: SUPPORT_ADMIN_IDS is required when SUPPORT_BOT_TOKEN is configured.');
+    } else if (supportAdminIds.some((id) => !/^[1-9]\d{0,19}$/.test(id))) {
+      errors.push('INVALID_SUPPORT_ADMIN_IDS: SUPPORT_ADMIN_IDS must contain positive Telegram user IDs.');
+    }
   }
 
   return errors;

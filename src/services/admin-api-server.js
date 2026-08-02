@@ -3,6 +3,7 @@ import { URL } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
 import { withRequestContext } from '../core/observability/request-context.js';
 import { listAIProviderDefinitions } from './ai-provider-registry.js';
+import { buildBillingCatalog, getDefaultChatFreeQuota } from './billing-catalog.js';
 
 function json(res, status, payload) {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -65,6 +66,8 @@ function splitPath(pathname, prefix) {
 export function startAdminApiServer({ config, db, logger, accessControl, port = 3001 }) {
   const prefix = sanitizePrefix(config.adminApiPrefix);
   const token = String(config.adminApiToken || '');
+  const defaultChatQuota = getDefaultChatFreeQuota(config);
+  const billingCatalog = buildBillingCatalog(config);
   if (!config.adminApiEnabled || !token) {
     logger.info('Admin API disabled (missing token or disabled via config).');
     return null;
@@ -206,8 +209,8 @@ export function startAdminApiServer({ config, db, logger, accessControl, port = 
           if (userId) {
             const user = db.findUser(userId);
             if (!user) return json(res, 404, { error: 'USER_NOT_FOUND' });
-            const quota = db.getUserDailyQuota?.(user.id, config.dailyQuota) || {
-              dailyQuota: config.dailyQuota,
+            const quota = db.getUserDailyQuota?.(user.id, defaultChatQuota) || {
+              dailyQuota: defaultChatQuota,
               dailyQuotaOverride: null,
               usesGlobalQuota: true
             };
@@ -215,12 +218,14 @@ export function startAdminApiServer({ config, db, logger, accessControl, port = 
               userId: user.id,
               dailyUsageDate: user.dailyUsageDate,
               dailyUsageCount: user.dailyUsageCount,
-              globalDailyQuota: config.dailyQuota,
+              globalDailyQuota: defaultChatQuota,
+              freeQuota: billingCatalog.freeQuota,
               ...quota
             });
           }
           return json(res, 200, {
-            dailyQuota: config.dailyQuota,
+            dailyQuota: defaultChatQuota,
+            freeQuota: billingCatalog.freeQuota,
             summary: db.getOperationsMetrics()
           });
         }
@@ -250,14 +255,14 @@ export function startAdminApiServer({ config, db, logger, accessControl, port = 
             }
 
             if (hasDailyQuota) {
-              db.setUserDailyQuota(payload.userId, payload.dailyQuota, config.dailyQuota);
+              db.setUserDailyQuota(payload.userId, payload.dailyQuota, defaultChatQuota);
             }
             if (hasDailyUsageCount || !hasDailyQuota) {
               db.setUserDailyUsage(payload.userId, hasDailyUsageCount ? payload.dailyUsageCount : 0, payload.date);
             }
             const user = db.findUser(payload.userId);
-            const quota = db.getUserDailyQuota?.(payload.userId, config.dailyQuota) || {
-              dailyQuota: config.dailyQuota,
+            const quota = db.getUserDailyQuota?.(payload.userId, defaultChatQuota) || {
+              dailyQuota: defaultChatQuota,
               dailyQuotaOverride: null,
               usesGlobalQuota: true
             };

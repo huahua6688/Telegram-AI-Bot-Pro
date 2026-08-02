@@ -26,6 +26,44 @@
     DATA_FILE            旧数据文件路径
     ADMIN_API_ENABLED    Admin API 开关
 
+## 启动诊断与健康检查
+
+```env
+ENABLE_STARTUP_DIAGNOSTICS=true
+SHOW_VERSION_INFO=true
+HEALTH_CHECK_ENABLED=true
+```
+
+- `ENABLE_STARTUP_DIAGNOSTICS`：启动前检查 Node.js、应用版本、Git commit（可读取时）、部署环境、主 Bot Token、AI Provider、数据库路径和端口。缺少关键配置时会使用稳定错误码停止启动。
+- `SHOW_VERSION_INFO`：控制管理员菜单中的版本信息入口；版本页只显示安全的构建和运行信息。
+- `HEALTH_CHECK_ENABLED`：控制公开 `/health` 接口。关闭后 `/health` 返回 404，但 `/ready` 继续供 Zeabur / Docker 就绪探针使用。
+
+日志不会输出完整 Token、API Key 或密码；诊断展示敏感值时只保留前 4 位和后 4 位。
+
+## 客服 Bot
+
+```env
+SUPPORT_ENABLED=true
+SUPPORT_BOT_TOKEN=
+SUPPORT_BOT_USERNAME=
+SUPPORT_CONTACT_URL=
+SUPPORT_ADMIN_IDS=
+SUPPORT_RATE_LIMIT_WINDOW_MS=60000
+SUPPORT_RATE_LIMIT_MAX_MESSAGES=6
+```
+
+- `SUPPORT_BOT_TOKEN` 必须来自 BotFather 的第二个 Bot，不能与主 `BOT_TOKEN` 相同。
+- `SUPPORT_ADMIN_IDS` 是可处理客服消息的 Telegram 数字 ID，多个 ID 使用英文逗号分隔。
+- `SUPPORT_CONTACT_URL` 有值时优先作为“联系客服”按钮目标；否则由 `SUPPORT_BOT_USERNAME` 生成 `https://t.me/<username>?start=support`。
+- 只配置外部客服链接而不启动第二个 Bot 时，`SUPPORT_BOT_TOKEN` 可以留空。
+- 客服 Bot 支持文字、图片、语音和文件，并带窗口限流；管理员必须回复带工单标记的转发消息才能答复对应用户。
+
+## 免费额度与 Stars 商品
+
+每日免费额度由六个 `STARS_FREE_*_DAILY` 变量统一管理，默认分别为聊天 20、识图 3、画图 1、TTS 2、实时语音 2、视频 0。`DAILY_QUOTA=20` 只保留为旧聊天配置的兼容回退。
+
+商品包只从 `STARS_PRODUCTS_JSON` 读取。主 Bot、Mini App 和管理员页面都会使用同一份配置，避免出现不同页面显示旧额度。完整三档示例见 [Telegram Stars 支付与用量计费](STARS_PAYMENTS.md)。
+
 ## Smart AI Router
 
 Smart AI Router 会按任务类型选择已配置的目标模型。它默认开启：

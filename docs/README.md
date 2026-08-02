@@ -12,6 +12,10 @@
 
     docs/ENVIRONMENT.md
 
+## Telegram Stars 与统一额度
+
+    docs/STARS_PAYMENTS.md
+
 ## 故障排查
 
     docs/TROUBLESHOOTING.md

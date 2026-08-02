@@ -24,9 +24,23 @@
     AI_PROVIDER_FALLBACK_ORDER=gemini,groq,openrouter
     PORT=8080
     HEALTH_PORT=8080
+    ENABLE_STARTUP_DIAGNOSTICS=true
+    HEALTH_CHECK_ENABLED=true
+    SHOW_VERSION_INFO=true
     DATABASE_FILE=/data/bot-data.db
     DATA_FILE=/data/bot-data.json
     ADMIN_API_ENABLED=false
+
+如启用独立客服 Bot，再填写：
+
+    SUPPORT_ENABLED=true
+    SUPPORT_BOT_TOKEN=第二个 BotFather Token
+    SUPPORT_BOT_USERNAME=客服机器人用户名
+    SUPPORT_ADMIN_IDS=客服管理员 Telegram ID
+
+确认 `SUPPORT_BOT_TOKEN` 与主 `BOT_TOKEN` 不同；如使用自定义客服页面，可改填 `SUPPORT_CONTACT_URL`。
+
+确认六类 `STARS_FREE_*_DAILY` 免费额度和 `STARS_PRODUCTS_JSON` 已从 `.env.zeabur.example` 复制，避免 Bot、Mini App 与后台显示不同数值。
 
 ## 磁盘挂载
 

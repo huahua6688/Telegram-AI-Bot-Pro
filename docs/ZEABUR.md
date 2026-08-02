@@ -58,6 +58,26 @@ Zeabur 设置：
 
     /ready
 
+`/health` 返回状态、运行时长、版本、Provider、时间戳和安全的部署信息，不包含 Token 或 API Key。通过以下变量控制：
+
+    ENABLE_STARTUP_DIAGNOSTICS=true
+    HEALTH_CHECK_ENABLED=true
+    SHOW_VERSION_INFO=true
+
+如果希望隐藏公开健康页，可设置 `HEALTH_CHECK_ENABLED=false`；`/ready` 仍保持可用，避免平台就绪探针失效。
+
+## 客服 Bot
+
+独立客服 Bot 使用第二个 BotFather Token：
+
+    SUPPORT_ENABLED=true
+    SUPPORT_BOT_TOKEN=
+    SUPPORT_BOT_USERNAME=
+    SUPPORT_CONTACT_URL=
+    SUPPORT_ADMIN_IDS=
+
+主 Token 与客服 Token 必须不同。`SUPPORT_CONTACT_URL` 优先；未配置时通过 `SUPPORT_BOT_USERNAME` 生成 Telegram 链接。客服管理员 ID 使用英文逗号分隔。
+
 Telegram Mini App 入口为 `/app`。菜单按钮和网址由 BotFather 管理，程序不会重复修改。
 
 ## Admin API

@@ -21,6 +21,17 @@
 BOT_TOKEN=
 ADMIN_USER_IDS=
 
+# Startup diagnostics, health check, and customer support
+ENABLE_STARTUP_DIAGNOSTICS=true
+SHOW_VERSION_INFO=true
+HEALTH_CHECK_ENABLED=true
+SUPPORT_ENABLED=true
+# Must be a different BotFather token from BOT_TOKEN
+SUPPORT_BOT_TOKEN=
+SUPPORT_BOT_USERNAME=
+SUPPORT_CONTACT_URL=
+SUPPORT_ADMIN_IDS=
+
 # Default AI behavior
 DEFAULT_AI_PROVIDER=auto
 DEFAULT_AI_MODEL=gemini-2.5-flash
@@ -126,7 +137,15 @@ BRAVE_SEARCH_API_KEY=
 MAX_HISTORY_MESSAGES=32
 RATE_LIMIT_WINDOW_MS=60000
 RATE_LIMIT_MAX_REQUESTS=12
-DAILY_QUOTA=200
+# Legacy chat-only fallback; the six STARS_FREE_* values below are authoritative
+DAILY_QUOTA=20
+STARS_FREE_CHAT_DAILY=20
+STARS_FREE_VISION_DAILY=3
+STARS_FREE_IMAGE_DAILY=1
+STARS_FREE_TTS_DAILY=2
+STARS_FREE_LIVE_VOICE_DAILY=2
+STARS_FREE_VIDEO_DAILY=0
+STARS_PRODUCTS_JSON=[{"id":"starter","title":"入门额度包","titleEn":"Starter credits","description":"适合轻量聊天、图片和语音使用","descriptionEn":"Starter credits for chat, images and voice","price":50,"credits":{"chat":200,"vision":20,"image_generation":5,"tts":20,"live_voice":10,"video":0}},{"id":"standard","title":"标准额度包","titleEn":"Standard credits","description":"适合日常聊天、识图、画图和语音","descriptionEn":"Balanced credits for regular AI use","price":150,"credits":{"chat":800,"vision":80,"image_generation":20,"tts":80,"live_voice":40,"video":0}},{"id":"pro","title":"高级额度包","titleEn":"Pro credits","description":"适合高频使用全部已开放能力","descriptionEn":"Larger credits for frequent AI use","price":500,"credits":{"chat":3000,"vision":300,"image_generation":75,"tts":300,"live_voice":150,"video":0}}]
 
 # Storage / Zeabur
 DATABASE_FILE=/data/bot-data.db
@@ -145,6 +164,13 @@ AI_BASE_URL=https://api.openai.com/v1
 AI_MODEL=
 AI_FALLBACK_MODELS=
 ```
+
+## 启动诊断、客服 Bot 与统一额度
+
+- 启动诊断会在主 Bot 启动前检查 Node.js、版本、部署环境、主 Token、AI Provider、数据库目录和端口；失败日志使用稳定错误码，Token/Key 只显示前 4 位和后 4 位。
+- `/health` 返回不含密钥的运行状态、版本、Provider、启动时间和部署信息；`HEALTH_CHECK_ENABLED=false` 时关闭公开的 `/health`，`/ready` 仍可供平台探针使用。管理员“版本信息”由 `SHOW_VERSION_INFO` 控制。
+- 客服 Bot 必须使用独立的 BotFather Token。配置 `SUPPORT_CONTACT_URL` 时优先打开该地址，否则使用 `SUPPORT_BOT_USERNAME`；客服管理员通过回复转发消息答复用户，不会暴露管理员账号。
+- 每日免费额度和三档 Stars 商品由 `STARS_FREE_*` 与 `STARS_PRODUCTS_JSON` 统一提供给主 Bot、Mini App 和管理员页面，不再分别维护旧数值。详细支付说明见 [Telegram Stars 文档](docs/STARS_PAYMENTS.md)。
 
 ## 没填的写什么
 
@@ -315,6 +341,17 @@ On the GitHub repository homepage, the code block below has a built-in **Copy** 
 BOT_TOKEN=
 ADMIN_USER_IDS=
 
+# Startup diagnostics, health check, and customer support
+ENABLE_STARTUP_DIAGNOSTICS=true
+SHOW_VERSION_INFO=true
+HEALTH_CHECK_ENABLED=true
+SUPPORT_ENABLED=true
+# Must be a different BotFather token from BOT_TOKEN
+SUPPORT_BOT_TOKEN=
+SUPPORT_BOT_USERNAME=
+SUPPORT_CONTACT_URL=
+SUPPORT_ADMIN_IDS=
+
 # Default AI behavior
 DEFAULT_AI_PROVIDER=auto
 DEFAULT_AI_MODEL=gemini-2.5-flash
@@ -420,7 +457,15 @@ BRAVE_SEARCH_API_KEY=
 MAX_HISTORY_MESSAGES=32
 RATE_LIMIT_WINDOW_MS=60000
 RATE_LIMIT_MAX_REQUESTS=12
-DAILY_QUOTA=200
+# Legacy chat-only fallback; the six STARS_FREE_* values below are authoritative
+DAILY_QUOTA=20
+STARS_FREE_CHAT_DAILY=20
+STARS_FREE_VISION_DAILY=3
+STARS_FREE_IMAGE_DAILY=1
+STARS_FREE_TTS_DAILY=2
+STARS_FREE_LIVE_VOICE_DAILY=2
+STARS_FREE_VIDEO_DAILY=0
+STARS_PRODUCTS_JSON=[{"id":"starter","title":"入门额度包","titleEn":"Starter credits","description":"适合轻量聊天、图片和语音使用","descriptionEn":"Starter credits for chat, images and voice","price":50,"credits":{"chat":200,"vision":20,"image_generation":5,"tts":20,"live_voice":10,"video":0}},{"id":"standard","title":"标准额度包","titleEn":"Standard credits","description":"适合日常聊天、识图、画图和语音","descriptionEn":"Balanced credits for regular AI use","price":150,"credits":{"chat":800,"vision":80,"image_generation":20,"tts":80,"live_voice":40,"video":0}},{"id":"pro","title":"高级额度包","titleEn":"Pro credits","description":"适合高频使用全部已开放能力","descriptionEn":"Larger credits for frequent AI use","price":500,"credits":{"chat":3000,"vision":300,"image_generation":75,"tts":300,"live_voice":150,"video":0}}]
 
 # Storage / Zeabur
 DATABASE_FILE=/data/bot-data.db
@@ -439,6 +484,13 @@ AI_BASE_URL=https://api.openai.com/v1
 AI_MODEL=
 AI_FALLBACK_MODELS=
 ```
+
+## Startup Diagnostics, Support Bot, and Unified Credits
+
+- Startup diagnostics validate Node.js, version metadata, deployment environment, the main Bot token, AI provider configuration, the database directory, and ports before launch. Secret values are always masked.
+- `/health` exposes only safe status/version/provider/timestamp data. Set `HEALTH_CHECK_ENABLED=false` to disable the public endpoint while keeping `/ready` available for platform probes. `SHOW_VERSION_INFO` controls the administrator version view.
+- The support Bot requires a separate BotFather token. `SUPPORT_CONTACT_URL` takes priority over `SUPPORT_BOT_USERNAME`; administrators answer users by replying to copied tickets without exposing their own identity.
+- Main Bot, Mini App, and administrator views read daily free limits and all three Stars packages from the same `STARS_FREE_*` and `STARS_PRODUCTS_JSON` configuration. See [Telegram Stars billing](docs/STARS_PAYMENTS.md).
 
 ## What To Fill
 
