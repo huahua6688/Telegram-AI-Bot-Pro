@@ -123,6 +123,33 @@ export class SupportTelegramBot {
     this.ticketIdFactory = ticketIdFactory;
     this.adminIds = normalizeAdminIds(config.supportAdminIds);
     this.adminIdSet = new Set(this.adminIds);
+
+    const rawSuperAdminIds =
+      config.supportSuperAdminIds ??
+      process.env.SUPPORT_SUPER_ADMIN_IDS ??
+      [];
+
+    const superAdminValues = rawSuperAdminIds instanceof Set
+      ? Array.from(rawSuperAdminIds)
+      : Array.isArray(rawSuperAdminIds)
+        ? rawSuperAdminIds
+        : String(rawSuperAdminIds).split(',');
+
+    this.superAdminIds = Array.from(new Set(
+      superAdminValues
+        .map((value) => String(value || '').trim())
+        .filter(Boolean)
+    ));
+
+    this.superAdminIdSet = new Set(this.superAdminIds);
+
+    // ???????????????????????????
+    for (const adminId of this.superAdminIds) {
+      if (!this.adminIdSet.has(adminId)) {
+        this.adminIds.push(adminId);
+        this.adminIdSet.add(adminId);
+      }
+    }
     this.rateLimitWindowMs = asPositiveInteger(
       config.supportRateLimitWindowMs,
       DEFAULT_RATE_LIMIT_WINDOW_MS,
@@ -233,6 +260,10 @@ export class SupportTelegramBot {
     return this.adminIdSet.has(String(userId || ''));
   }
 
+  isSuperAdmin(userId) {
+    return this.superAdminIdSet.has(String(userId || ''));
+  }
+
   adminLabel(adminId) {
     const index = this.adminIds.indexOf(String(adminId || ''));
     return index >= 0 ? `客服 ${index + 1}` : '客服';
@@ -262,12 +293,16 @@ export class SupportTelegramBot {
   }
 
   async handleStart(ctx) {
-    const english = isEnglishUser(ctx.from);
-    await ctx.reply(english
-      ? `Hello, this is customer support. Describe the problem directly. We will handle it as soon as possible.\n\n${PRIVACY_NOTICE_EN}`
-      : `你好，这里是客服支持。请直接描述你遇到的问题，我们会尽快处理。\n\n${PRIVACY_NOTICE_ZH}`);
-  }
+    const english = String(ctx.from?.language_code || '')
+      .toLowerCase()
+      .startsWith('en');
 
+    await ctx.reply(
+      english
+        ? 'Hello, how can we help you?'
+        : '你好，请问有什么可以帮你的？'
+    );
+  }
   async handleMessage(ctx) {
     const message = ctx.message || {};
     const userId = String(ctx.from?.id || '');
@@ -282,7 +317,7 @@ export class SupportTelegramBot {
     await this.handleUserRequest(ctx);
   }
 
-  createTicket(userId, ref, timestamp) {
+  createTicket(userId, ref, timestamp, userProfile = null) {
     let ticketId = String(this.ticketIdFactory() || '').toLowerCase().replace(/[^a-f0-9]/g, '').slice(0, 20);
     while (!ticketId || this.tickets.has(ticketId)) {
       ticketId = makeTicketId();
@@ -290,6 +325,7 @@ export class SupportTelegramBot {
     const ticket = {
       ticketId,
       userId: String(userId),
+      userProfile: userProfile || null,
       status: 'open',
       assignedAdminId: null,
       createdAt: new Date(timestamp).toISOString(),
@@ -317,7 +353,7 @@ export class SupportTelegramBot {
     return ticket;
   }
 
-  summaryText(ticket) {
+  summaryText(ticket, adminId) {
     const latest = ticket.messageRefs.at(-1);
     const lines = [
       `客服工单 #${ticket.ticketId}`,
@@ -330,6 +366,22 @@ export class SupportTelegramBot {
     if (ticket.status === 'assigned') lines.push(`当前负责：${this.adminLabel(ticket.assignedAdminId)}`);
     if (ticket.lastReplyAt) lines.push(`最后回复：${ticket.lastReplyAt}`);
     lines.push('', '为保护用户隐私，完整内容仅向当前负责客服显示。');
+    if (this.isSuperAdmin(adminId) && ticket.userProfile) {
+      const profile = ticket.userProfile;
+      const displayName = [profile.firstName, profile.lastName]
+        .filter(Boolean)
+        .join(' ');
+
+      lines.push(
+        '',
+        '\u4e00\u7ea7\u7ba1\u7406\u5458\u53ef\u89c1\u7528\u6237\u4fe1\u606f\uff1a',
+        `\u7528\u6237 ID\uff1a${profile.userId || ticket.userId}`,
+        `\u7528\u6237\u540d\uff1a${profile.username ? `@${profile.username}` : '\u672a\u8bbe\u7f6e'}`,
+        `\u59d3\u540d\uff1a${displayName || '\u672a\u8bbe\u7f6e'}`,
+        `\u8bed\u8a00\uff1a${profile.languageCode || '\u672a\u63d0\u4f9b'}`
+      );
+    }
+
     return truncateTelegramText(lines.join('\n'));
   }
 
@@ -352,7 +404,7 @@ export class SupportTelegramBot {
   async sendSummaryToAdmin(telegram, ticket, adminId) {
     const result = await telegram.sendMessage(
       adminId,
-      this.summaryText(ticket),
+      this.summaryText(ticket, adminId),
       {
         protect_content: true,
         link_preview_options: { is_disabled: true },
@@ -374,7 +426,7 @@ export class SupportTelegramBot {
           adminId,
           messageId,
           undefined,
-          this.summaryText(ticket),
+          this.summaryText(ticket, adminId),
           {
             link_preview_options: { is_disabled: true },
             reply_markup: this.summaryReplyMarkup(ticket, adminId)
@@ -457,7 +509,20 @@ export class SupportTelegramBot {
     const ref = messageReference(ctx, type, timestamp);
     let ticket = this.getActiveTicket(userId);
     const isNew = !ticket;
-    if (isNew) ticket = this.createTicket(userId, ref, timestamp);
+    if (isNew) {
+      ticket = this.createTicket(
+        userId,
+        ref,
+        timestamp,
+        {
+          userId,
+          username: safeDisplayText(ctx.from?.username || '', 64),
+          firstName: safeDisplayText(ctx.from?.first_name || '', 64),
+          lastName: safeDisplayText(ctx.from?.last_name || '', 64),
+          languageCode: safeDisplayText(ctx.from?.language_code || '', 32)
+        }
+      );
+    }
     else {
       ticket.messageRefs.push(ref);
       ticket.updatedAt = new Date(timestamp).toISOString();

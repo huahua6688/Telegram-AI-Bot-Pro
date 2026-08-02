@@ -70,6 +70,7 @@ function createFixture(overrides = {}) {
       botToken: 'main-token',
       supportBotToken: 'support-token',
       supportAdminIds: new Set(['100', '200', '300']),
+      supportSuperAdminIds: new Set(['100']),
       supportRateLimitWindowMs: 60_000,
       supportRateLimitMaxMessages: 10,
       ...overrides.config
@@ -85,13 +86,13 @@ function createFixture(overrides = {}) {
   return { bot, get fake() { return fake; }, logger };
 }
 
-function userContext(telegram, message = { message_id: 7, text: 'Stars 已扣除但额度没到账' }) {
+function userContext(telegram, message = { message_id: 7, text: 'Stars 已扣除但额度没到账' }, userId = 42) {
   const replies = [];
   return {
     replies,
     ctx: {
-      from: { id: 42, username: 'alice', first_name: 'Alice', language_code: 'zh-CN' },
-      chat: { id: 42 },
+      from: { id: Number(userId), username: 'alice', first_name: 'Alice', language_code: 'zh-CN' },
+      chat: { id: Number(userId) },
       message,
       telegram,
       reply: async (text) => replies.push(text)
@@ -133,37 +134,101 @@ test('init validates configuration and preserves launch readiness callback', asy
   assert.equal(fixture.fake.actions.length, 6);
 });
 
-test('/start contains localized privacy warnings', async () => {
+test('/start sends only one concise localized greeting', async () => {
   const fixture = createFixture();
   await fixture.bot.init();
+
   const replies = [];
-  await fixture.fake.handlers.start({ from: { id: 42, language_code: 'zh-CN' }, reply: async (text) => replies.push(text) });
-  await fixture.fake.handlers.start({ from: { id: 43, language_code: 'en-US' }, reply: async (text) => replies.push(text) });
-  assert.match(replies[0], /登录验证码/);
-  assert.match(replies[0], /助记词/);
-  assert.match(replies[1], /login codes/i);
-  assert.match(replies[1], /seed phrases/i);
+
+  await fixture.fake.handlers.start({
+    from: { id: 42, language_code: 'zh-CN' },
+    reply: async (text) => replies.push(text)
+  });
+
+  await fixture.fake.handlers.start({
+    from: { id: 43, language_code: 'en-US' },
+    reply: async (text) => replies.push(text)
+  });
+
+  assert.deepEqual(replies, [
+    '你好，请问有什么可以帮你的？',
+    'Hello, how can we help you?'
+  ]);
 });
 
-test('new ticket sends protected summaries without identity or message content', async () => {
+test('level-one admin sees identity while support agents stay anonymous', async () => {
   const fixture = createFixture();
   await fixture.bot.init();
+
   const telegram = createTelegram();
   const { ctx, replies } = userContext(telegram);
+
   await fixture.bot.handleUserRequest(ctx);
 
   assert.equal(telegram.sent.length, 3);
-  for (const delivery of telegram.sent) {
-    assert.equal(delivery.extra.protect_content, true);
-    assert.match(delivery.text, /等待接单/);
-    assert.match(delivery.text, /完整内容仅向当前负责客服显示/);
-    assert.doesNotMatch(delivery.text, /42|alice|Alice|Stars|额度没到账/);
-  }
   assert.deepEqual(replies, []);
-  assert.doesNotMatch(JSON.stringify(fixture.logger.entries), /Stars 已扣除|alice|Alice/);
+
+  const levelOneSummary = telegram.sent.find(
+    (delivery) => delivery.chatId === '100'
+  );
+
+  const supportSummaries = telegram.sent.filter(
+    (delivery) =>
+      delivery.chatId === '200' ||
+      delivery.chatId === '300'
+  );
+
+  assert.ok(levelOneSummary);
+  assert.equal(
+    levelOneSummary.extra.protect_content,
+    true
+  );
+
+  assert.match(
+    levelOneSummary.text,
+    /\u4e00\u7ea7\u7ba1\u7406\u5458\u53ef\u89c1\u7528\u6237\u4fe1\u606f/
+  );
+  assert.match(
+    levelOneSummary.text,
+    /\u7528\u6237 ID\uff1a42/
+  );
+  assert.match(levelOneSummary.text, /@alice/);
+  assert.match(
+    levelOneSummary.text,
+    /\u59d3\u540d\uff1aAlice/
+  );
+  assert.match(levelOneSummary.text, /zh-CN/);
+
+  // ?????????????????????
+  assert.doesNotMatch(
+    levelOneSummary.text,
+    /Stars|\u989d\u5ea6\u6ca1\u5230\u8d26/
+  );
+
+  assert.equal(supportSummaries.length, 2);
+
+  for (const delivery of supportSummaries) {
+    assert.equal(delivery.extra.protect_content, true);
+    assert.doesNotMatch(
+      delivery.text,
+      /42|alice|Alice|Stars|\u989d\u5ea6\u6ca1\u5230\u8d26/
+    );
+  }
+
+  assert.doesNotMatch(
+    JSON.stringify(fixture.logger.entries),
+    /Stars|alice|Alice/
+  );
+
   const ticket = fixture.bot.getActiveTicket('42');
+
   assert.equal(ticket.messageRefs.length, 1);
-  assert.equal(Object.hasOwn(ticket.messageRefs[0], 'text'), false);
+  assert.equal(
+    Object.hasOwn(ticket.messageRefs[0], 'text'),
+    false
+  );
+  assert.equal(ticket.userProfile.userId, '42');
+  assert.equal(ticket.userProfile.username, 'alice');
 });
 
 test('first admin claims atomically and only claimant receives private history', async () => {
@@ -236,6 +301,133 @@ test('only current owner can reply and admin identity stays hidden', async () =>
   assert.equal(userDelivery.extra.protect_content, true);
   assert.match(ownerReplies[0], /已发送给用户/);
   assert.doesNotMatch(JSON.stringify(fixture.logger.entries), /Private Admin|已经处理|duplicate/);
+});
+
+test('one admin safely handles multiple tickets by replying to the matching message', async () => {
+  const fixture = createFixture();
+  await fixture.bot.init();
+
+  const telegram = createTelegram();
+
+  await fixture.bot.handleUserRequest(
+    userContext(
+      telegram,
+      { message_id: 7, text: 'first user problem' },
+      42
+    ).ctx
+  );
+
+  await fixture.bot.handleUserRequest(
+    userContext(
+      telegram,
+      { message_id: 17, text: 'second user problem' },
+      43
+    ).ctx
+  );
+
+  const firstTicket = fixture.bot.getActiveTicket('42');
+  const secondTicket = fixture.bot.getActiveTicket('43');
+
+  assert.ok(firstTicket);
+  assert.ok(secondTicket);
+  assert.notEqual(firstTicket.ticketId, secondTicket.ticketId);
+
+  // ?????????????
+  await fixture.bot.handleClaim(
+    actionContext(telegram, '100').ctx,
+    firstTicket.ticketId
+  );
+
+  await fixture.bot.handleClaim(
+    actionContext(telegram, '100').ctx,
+    secondTicket.ticketId
+  );
+
+  assert.equal(firstTicket.assignedAdminId, '100');
+  assert.equal(secondTicket.assignedAdminId, '100');
+
+  const adminCopies = telegram.copied.filter(
+    (item) => item.chatId === '100'
+  );
+
+  assert.equal(adminCopies.length, 2);
+
+  // ????????????????????
+  const blockedReplies = [];
+  const copiedBeforeBlockedReply = telegram.copied.length;
+
+  await fixture.bot.handleAdminReply({
+    from: { id: 100 },
+    chat: { id: 100 },
+    message: {
+      message_id: 700,
+      text: 'message without ticket reply'
+    },
+    telegram,
+    reply: async (text) => blockedReplies.push(text)
+  });
+
+  assert.equal(telegram.copied.length, copiedBeforeBlockedReply);
+  assert.match(
+    blockedReplies[0],
+    /\u8bf7\u76f4\u63a5\u56de\u590d/
+  );
+
+  // ???????????????? 42
+  const firstReplies = [];
+
+  await fixture.bot.handleAdminReply({
+    from: { id: 100 },
+    chat: { id: 100 },
+    message: {
+      message_id: 701,
+      text: 'reply for first user',
+      reply_to_message: {
+        message_id: adminCopies[0].result.message_id
+      }
+    },
+    telegram,
+    reply: async (text) => firstReplies.push(text)
+  });
+
+  // ???????????????? 43
+  const secondReplies = [];
+
+  await fixture.bot.handleAdminReply({
+    from: { id: 100 },
+    chat: { id: 100 },
+    message: {
+      message_id: 702,
+      text: 'reply for second user',
+      reply_to_message: {
+        message_id: adminCopies[1].result.message_id
+      }
+    },
+    telegram,
+    reply: async (text) => secondReplies.push(text)
+  });
+
+  const userDeliveries = telegram.copied.filter(
+    (item) => item.chatId === '42' || item.chatId === '43'
+  );
+
+  assert.equal(userDeliveries.length, 2);
+
+  assert.equal(userDeliveries[0].chatId, '42');
+  assert.equal(userDeliveries[0].messageId, 701);
+
+  assert.equal(userDeliveries[1].chatId, '43');
+  assert.equal(userDeliveries[1].messageId, 702);
+
+  assert.match(
+    firstReplies[0],
+    /\u5df2\u53d1\u9001\u7ed9\u7528\u6237/
+  );
+
+  assert.match(
+    secondReplies[0],
+    /\u5df2\u53d1\u9001\u7ed9\u7528\u6237/
+  );
 });
 
 test('tickets support repeated transfer without duplicate historical delivery', async () => {
