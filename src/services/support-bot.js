@@ -164,6 +164,13 @@ export class SupportTelegramBot {
     this.tickets = new Map();
     this.activeTicketByUser = new Map();
     this.adminMessageIndex = new Map();
+    this.ticketAutoCloseMinutes = asPositiveInteger(
+      config.supportTicketAutoCloseMinutes ??
+        process.env.SUPPORT_TICKET_AUTO_CLOSE_MINUTES,
+      1440,
+      10080
+    );
+    this.ticketAutoCloseTimers = new Map();
     this.bot = telegrafFactory(String(config.supportBotToken || '').trim());
     this.botInfo = null;
     this.initialized = false;
@@ -250,10 +257,137 @@ export class SupportTelegramBot {
     if (this.launched) await this.bot.stop(reason);
     this.launched = false;
     this.rateLimitHits.clear();
+    for (const timer of this.ticketAutoCloseTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.ticketAutoCloseTimers.clear();
     this.tickets.clear();
     this.activeTicketByUser.clear();
     this.adminMessageIndex.clear();
     this.logger?.info?.('Support bot stopped', { reason: safeDisplayText(reason, 80) });
+  }
+
+  clearTicketAutoClose(ticketId) {
+    const normalizedTicketId = String(ticketId || '');
+    const timer = this.ticketAutoCloseTimers.get(
+      normalizedTicketId
+    );
+
+    if (timer) {
+      clearTimeout(timer);
+      this.ticketAutoCloseTimers.delete(
+        normalizedTicketId
+      );
+    }
+
+    const ticket = this.tickets.get(
+      normalizedTicketId
+    );
+
+    if (ticket) {
+      ticket.autoCloseAt = null;
+    }
+  }
+
+  scheduleTicketAutoClose(telegram, ticket) {
+    if (!ticket || ticket.status !== 'assigned') {
+      return;
+    }
+
+    this.clearTicketAutoClose(ticket.ticketId);
+
+    const timestamp =
+      Number(this.now()) || Date.now();
+
+    const delay =
+      this.ticketAutoCloseMinutes * 60_000;
+
+    ticket.autoCloseAt =
+      new Date(timestamp + delay).toISOString();
+
+    const timer = setTimeout(() => {
+      void this.handleTicketAutoClose(
+        telegram,
+        ticket.ticketId
+      );
+    }, delay);
+
+    timer.unref?.();
+
+    this.ticketAutoCloseTimers.set(
+      ticket.ticketId,
+      timer
+    );
+  }
+
+  async handleTicketAutoClose(telegram, ticketId) {
+    const normalizedTicketId = String(
+      ticketId || ''
+    );
+
+    const ticket = this.tickets.get(
+      normalizedTicketId
+    );
+
+    if (
+      !ticket ||
+      ticket.status !== 'assigned' ||
+      !ticket.autoCloseAt
+    ) {
+      return false;
+    }
+
+    const timestamp =
+      Number(this.now()) || Date.now();
+
+    const deadline =
+      Date.parse(ticket.autoCloseAt);
+
+    if (
+      !Number.isFinite(deadline) ||
+      timestamp < deadline
+    ) {
+      return false;
+    }
+
+    const timer = this.ticketAutoCloseTimers.get(
+      normalizedTicketId
+    );
+
+    if (timer) {
+      clearTimeout(timer);
+    }
+
+    this.ticketAutoCloseTimers.delete(
+      normalizedTicketId
+    );
+
+    ticket.status = 'closed';
+    ticket.autoCloseAt = null;
+    ticket.updatedAt =
+      new Date(timestamp).toISOString();
+
+    this.activeTicketByUser.delete(
+      ticket.userId
+    );
+
+    await this.updateAllSummaries(
+      telegram,
+      ticket
+    );
+
+    this.logger?.info?.(
+      'Support ticket auto closed',
+      {
+        ticketId: ticket.ticketId,
+        userId: ticket.userId,
+        assignedAdminId:
+          ticket.assignedAdminId,
+        replyCount: ticket.replyCount
+      }
+    );
+
+    return true;
   }
 
   isAdmin(userId) {
@@ -453,24 +587,146 @@ export class SupportTelegramBot {
     return delivered;
   }
 
-  async deliverReferenceToAdmin(telegram, ticket, adminId, ref) {
-    const delivered = this.deliveredSet(ticket, adminId);
-    if (delivered.has(ref.key)) return false;
+  deliveryLabelText(ticket, adminId, ref) {
+    const messageIndex = ticket.messageRefs.findIndex(
+      (item) => item.key === ref.key
+    );
+
+    const messageNumber =
+      messageIndex >= 0
+        ? messageIndex + 1
+        : ticket.messageRefs.length;
+
+    const lines = [
+      '\ud83d\udce8 \u65b0\u7684\u7528\u6237\u6d88\u606f',
+      `\u5de5\u5355\uff1a#${ticket.ticketId}`,
+      `\u6d88\u606f\uff1a${messageNumber}/${ticket.messageRefs.length}`
+    ];
+
+    if (
+      this.isSuperAdmin(adminId) &&
+      ticket.userProfile
+    ) {
+      const profile = ticket.userProfile;
+
+      const displayName = [
+        profile.firstName,
+        profile.lastName
+      ].filter(Boolean).join(' ');
+
+      lines.push(
+        `\u7528\u6237 ID\uff1a${profile.userId || ticket.userId}`,
+        `\u7528\u6237\u540d\uff1a${profile.username ? `@${profile.username}` : '\u672a\u8bbe\u7f6e'}`,
+        `\u59d3\u540d\uff1a${displayName || '\u672a\u8bbe\u7f6e'}`,
+        `\u8bed\u8a00\uff1a${profile.languageCode || '\u672a\u63d0\u4f9b'}`
+      );
+    } else {
+      const anonymousId = String(
+        ticket.ticketId || ''
+      ).slice(0, 6).toUpperCase();
+
+      lines.push(
+        `\u533f\u540d\u8bbf\u5ba2\uff1a${anonymousId}`
+      );
+    }
+
+    lines.push(
+      '',
+      '\u8bf7\u76f4\u63a5\u56de\u590d\u4e0b\u65b9\u7528\u6237\u6d88\u606f\u3002'
+    );
+
+    return lines.join('\n');
+  }
+
+  async deliverReferenceToAdmin(
+    telegram,
+    ticket,
+    adminId,
+    ref
+  ) {
+    const normalizedAdminId = String(adminId);
+
+    let delivered =
+      ticket.deliveredMessageKeysByAdmin.get(
+        normalizedAdminId
+      );
+
+    if (!delivered) {
+      delivered = new Set();
+
+      ticket.deliveredMessageKeysByAdmin.set(
+        normalizedAdminId,
+        delivered
+      );
+    }
+
+    if (delivered.has(ref.key)) {
+      return false;
+    }
+
+    const labelResult = await telegram.sendMessage(
+      adminId,
+      this.deliveryLabelText(
+        ticket,
+        adminId,
+        ref
+      ),
+      {
+        protect_content: true,
+        link_preview_options: {
+          is_disabled: true
+        }
+      }
+    );
+
+    const labelMessageId =
+      Number(labelResult?.message_id || 0);
+
+    if (labelMessageId) {
+      this.adminMessageIndex.set(
+        adminMessageKey(
+          adminId,
+          labelMessageId
+        ),
+        ticket.ticketId
+      );
+    }
+
+    const copyOptions = {
+      protect_content: true
+    };
+
+    if (labelMessageId) {
+      copyOptions.reply_parameters = {
+        message_id: labelMessageId,
+        allow_sending_without_reply: true
+      };
+    }
+
     const result = await telegram.copyMessage(
       adminId,
       ref.chatId,
       ref.messageId,
-      { protect_content: true }
+      copyOptions
     );
-    delivered.add(ref.key);
-    const copiedMessageId = Number(result?.message_id || 0);
-    if (copiedMessageId) {
-      this.adminMessageIndex.set(adminMessageKey(adminId, copiedMessageId), ticket.ticketId);
-    }
-    return true;
-  }
 
-  async deliverUnreadHistory(telegram, ticket, adminId) {
+    delivered.add(ref.key);
+
+    const copiedMessageId =
+      Number(result?.message_id || 0);
+
+    if (copiedMessageId) {
+      this.adminMessageIndex.set(
+        adminMessageKey(
+          adminId,
+          copiedMessageId
+        ),
+        ticket.ticketId
+      );
+    }
+
+    return true;
+  }  async deliverUnreadHistory(telegram, ticket, adminId) {
     for (const ref of ticket.messageRefs) {
       try {
         await this.deliverReferenceToAdmin(telegram, ticket, adminId, ref);
@@ -508,6 +764,10 @@ export class SupportTelegramBot {
     const timestamp = Number(this.now()) || Date.now();
     const ref = messageReference(ctx, type, timestamp);
     let ticket = this.getActiveTicket(userId);
+
+    if (ticket) {
+      this.clearTicketAutoClose(ticket.ticketId); // user replied
+    }
     const isNew = !ticket;
     if (isNew) {
       ticket = this.createTicket(
@@ -548,6 +808,52 @@ export class SupportTelegramBot {
           : '客服暂时无法接收消息，请稍后再试。');
       }
       return;
+    }
+
+    const currentOwnerId = String(
+      ticket.assignedAdminId || ''
+    );
+
+    if (
+      ticket.status === 'assigned' &&
+      (
+        !currentOwnerId ||
+        !this.adminIdSet.has(currentOwnerId)
+      )
+    ) {
+      ticket.status = 'open';
+      ticket.assignedAdminId = null;
+      ticket.updatedAt =
+        new Date(timestamp).toISOString();
+
+      await this.updateAllSummaries(
+        ctx.telegram,
+        ticket
+      );
+
+      const deliveries = await Promise.allSettled(
+        this.adminIds.map((adminId) =>
+          this.sendSummaryToAdmin(
+            ctx.telegram,
+            ticket,
+            adminId
+          )
+        )
+      );
+
+      this.logger?.warn?.(
+        'Support ticket owner removed from configuration',
+        {
+          ticketId: ticket.ticketId,
+          previousAdminId:
+            currentOwnerId || null,
+          notifiedAdminCount:
+            deliveries.filter(
+              (result) =>
+                result.status === 'fulfilled'
+            ).length
+        }
+      );
     }
 
     if (ticket.status === 'assigned' && ticket.assignedAdminId) {
@@ -650,6 +956,9 @@ export class SupportTelegramBot {
     if (ticket.status !== 'assigned' || ticket.assignedAdminId !== adminId) {
       return this.answerAction(ctx, '只有当前负责客服可以退回工单。', true);
     }
+    this.clearTicketAutoClose(
+      ticket.ticketId
+    );
     ticket.status = 'open';
     ticket.assignedAdminId = null;
     ticket.updatedAt = new Date(Number(this.now()) || Date.now()).toISOString();
@@ -664,6 +973,9 @@ export class SupportTelegramBot {
     if (ticket.status !== 'assigned' || ticket.assignedAdminId !== adminId) {
       return this.answerAction(ctx, '只有当前负责客服可以关闭工单。', true);
     }
+    this.clearTicketAutoClose(
+      ticket.ticketId
+    );
     ticket.status = 'closed';
     ticket.updatedAt = new Date(Number(this.now()) || Date.now()).toISOString();
     this.activeTicketByUser.delete(ticket.userId);
@@ -709,6 +1021,11 @@ export class SupportTelegramBot {
       ticket.replyCount += 1;
       ticket.lastReplyAt = new Date(timestamp).toISOString();
       ticket.updatedAt = ticket.lastReplyAt;
+
+      this.scheduleTicketAutoClose(
+        ctx.telegram,
+        ticket
+      );
       await ctx.reply('✅ 已发送给用户。');
       await this.updateAllSummaries(ctx.telegram, ticket);
       this.logger?.info?.('Support reply delivered', {
