@@ -644,21 +644,7 @@ export class SupportTelegramBot {
     adminId,
     ref
   ) {
-    const normalizedAdminId = String(adminId);
-
-    let delivered =
-      ticket.deliveredMessageKeysByAdmin.get(
-        normalizedAdminId
-      );
-
-    if (!delivered) {
-      delivered = new Set();
-
-      ticket.deliveredMessageKeysByAdmin.set(
-        normalizedAdminId,
-        delivered
-      );
-    }
+    const delivered = this.deliveredSet(ticket, adminId);
 
     if (delivered.has(ref.key)) {
       return false;
