@@ -74,3 +74,38 @@ test('shutdown attempts every resource even when a bot stop fails', async () => 
     'db:close'
   ]);
 });
+
+
+test('pending long polling does not block support bot startup', async () => {
+  const calls = [];
+  const pendingPolling = new Promise(() => {});
+
+  const lifecycle = createApplicationLifecycle({
+    bot: {
+      launch(onLaunch) {
+        calls.push('bot:launch');
+        onLaunch();
+        return pendingPolling;
+      },
+      async stop() {}
+    },
+    supportBot: {
+      launch(onLaunch) {
+        calls.push('support:launch');
+        onLaunch();
+        return pendingPolling;
+      },
+      async stop() {}
+    },
+    logger: {
+      error() {}
+    }
+  });
+
+  await lifecycle.start();
+
+  assert.deepEqual(calls, [
+    'bot:launch',
+    'support:launch'
+  ]);
+});

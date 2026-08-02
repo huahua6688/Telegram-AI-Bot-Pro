@@ -159,12 +159,30 @@ export class SupportTelegramBot {
     return this;
   }
 
-  async launch() {
+  async launch(onLaunch) {
     if (!this.initialized) await this.init();
-    if (this.launched) return this;
-    await this.bot.launch();
-    this.launched = true;
-    this.logger?.info?.('Support bot launched', { botId: String(this.botInfo?.id || '') });
+
+    if (this.launched) {
+      onLaunch?.();
+      return this;
+    }
+
+    let announced = false;
+
+    const markLaunched = () => {
+      if (announced) return;
+      announced = true;
+      this.launched = true;
+
+      this.logger?.info?.('Support bot launched', {
+        botId: String(this.botInfo?.id || '')
+      });
+
+      onLaunch?.();
+    };
+
+    await this.bot.launch(markLaunched);
+    markLaunched();
     return this;
   }
 
