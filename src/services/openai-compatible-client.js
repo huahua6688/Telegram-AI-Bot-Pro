@@ -82,6 +82,14 @@ export class OpenAICompatibleClient {
     });
   }
 
+  async listModels({ signal, requestTimeoutMs } = {}) {
+    return this.request('/models', {
+      method: 'GET',
+      signal,
+      requestTimeoutMs
+    });
+  }
+
   async completeWithTools({ model, messages, tools = [], toolRunner, temperature, signal, requestTimeoutMs }) {
     const workingMessages = [...messages];
 

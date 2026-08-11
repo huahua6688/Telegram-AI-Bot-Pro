@@ -22,6 +22,7 @@ import { MemoryManager } from './memory-manager.js';
 import { naturalAgentInternals, tryHandleNaturalAgent } from './natural-agent.js';
 import { PROVIDER_LABELS } from './ai-provider-manager.js';
 import { createAIModelRouter } from './ai-model-router.js';
+import { formatModelProfile } from './ai-model-catalog.js';
 import { getBuildInfo } from '../app/build-info.js';
 import {
   BILLING_CREDIT_TYPES,
@@ -1512,6 +1513,7 @@ export class TelegramAIBot {
         Markup.button.callback(localText(locale, 'AI 平台', 'AI providers'), 'admin_pick:ai_providers'),
         Markup.button.callback(localText(locale, '测试全部', 'Test all'), 'admin_pick:ai_test_all')
       ],
+      [Markup.button.callback(localText(locale, '🔄 同步平台模型', '🔄 Sync provider models'), 'admin_pick:model_sync')],
       [
         Markup.button.callback(labels.quickHelp, 'admin_pick:quick_help')
       ],
@@ -6094,6 +6096,31 @@ export class TelegramAIBot {
     await ctx.reply(lines.join('\n'), this.createAdminActionKeyboard(locale));
   }
 
+  async handleAdminModelSync(ctx) {
+    const locale = this.getLocale(ctx);
+    if (!this.isAdmin(ctx)) {
+      await ctx.reply(this.t(locale, 'adminOnly'));
+      return;
+    }
+    try {
+      await ctx.sendChatAction?.('typing');
+      const result = await this.providerManager.refreshModels('openai-compatible', { force: true });
+      const visible = result.models;
+      const lines = [
+        localText(locale, '✅ 模型同步完成', '✅ Model sync complete'), '',
+        `${localText(locale, '全部模型', 'All models')}: ${result.count}`,
+        `${localText(locale, '可用于聊天', 'Chat-compatible')}: ${result.chatCount}`,
+        `${localText(locale, '专用功能模型', 'Specialized models')}: ${result.count - result.chatCount}`, '',
+        ...visible.slice(0, 20).map((item) => formatModelProfile(item, locale))
+      ];
+      if (visible.length > 20) lines.push('', localText(locale, `另有 ${visible.length - 20} 个模型，请在模型选择中查看。`, `${visible.length - 20} more models are available in model selection.`));
+      lines.push('', localText(locale, '标注“推测”的能力来自模型名称；平台提供说明时优先显示官方信息。', 'Inferred capabilities come from model names; provider metadata is preferred.'));
+      await sendTextReply(ctx, lines.join('\n'), this.config.maxOutputChars, this.createAdminActionKeyboard(locale));
+    } catch (error) {
+      await ctx.reply(localText(locale, `❌ 同步失败：${error.message}\n\n请确认 AI_BASE_URL 支持 GET /models，且 AI_API_KEY 有权限。原有模型配置仍可使用。`, `❌ Sync failed: ${error.message}\n\nVerify GET /models support and API-key permission. Existing configured models remain available.`), this.createAdminActionKeyboard(locale));
+    }
+  }
+
   async handleAdminProviderTestAll(ctx) {
     const locale = this.getLocale(ctx);
     if (!this.isAdmin(ctx)) {
@@ -6573,6 +6600,11 @@ export class TelegramAIBot {
 
     if (target === 'ai_test_all') {
       await this.handleAdminProviderTestAll(ctx);
+      return;
+    }
+
+    if (target === 'model_sync') {
+      await this.handleAdminModelSync(ctx);
       return;
     }
 

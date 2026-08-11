@@ -47,6 +47,7 @@ AI_PROVIDER_MAX_RETRIES=1
 AI_PROVIDER_RETRY_DELAY_MS=800
 AI_PROVIDER_COOLDOWN_MS=60000
 MODEL_LIST_CACHE_TTL_MS=3600000
+MODEL_DISCOVERY_ENABLED=true
 
 # Google Gemini free-tier first
 GEMINI_API_KEY=
@@ -250,6 +251,10 @@ Claude、OpenAI、DeepSeek、Qwen、Grok、GLM、Doubao、Mistral、Hugging Face
 - `ENABLE_AI_ROUTER`、`ROUTER_PROVIDER`、`ROUTER_MODEL` 是旧的 LLM intent router，和新的 `SMART_ROUTING_*` / `ROUTER_<TASK>_*` 不是别名，旧行为保持不变。
 
 Zeabur AI Hub 按标准 OpenAI-compatible Provider 使用：设置 `DEFAULT_AI_PROVIDER=openai-compatible`，将自己的 Key 填入 `AI_API_KEY`，并把 AI Hub 控制台提供的完整 Base URL 填入 `AI_BASE_URL`。项目不硬编码 Zeabur AI Hub URL。这样一个 AI Hub Key 可以配多个任务模型；若默认 Provider 仍是 `auto`，每组 Hub 任务模型还要写 `ROUTER_*_PROVIDER=openai-compatible`。
+
+当平台支持 OpenAI-compatible 的 `GET /models` 时，机器人会自动同步可用模型，管理员也可以在“管理 → 同步平台模型”中手动刷新。此时模型名环境变量可以留空；同步失败时，已填写的模型名仍作为兜底。接口没有提供说明时，界面会明确标注依据模型名称推测的用途。
+
+同步目录会按接口类型分流：聊天/视觉模型进入聊天与识图，图片生成模型进入画图，TTS 和语音识别模型进入对应语音功能。Embedding、Rerank 和 Video 也会保留在专用目录中，但只有项目存在兼容执行接口且相关功能已启用时才会调用，避免把专用模型错误发送到聊天接口。
 
 Gemini Live 只支持 Google 官方 Gemini Live API，必须使用独立的 `GEMINI_LIVE_API_KEY` 和兼容 Live 模型；不要把第三方 OpenAI-compatible / AI Hub 地址当作 `gemini-live`。
 

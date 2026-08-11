@@ -135,7 +135,11 @@ DEFAULT_AI_PROVIDER=openai-compatible
 AI_API_KEY=
 AI_BASE_URL=
 AI_MODEL=
+MODEL_DISCOVERY_ENABLED=true
+MODEL_LIST_CACHE_TTL_MS=3600000
 ```
+
+When the AI Hub supports OpenAI-compatible `GET /models`, model-name variables may stay empty. The bot synchronizes the catalog at startup and administrators can refresh it from the Telegram admin panel. Provider metadata is displayed when available; otherwise inferred uses are explicitly labeled. Non-chat embedding, rerank, TTS, image, and video models are excluded from the chat selector. Explicit model variables remain a fallback when discovery is unavailable.
 
 请把 AI Hub 控制台提供的完整 API Base URL 填入 `AI_BASE_URL`。固定使用 `openai-compatible` 时，可以保持各 `ROUTER_*_PROVIDER` 为空，只填写该 Hub 实际支持的任务模型 ID；所有这些模型会共用同一个 `AI_API_KEY` 和 `AI_BASE_URL`。如果默认 Provider 为 `auto`，则每组任务配置都应显式写 `ROUTER_*_PROVIDER=openai-compatible`。
 

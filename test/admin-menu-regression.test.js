@@ -19,6 +19,12 @@ test('admin panel exposes status whoami models quota and docs callbacks', () => 
   assert.match(source, /admin_pick:docs/);
 });
 
+test('admin panel exposes dynamic provider model synchronization', () => {
+  assert.match(source, /admin_pick:model_sync/);
+  assert.match(source, /handleAdminModelSync/);
+  assert.match(source, /refreshModels\('openai-compatible'/);
+});
+
 test('admin callback is registered and handled', () => {
   assert.match(source, /this\.bot\.action\(\/\^admin_pick:\(\.\+\)\$\//);
   assert.match(source, /async handleAdminActionCallback\(ctx\)/);

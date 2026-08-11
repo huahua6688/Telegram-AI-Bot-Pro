@@ -354,6 +354,7 @@ export function loadConfig() {
     aiProviderRetryDelayMs: parseInteger(process.env.AI_PROVIDER_RETRY_DELAY_MS, 800),
     aiProviderCooldownMs: parseInteger(process.env.AI_PROVIDER_COOLDOWN_MS, 60000),
     modelListCacheTtlMs: parseInteger(process.env.MODEL_LIST_CACHE_TTL_MS, 3600000),
+    modelDiscoveryEnabled: parseBoolean(process.env.MODEL_DISCOVERY_ENABLED, true),
     systemPrompt: process.env.AI_SYSTEM_PROMPT || personaPresets.default,
     temperature: Number.parseFloat(process.env.AI_TEMPERATURE || '0.6') || 0.6,
     transcriptionProvider: normalizeProvider(process.env.TRANSCRIPTION_PROVIDER || 'gemini-live', 'gemini-live'),

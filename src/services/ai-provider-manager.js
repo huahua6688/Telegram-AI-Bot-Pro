@@ -4,6 +4,7 @@ import {
   getAIProviderDefinition,
   listAIProviderDefinitions
 } from './ai-provider-registry.js';
+import { normalizeDiscoveredModels } from './ai-model-catalog.js';
 
 export const PROVIDER_LABELS = Object.freeze({
   auto: 'Auto',
@@ -155,6 +156,8 @@ export class AIProviderManager {
     this.clientFactory = clientFactory;
     this.clients = new Map();
     this.health = new Map();
+    this.discoveredModels = new Map();
+    this.modelDiscovery = new Map();
     ensureBuiltInAIProvidersRegistered();
   }
 
@@ -168,11 +171,82 @@ export class AIProviderManager {
 
   getProviderModels(providerId = '') {
     const id = normalizeProviderId(providerId);
+    const discovered = (this.discoveredModels.get(id) || [])
+      .filter((item) => item.chatCompatible)
+      .map((item) => item.id);
+    if (discovered.length) return compactList(discovered);
     return compactList(
       this.config.providerModels?.[id] || [],
       id === this.config.aiProvider ? this.config.availableModels || [] : [],
       this.config.providerDefaultModels?.[id] || ''
     );
+  }
+
+  getModelCatalog(providerId = '') {
+    return [...(this.discoveredModels.get(normalizeProviderId(providerId)) || [])];
+  }
+
+  getModelsForCapability(providerId = '', capability = 'chat') {
+    const normalized = this.normalizeCapability(capability);
+    const catalog = this.getModelCatalog(providerId);
+    if (!catalog.length) return normalized === 'chat' ? this.getProviderModels(providerId) : [];
+    return catalog
+      .filter((item) => normalized === 'chat' ? item.chatCompatible : item.capabilities.includes(normalized))
+      .map((item) => item.id);
+  }
+
+  getModelDiscoveryStatus(providerId = '') {
+    return this.modelDiscovery.get(normalizeProviderId(providerId)) || null;
+  }
+
+  async refreshModels(providerId = 'openai-compatible', { force = false } = {}) {
+    const id = normalizeProviderId(providerId);
+    if (!this.isConfigured(id)) throw new Error(`${this.getProviderLabel(id)} is not configured.`);
+    const previous = this.modelDiscovery.get(id);
+    const ttl = Math.max(0, Number(this.config.modelListCacheTtlMs) || 0);
+    if (!force && previous?.updatedAtMs && Date.now() - previous.updatedAtMs < ttl) {
+      return { ...previous, cached: true, models: this.getModelCatalog(id) };
+    }
+
+    const client = this.getClientForProvider(id, this.getDefaultModel(id));
+    if (typeof client?.listModels !== 'function') throw new Error(`${this.getProviderLabel(id)} does not expose a model-list API.`);
+    try {
+      const catalog = normalizeDiscoveredModels(await client.listModels({ requestTimeoutMs: this.config.requestTimeoutMs }));
+      const chatModels = catalog.filter((item) => item.chatCompatible);
+      if (!chatModels.length) throw new Error('The provider returned no chat-compatible models.');
+      this.discoveredModels.set(id, catalog);
+      const status = { providerId: id, updatedAt: new Date().toISOString(), updatedAtMs: Date.now(), count: catalog.length, chatCount: chatModels.length, error: '' };
+      this.modelDiscovery.set(id, status);
+      if (id === normalizeProviderId(this.config.aiProvider)) {
+        const previousDefault = this.config.defaultModel;
+        this.config.availableModels = compactList(chatModels.map((item) => item.id));
+        this.config.defaultModel = chatModels[0].id;
+        for (const key of ['translationModel', 'routerModel', 'memoryModel', 'visionModel']) {
+          if (!this.config[key] || this.config[key] === previousDefault) this.config[key] = chatModels[0].id;
+        }
+      }
+      const assignments = [
+        ['vision', 'visionModel', 'visionProvider'],
+        ['imageGeneration', 'imageModel', 'imageProvider'],
+        ['speechSynthesis', 'ttsModel', 'ttsProvider'],
+        ['speechTranscription', 'transcriptionModel', 'transcriptionProvider']
+      ];
+      for (const [capability, modelKey, providerKey] of assignments) {
+        const discoveredModel = catalog.find((item) => item.capabilities.includes(capability))?.id;
+        if (!discoveredModel) continue;
+        const configuredDedicatedProvider = normalizeProviderId(this.config[providerKey]);
+        if (!configuredDedicatedProvider || !this.isConfigured(configuredDedicatedProvider) || configuredDedicatedProvider === id) {
+          this.config[modelKey] = discoveredModel;
+          this.config[providerKey] = id;
+        }
+      }
+      this.clients.clear();
+      this.logger.info?.('AI model catalog refreshed', { providerId: id, count: catalog.length, chatCount: chatModels.length });
+      return { ...status, cached: false, models: catalog };
+    } catch (error) {
+      this.modelDiscovery.set(id, { providerId: id, updatedAt: new Date().toISOString(), updatedAtMs: Date.now(), count: 0, chatCount: 0, error: error.message });
+      throw error;
+    }
   }
 
   getDefaultModel(providerId = '') {

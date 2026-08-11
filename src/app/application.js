@@ -71,6 +71,13 @@ export async function createApplication() {
     const accessControl = new AccessControlService({ config: runtimeConfig, db, logger });
     const aiClient = createAIProviderClient(runtimeConfig, logger);
     const providerManager = createAIProviderManager(runtimeConfig, logger, db);
+    if (runtimeConfig.modelDiscoveryEnabled !== false && runtimeConfig.aiProvider === 'openai-compatible' && providerManager.isConfigured('openai-compatible')) {
+      try {
+        await providerManager.refreshModels('openai-compatible');
+      } catch (error) {
+        logger.warn('AI model discovery failed; configured model fallback remains active', { providerId: 'openai-compatible', error: error.message });
+      }
+    }
     const toolRegistry = createToolRegistry(runtimeConfig, logger, accessControl);
     const pluginManager = await createPluginManager(runtimeConfig, logger);
     supportBot = createSupportBot({ config: runtimeConfig, logger });
