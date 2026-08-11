@@ -8,12 +8,33 @@ const TYPE_PATTERNS = Object.freeze({
   moderation: /(?:moderation|content[-_ ]safety)/i
 });
 
+const KNOWN_MODEL_FAMILIES = Object.freeze([
+  { pattern: /claude/i, description: '通用对话、写作、推理、代码与长文本分析' },
+  { pattern: /gemini/i, description: '通用对话、多模态理解、工具调用与长上下文任务' },
+  { pattern: /(?:gpt|o[134](?:-|$))/i, description: '通用对话、推理、代码、写作与工具调用' },
+  { pattern: /deepseek.*(?:r1|reason)/i, description: '复杂推理、数学、规划与代码分析' },
+  { pattern: /(?:coder|codestral|devstral)/i, description: '代码生成、调试、重构与代码审查' },
+  { pattern: /(?:llama|mistral|qwen)/i, description: '通用对话、写作、翻译、摘要与代码任务' }
+]);
+
 function text(value = '') {
   return String(value ?? '').trim();
 }
 
 function first(...values) {
   return values.map(text).find(Boolean) || '';
+}
+
+function readPricing(raw = {}) {
+  const pricing = raw.pricing || raw.price || {};
+  const values = [pricing.prompt, pricing.completion, pricing.input, pricing.output]
+    .filter((value) => value !== undefined && value !== null && value !== '')
+    .map(Number);
+  if (values.length && values.every((value) => Number.isFinite(value) && value === 0)) return { tier: 'free', source: 'provider' };
+  if (values.some((value) => Number.isFinite(value) && value > 0)) return { tier: 'paid', source: 'provider' };
+  const id = first(raw.id, raw.model, raw.name);
+  if (/(?:^|[/:_-])free(?:$|[/:_-])/i.test(id)) return { tier: 'free', source: 'model-id' };
+  return { tier: 'unknown', source: '' };
 }
 
 export function inferModelProfile(raw = {}) {
@@ -50,17 +71,21 @@ export function inferModelProfile(raw = {}) {
   if (!uses.length) uses.push('日常聊天、写作与翻译');
 
   const officialDescription = first(raw.description, raw.summary, raw.details?.description);
+  const catalogDescription = KNOWN_MODEL_FAMILIES.find((item) => item.pattern.test(id))?.description || '';
+  const pricing = readPricing(raw);
   const contextWindow = Number(raw.context_length || raw.context_window || raw.max_context_length || 0) || null;
   return {
     id,
     ownedBy: first(raw.owned_by, raw.provider, raw.vendor),
-    description: officialDescription || uses.join('；'),
-    descriptionSource: officialDescription ? 'provider' : 'inferred',
+    description: officialDescription || catalogDescription || uses.join('；'),
+    descriptionSource: officialDescription ? 'provider' : catalogDescription ? 'catalog' : 'inferred',
     capabilities: [...capabilities],
     recommendedUses: uses,
     contextWindow,
     endpointType: specializedType || 'chat',
     chatCompatible: !specializedType,
+    pricingTier: pricing.tier,
+    pricingSource: pricing.source,
     raw
   };
 }

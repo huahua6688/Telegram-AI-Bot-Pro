@@ -376,6 +376,18 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       background: var(--tg-theme-secondary-bg-color, #ffffff);
     }
 
+    .feature-action {
+      grid-column: 1 / -1;
+      min-height: 52px;
+      border: 1px solid rgba(36, 129, 204, .28);
+      box-shadow: 0 6px 18px rgba(36, 129, 204, .12);
+    }
+
+    .support-action {
+      color: var(--tg-theme-button-color, #2481cc);
+      background: rgba(36, 129, 204, .09);
+    }
+
     .notice {
       margin-top: 14px;
       padding: 12px 14px;
@@ -893,7 +905,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         <div class="actions">
           <button class="primary" id="saveButton" type="submit" disabled>保存设置</button>
           <button class="secondary" id="refreshButton" type="button">刷新</button>
-          <button class="secondary hidden" id="syncModelsButton" type="button">🔄 同步平台模型</button>
+          <button class="primary feature-action hidden" id="syncModelsButton" type="button">🔄 获取 AI Hub 最新模型</button>
         </div>
       </form>
     </section>
@@ -912,7 +924,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         <div class="product-list" id="productList"></div>
         <p class="small" id="purchaseHint" style="text-align:left">付款请回到机器人，点击输入框下方的“⭐ 购买额度”。</p>
         <div class="actions">
-          <button class="secondary hidden" id="supportButton" type="button">🧑‍💻 联系客服</button>
+          <button class="secondary feature-action support-action hidden" id="supportButton" type="button">🧑‍💻 联系人工客服</button>
         </div>
       </div>
     </section>
@@ -1231,11 +1243,14 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         elements.modelDescription.classList.add('hidden');
         return;
       }
-      const inferred = selected.descriptionSource === 'inferred' ? '（根据模型名称推测）' : '';
+      const sourceLabels = { provider: '平台官方资料', catalog: '内置模型资料', inferred: '名称推测' };
+      const priceLabels = { free: '免费', paid: '收费', unknown: '价格未知' };
       const capabilities = Array.isArray(selected.capabilities) ? selected.capabilities.join('、') : '';
       elements.modelDescription.textContent = [
         capabilities ? '能力：' + capabilities : '',
-        selected.description ? selected.description + inferred : '',
+        selected.description || '',
+        '资料来源：' + (sourceLabels[selected.descriptionSource] || '未知'),
+        '价格：' + (priceLabels[selected.pricingTier] || '价格未知'),
         selected.contextWindow ? '上下文：' + Number(selected.contextWindow).toLocaleString() + ' tokens' : ''
       ].filter(Boolean).join('\n');
       elements.modelDescription.classList.remove('hidden');
@@ -1437,7 +1452,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
     async function syncProviderModels() {
       if (!tg || !tg.initData) return;
       elements.syncModelsButton.disabled = true;
-      elements.syncModelsButton.textContent = '同步中…';
+      elements.syncModelsButton.textContent = '正在获取模型…';
       showNotice('正在从 AI Hub 获取模型列表…', '');
       try {
         const response = await fetch('/api/miniapp/models/sync', { method: 'POST', headers: authHeaders() });
@@ -1449,7 +1464,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         showNotice(error.message || '模型同步失败。', 'failure');
       } finally {
         elements.syncModelsButton.disabled = false;
-        elements.syncModelsButton.textContent = '🔄 同步平台模型';
+        elements.syncModelsButton.textContent = '🔄 获取 AI Hub 最新模型';
       }
     }
 
@@ -2450,6 +2465,8 @@ function buildProviderCatalog(config, providerManager = null) {
           id: item.id,
           description: item.description,
           descriptionSource: item.descriptionSource,
+          pricingTier: item.pricingTier,
+          pricingSource: item.pricingSource,
           capabilities: item.capabilities,
           contextWindow: item.contextWindow,
           endpointType: item.endpointType,

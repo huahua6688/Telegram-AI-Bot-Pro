@@ -71,7 +71,7 @@ export async function createApplication() {
     const accessControl = new AccessControlService({ config: runtimeConfig, db, logger });
     const aiClient = createAIProviderClient(runtimeConfig, logger);
     const providerManager = createAIProviderManager(runtimeConfig, logger, db);
-    if (runtimeConfig.modelDiscoveryEnabled !== false && runtimeConfig.aiProvider === 'openai-compatible' && providerManager.isConfigured('openai-compatible')) {
+    if (runtimeConfig.modelDiscoveryEnabled !== false && providerManager.isConfigured('openai-compatible')) {
       try {
         await providerManager.refreshModels('openai-compatible');
       } catch (error) {

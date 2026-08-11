@@ -13,6 +13,9 @@ test('model catalog preserves provider descriptions and filters non-chat models'
   assert.equal(rows.find((row) => row.id === 'text-embedding-3-small').chatCompatible, false);
   assert.ok(rows.find((row) => row.id === 'code-reasoner').capabilities.includes('coding'));
   assert.ok(inferModelProfile({ id: 'acme-vision' }).capabilities.includes('vision'));
+  assert.equal(inferModelProfile({ id: 'vendor/chat:free' }).pricingTier, 'free');
+  assert.equal(inferModelProfile({ id: 'paid-chat', pricing: { prompt: '0.1', completion: '0.2' } }).pricingTier, 'paid');
+  assert.equal(inferModelProfile({ id: 'claude-example' }).descriptionSource, 'catalog');
 });
 
 test('provider manager discovers OpenAI-compatible models without configured model names', async () => {

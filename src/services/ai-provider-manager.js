@@ -219,10 +219,11 @@ export class AIProviderManager {
       this.modelDiscovery.set(id, status);
       if (id === normalizeProviderId(this.config.aiProvider)) {
         const previousDefault = this.config.defaultModel;
-        this.config.availableModels = compactList(chatModels.map((item) => item.id));
-        this.config.defaultModel = chatModels[0].id;
+        const preferredChatModels = [...chatModels].sort((a, b) => Number(b.pricingTier === 'free') - Number(a.pricingTier === 'free'));
+        this.config.availableModels = compactList(preferredChatModels.map((item) => item.id));
+        this.config.defaultModel = preferredChatModels[0].id;
         for (const key of ['translationModel', 'routerModel', 'memoryModel', 'visionModel']) {
-          if (!this.config[key] || this.config[key] === previousDefault) this.config[key] = chatModels[0].id;
+          if (!this.config[key] || this.config[key] === previousDefault) this.config[key] = preferredChatModels[0].id;
         }
       }
       const assignments = [

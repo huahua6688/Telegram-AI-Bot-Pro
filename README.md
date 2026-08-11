@@ -256,6 +256,8 @@ Zeabur AI Hub 按标准 OpenAI-compatible Provider 使用：设置 `DEFAULT_AI_P
 
 同步目录会按接口类型分流：聊天/视觉模型进入聊天与识图，图片生成模型进入画图，TTS 和语音识别模型进入对应语音功能。Embedding、Rerank 和 Video 也会保留在专用目录中，但只有项目存在兼容执行接口且相关功能已启用时才会调用，避免把专用模型错误发送到聊天接口。
 
+若 AI Hub 是收费平台，不要把它设为默认 Provider。可以保持 `DEFAULT_AI_PROVIDER=gemini`（或你实际拥有免费额度的 Provider），同时配置 `AI_API_KEY` / `AI_BASE_URL` 用于后台同步 Hub 模型；用户需要时再在 Mini App 手动选择 Hub。模型价格只有在平台返回零价格或模型 ID 明确包含 `:free` 时才显示“免费”，其余显示“收费”或“价格未知”。
+
 Gemini Live 只支持 Google 官方 Gemini Live API，必须使用独立的 `GEMINI_LIVE_API_KEY` 和兼容 Live 模型；不要把第三方 OpenAI-compatible / AI Hub 地址当作 `gemini-live`。
 
 ## 自动切换说明
