@@ -839,6 +839,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
           <select id="modelSelect" disabled>
             <option value="">加载中…</option>
           </select>
+          <p class="small hidden" id="modelDescription" style="text-align:left;margin-top:8px"></p>
         </div>
 
         <div class="field">
@@ -892,6 +893,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         <div class="actions">
           <button class="primary" id="saveButton" type="submit" disabled>保存设置</button>
           <button class="secondary" id="refreshButton" type="button">刷新</button>
+          <button class="secondary hidden" id="syncModelsButton" type="button">🔄 同步平台模型</button>
         </div>
       </form>
     </section>
@@ -1063,6 +1065,8 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       settingsNotice: document.getElementById('settingsNotice'),
       saveButton: document.getElementById('saveButton'),
       refreshButton: document.getElementById('refreshButton'),
+      syncModelsButton: document.getElementById('syncModelsButton'),
+      modelDescription: document.getElementById('modelDescription'),
       historyPanel: document.getElementById('historyPanel'),
       historyCount: document.getElementById('historyCount'),
       historyNotice: document.getElementById('historyNotice'),
@@ -1215,6 +1219,26 @@ const MINI_APP_HTML = String.raw`<!doctype html>
 
       buildOptions(elements.modelSelect, options, selectedModel || '');
       elements.modelSelect.disabled = !state.settings || providerId === 'auto';
+      updateModelDescription();
+    }
+
+    function updateModelDescription() {
+      const provider = state.catalog.find(function (item) { return item.id === elements.providerSelect.value; });
+      const details = provider && Array.isArray(provider.modelDetails) ? provider.modelDetails : [];
+      const selected = details.find(function (item) { return item.id === elements.modelSelect.value; });
+      if (!selected) {
+        elements.modelDescription.textContent = '';
+        elements.modelDescription.classList.add('hidden');
+        return;
+      }
+      const inferred = selected.descriptionSource === 'inferred' ? '（根据模型名称推测）' : '';
+      const capabilities = Array.isArray(selected.capabilities) ? selected.capabilities.join('、') : '';
+      elements.modelDescription.textContent = [
+        capabilities ? '能力：' + capabilities : '',
+        selected.description ? selected.description + inferred : '',
+        selected.contextWindow ? '上下文：' + Number(selected.contextWindow).toLocaleString() + ' tokens' : ''
+      ].filter(Boolean).join('\n');
+      elements.modelDescription.classList.remove('hidden');
     }
 
     function renderSettings(data) {
@@ -1223,6 +1247,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       state.profile = data.profile || {};
       state.supportUrl = String(data.support && data.support.url || '');
       elements.supportButton.classList.toggle('hidden', !state.supportUrl);
+      elements.syncModelsButton.classList.toggle('hidden', !state.profile.isAdmin);
       renderBilling(data.billing || {});
 
       const providerId = state.settings.providerId || 'auto';
@@ -1406,6 +1431,25 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       } finally {
         elements.saveButton.disabled = false;
         elements.saveButton.textContent = '保存设置';
+      }
+    }
+
+    async function syncProviderModels() {
+      if (!tg || !tg.initData) return;
+      elements.syncModelsButton.disabled = true;
+      elements.syncModelsButton.textContent = '同步中…';
+      showNotice('正在从 AI Hub 获取模型列表…', '');
+      try {
+        const response = await fetch('/api/miniapp/models/sync', { method: 'POST', headers: authHeaders() });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || data.error || '模型同步失败');
+        await loadSettings();
+        showNotice('模型同步完成：聊天模型 ' + Number(data.chatCount || 0) + ' 个，专用模型 ' + Number(data.specializedCount || 0) + ' 个。现在可以在模型下拉框中手动选择。', 'success');
+      } catch (error) {
+        showNotice(error.message || '模型同步失败。', 'failure');
+      } finally {
+        elements.syncModelsButton.disabled = false;
+        elements.syncModelsButton.textContent = '🔄 同步平台模型';
       }
     }
 
@@ -2181,6 +2225,8 @@ const MINI_APP_HTML = String.raw`<!doctype html>
     elements.providerSelect.addEventListener('change', function () {
       updateModelOptions('');
     });
+    elements.modelSelect.addEventListener('change', updateModelDescription);
+    elements.syncModelsButton.addEventListener('click', syncProviderModels);
 
     elements.settingsForm.addEventListener('submit', saveSettings);
 
@@ -2372,7 +2418,7 @@ function hasProviderCredential(config, providerId) {
   return Boolean(credentialMap[providerId]);
 }
 
-function buildProviderCatalog(config) {
+function buildProviderCatalog(config, providerManager = null) {
   const currentProvider = String(config.aiProvider || '');
   const fallbackProviders = Array.isArray(config.aiProviderFallbackOrder)
     ? config.aiProviderFallbackOrder
@@ -2387,23 +2433,31 @@ function buildProviderCatalog(config) {
         fallbackProviders.includes(providerId)
       );
     })
-    .map((providerId) => ({
-      id: providerId,
-      label: PROVIDER_LABELS[providerId] || providerId,
-      models:
-        providerId === 'auto'
+    .map((providerId) => {
+      const dynamicModels = providerId === 'auto' ? [] : providerManager?.getProviderModels?.(providerId) || [];
+      const modelDetails = providerId === 'auto' ? [] : providerManager?.getModelCatalog?.(providerId) || [];
+      return {
+        id: providerId,
+        label: PROVIDER_LABELS[providerId] || providerId,
+        models: providerId === 'auto'
           ? []
-          : Array.from(
-              new Set(
-                [
-                  ...(config.providerModels?.[providerId] || []),
-                  providerId === currentProvider ? config.defaultModel : ''
-                ]
-                  .map((item) => String(item || '').trim())
-                  .filter(Boolean)
-              )
-            )
-    }));
+          : Array.from(new Set([
+              ...dynamicModels,
+              ...(config.providerModels?.[providerId] || []),
+              providerId === currentProvider ? config.defaultModel : ''
+            ].map((item) => String(item || '').trim()).filter(Boolean))),
+        modelDetails: modelDetails.map((item) => ({
+          id: item.id,
+          description: item.description,
+          descriptionSource: item.descriptionSource,
+          capabilities: item.capabilities,
+          contextWindow: item.contextWindow,
+          endpointType: item.endpointType,
+          chatCompatible: item.chatCompatible
+        })),
+        discovery: providerManager?.getModelDiscoveryStatus?.(providerId) || null
+      };
+    });
 }
 
 function verifyTelegramInitData(initData, botToken, maxAgeSeconds = TELEGRAM_AUTH_MAX_AGE_SECONDS) {
@@ -2562,7 +2616,7 @@ function withInheritedNewsOption(options, currentValue, effectiveValue, inherite
   return items;
 }
 
-function serializeSettingsResponse({ db, config, userId, telegramLanguageCode = '' }) {
+function serializeSettingsResponse({ db, config, providerManager = null, userId, telegramLanguageCode = '' }) {
   const user = db.findUser(userId);
   const settings = db.getUserAISettings(userId);
   const news = db.getUserNewsSettings?.(userId) || {
@@ -2618,7 +2672,7 @@ function serializeSettingsResponse({ db, config, userId, telegramLanguageCode = 
       enabled: Boolean(supportUrl),
       url: supportUrl
     },
-    providers: buildProviderCatalog(config),
+    providers: buildProviderCatalog(config, providerManager),
     languages: LANGUAGE_OPTIONS,
     personas: PERSONA_OPTIONS,
     newsRegions: withInheritedNewsOption(
@@ -2642,8 +2696,8 @@ function serializeSettingsResponse({ db, config, userId, telegramLanguageCode = 
   };
 }
 
-function validateSettingsPayload(payload, config) {
-  const catalog = buildProviderCatalog(config);
+function validateSettingsPayload(payload, config, providerManager = null) {
+  const catalog = buildProviderCatalog(config, providerManager);
   const providerIds = new Set(catalog.map((item) => item.id));
   const providerId = String(payload.providerId || 'auto').trim();
 
@@ -3344,6 +3398,7 @@ async function handleMiniAppApi(req, res, context) {
       serializeSettingsResponse({
         db: context.db,
         config: context.config,
+        providerManager: context.providerManager,
         userId: auth.telegramUser.id,
         telegramLanguageCode: auth.telegramUser.language_code
       })
@@ -3354,7 +3409,7 @@ async function handleMiniAppApi(req, res, context) {
   if (req.method === 'PUT') {
     try {
       const payload = await readJsonBody(req);
-      const next = validateSettingsPayload(payload, context.config);
+      const next = validateSettingsPayload(payload, context.config, context.providerManager);
 
       context.db.setUserAISettings(auth.telegramUser.id, {
         providerId: next.providerId === 'auto' ? '' : next.providerId,
@@ -3376,6 +3431,7 @@ async function handleMiniAppApi(req, res, context) {
         serializeSettingsResponse({
           db: context.db,
           config: context.config,
+          providerManager: context.providerManager,
           userId: auth.telegramUser.id,
           telegramLanguageCode: auth.telegramUser.language_code
         })
@@ -3400,8 +3456,39 @@ async function handleMiniAppApi(req, res, context) {
   });
 }
 
-export function startHealthServer({ port, db, config, logger }) {
-  const context = { db, config, logger };
+async function handleMiniAppModelSync(req, res, context) {
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST');
+    sendJson(res, 405, { ok: false, error: 'METHOD_NOT_ALLOWED' });
+    return;
+  }
+  try {
+    const auth = await getAuthenticatedUser(req, context);
+    if (!isAdminUser(context.config, auth.telegramUser.id)) {
+      sendJson(res, 403, { ok: false, error: 'ADMIN_REQUIRED', message: '仅管理员可以同步平台模型。' });
+      return;
+    }
+    if (!context.providerManager?.refreshModels) throw new Error('MODEL_DISCOVERY_UNAVAILABLE');
+    const result = await context.providerManager.refreshModels('openai-compatible', { force: true });
+    sendJson(res, 200, {
+      ok: true,
+      count: result.count,
+      chatCount: result.chatCount,
+      specializedCount: Math.max(0, result.count - result.chatCount),
+      updatedAt: result.updatedAt
+    });
+  } catch (error) {
+    const authResponse = authErrorResponse(error);
+    if (authResponse.statusCode !== 401) {
+      sendJson(res, 502, { ok: false, error: 'MODEL_SYNC_FAILED', message: String(error.message || '模型同步失败。') });
+      return;
+    }
+    sendJson(res, authResponse.statusCode, authResponse.payload);
+  }
+}
+
+export function startHealthServer({ port, db, config, logger, providerManager = null }) {
+  const context = { db, config, logger, providerManager };
 
   const server = http.createServer((req, res) => {
     void (async () => {
@@ -3415,6 +3502,11 @@ export function startHealthServer({ port, db, config, logger }) {
 
       if (pathname === '/api/miniapp/settings') {
         await handleMiniAppApi(req, res, context);
+        return;
+      }
+
+      if (pathname === '/api/miniapp/models/sync') {
+        await handleMiniAppModelSync(req, res, context);
         return;
       }
 

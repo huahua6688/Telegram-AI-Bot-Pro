@@ -118,7 +118,8 @@ export async function createApplication() {
       port: runtimeConfig.healthPort,
       db,
       config: runtimeConfig,
-      logger
+      logger,
+      providerManager
     });
 
     installEnhancedStatusRoutes({
