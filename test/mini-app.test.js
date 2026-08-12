@@ -83,15 +83,33 @@ test('Mini App securely exposes settings without chat input actions', async (t) 
   assert.match(appHtml, /list="newsTimeZoneOptions"/);
   assert.match(appHtml, /设置语言（Language）/);
   assert.match(appHtml, /获取 AI Hub 最新模型/);
-  assert.match(appHtml, /<summary>用户与额度<\/summary>/);
+  assert.match(appHtml, /data-admin-pane-target="users"/);
   assert.match(appHtml, /class="bottom-nav"/);
   assert.match(appHtml, /data-view-target="settings"/);
   assert.match(appHtml, /data-view-target="billing"/);
   assert.match(appHtml, /data-view-target="history"/);
   assert.match(appHtml, /id="adminNavButton"/);
+  assert.doesNotMatch(appHtml, /XIOMN AI ASSISTANT/);
+  assert.doesNotMatch(appHtml, /class="quick-grid"/);
+  assert.match(appHtml, /data-admin-pane-target="users"/);
+  assert.match(appHtml, /id="adminUserStatus"/);
+  assert.match(appHtml, /id="adminUserSort"/);
+  assert.match(appHtml, /id="adminUserPrev"/);
+  assert.match(appHtml, /id="adminUserNext"/);
+  assert.match(appHtml, /id="adminUserSheet"/);
+  assert.match(appHtml, /id="adminSessionSearch"/);
+  assert.match(appHtml, /id="adminSessionStatus"/);
+  assert.match(appHtml, /id="adminSessionPrev"/);
+  assert.match(appHtml, /每页 20 人/);
   assert.match(appHtml, /新闻与地区高级设置/);
   assert.match(appHtml, /function switchView\(viewId, options\)/);
   assert.match(appHtml, /disableVerticalSwipes/);
+  assert.match(appHtml, /@media \(min-width: 840px\)/);
+  assert.match(appHtml, /grid-template-columns: clamp\(188px, 18vw, 224px\) minmax\(0, 1fr\)/);
+  assert.match(appHtml, /@media \(max-width: 639px\)/);
+  assert.match(appHtml, /@media \(max-height: 560px\) and \(max-width: 839px\)/);
+  assert.match(appHtml, /@media \(prefers-reduced-motion: reduce\)/);
+  assert.match(appHtml, /text-size-adjust: 100%/);
   const inlineScripts = [...appHtml.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)]
     .map((match) => match[1])
     .filter((script) => script.trim());
@@ -273,8 +291,8 @@ test('Mini App administrators can manage per-user daily quota and paid credit ba
   const appResponse = await fetch(`${base}/app`);
   const appHtml = await appResponse.text();
   assert.match(appHtml, /默认免费聊天/);
-  assert.match(appHtml, /保存个人免费聊天额度/);
-  assert.match(appHtml, /恢复默认免费聊天额度/);
+  assert.match(appHtml, /quotaInput\.dataset\.userQuotaInput/);
+  assert.match(appHtml, /resetQuota\.dataset\.userAction = 'reset-quota'/);
   assert.match(appHtml, /已购额度余额/);
   assert.match(appHtml, /保存已购额度/);
   assert.match(appHtml, /不影响每日免费额度/);
@@ -309,6 +327,34 @@ test('Mini App administrators can manage per-user daily quota and paid credit ba
     live_voice: 0,
     video: 0
   });
+
+  const filteredUsersResponse = await fetch(
+    `${base}/api/miniapp/admin/users?status=active&sort=usage&limit=1&offset=0`,
+    { headers: adminHeaders }
+  );
+  assert.equal(filteredUsersResponse.status, 200);
+  const filteredUsers = await filteredUsersResponse.json();
+  assert.equal(filteredUsers.limit, 1);
+  assert.equal(filteredUsers.offset, 0);
+  assert.ok(filteredUsers.total >= 1);
+  assert.equal(filteredUsers.items.length, 1);
+
+  await db.createSession({
+    chatId: 'admin-session-chat',
+    userId: targetUser.id,
+    threadId: 'main',
+    name: 'searchable session'
+  });
+  const sessionsResponse = await fetch(
+    `${base}/api/miniapp/admin/sessions?q=quota_user&status=active&sort=recent&limit=1&offset=0`,
+    { headers: adminHeaders }
+  );
+  assert.equal(sessionsResponse.status, 200);
+  const sessions = await sessionsResponse.json();
+  assert.equal(sessions.total, 1);
+  assert.equal(sessions.limit, 1);
+  assert.equal(sessions.offset, 0);
+  assert.equal(sessions.items[0].userId, String(targetUser.id));
 
   const setResponse = await fetch(`${base}/api/miniapp/admin/users/${targetUser.id}`, {
     method: 'PATCH',

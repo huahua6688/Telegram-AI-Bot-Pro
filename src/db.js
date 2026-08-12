@@ -2018,36 +2018,60 @@ export class BotDatabase {
     }
   }
 
-  listUsers({ q = '', limit = 50, offset = 0 } = {}) {
+  listUsers({ q = '', status = 'all', sort = 'recent', limit = 50, offset = 0 } = {}) {
     const keyword = String(q || '').trim();
-    const hasKeyword = Boolean(keyword);
+    const filters = [];
+    const params = [];
+    if (keyword) {
+      filters.push('(users.id LIKE ? OR users.username LIKE ? OR users.first_name LIKE ? OR users.last_name LIKE ?)');
+      params.push(...Array(4).fill(`%${keyword}%`));
+    }
+    if (status === 'active') filters.push('users.is_blocked = 0');
+    if (status === 'blocked') filters.push('users.is_blocked = 1');
+    if (status === 'admin') filters.push('users.is_admin = 1');
+    const whereClause = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
+    const orderBy = {
+      recent: 'users.last_seen_at DESC, users.updated_at DESC',
+      oldest: 'users.created_at ASC, users.id ASC',
+      usage: 'users.total_messages DESC, users.last_seen_at DESC',
+      name: 'users.username COLLATE NOCASE ASC, users.first_name COLLATE NOCASE ASC, users.id ASC'
+    }[sort] || 'users.last_seen_at DESC, users.updated_at DESC';
     const rows = this.db
       .prepare(
         `SELECT users.*,
                 (SELECT daily_quota FROM user_quota_settings WHERE user_id = users.id) AS daily_quota_override
          FROM users
-         ${hasKeyword ? 'WHERE users.id LIKE ? OR users.username LIKE ? OR users.first_name LIKE ? OR users.last_name LIKE ?' : ''}
-         ORDER BY users.last_seen_at DESC, users.updated_at DESC
+         ${whereClause}
+         ORDER BY ${orderBy}
          LIMIT ? OFFSET ?`
       )
       .all(
-        ...(hasKeyword ? Array(4).fill(`%${keyword}%`) : []),
+        ...params,
         Math.max(1, Number(limit) || 50),
         Math.max(0, Number(offset) || 0)
       );
     return rows.map(rowToUser);
   }
 
-  countUsers({ q = '' } = {}) {
+  countUsers({ q = '', status = 'all' } = {}) {
     const keyword = String(q || '').trim();
-    const hasKeyword = Boolean(keyword);
+    const filters = [];
+    const params = [];
+    if (keyword) {
+      filters.push('(id LIKE ? OR username LIKE ? OR first_name LIKE ? OR last_name LIKE ?)');
+      params.push(...Array(4).fill(`%${keyword}%`));
+    }
+    if (status === 'active') filters.push('is_blocked = 0');
+    if (status === 'blocked') filters.push('is_blocked = 1');
+    if (status === 'admin') filters.push('is_admin = 1');
+    const whereClause = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
     const row = this.db
       .prepare(
         `SELECT COUNT(*) AS count
          FROM users
-         ${hasKeyword ? 'WHERE id LIKE ? OR username LIKE ? OR first_name LIKE ? OR last_name LIKE ?' : ''}`
+         ${whereClause}`
       )
-      .get(...(hasKeyword ? Array(4).fill(`%${keyword}%`) : []));
+      .get(...params);
     return Number(row?.count || 0);
   }
 
@@ -2469,8 +2493,79 @@ export class BotDatabase {
     }));
   }
 
-  listAdminSessions({ userId = '', chatId = '', status = '', limit = 50, offset = 0 } = {}) {
-    return this.listSessions({ userId, chatId, status, limit, offset });
+  listAdminSessions({ q = '', userId = '', chatId = '', status = '', sort = 'recent', limit = 50, offset = 0 } = {}) {
+    const keyword = String(q || '').trim();
+    const filters = [];
+    const params = [];
+    if (keyword) {
+      filters.push(`(
+        sessions.id LIKE ? OR sessions.user_id LIKE ? OR sessions.chat_id LIKE ? OR sessions.name LIKE ? OR
+        users.username LIKE ? OR users.first_name LIKE ? OR users.last_name LIKE ?
+      )`);
+      params.push(...Array(7).fill(`%${keyword}%`));
+    }
+    if (userId) {
+      filters.push('sessions.user_id = ?');
+      params.push(String(userId));
+    }
+    if (chatId) {
+      filters.push('sessions.chat_id = ?');
+      params.push(String(chatId));
+    }
+    if (status) {
+      filters.push('sessions.status = ?');
+      params.push(String(status));
+    }
+    const whereClause = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
+    const orderBy = sort === 'oldest'
+      ? 'sessions.last_accessed_at ASC, sessions.created_at ASC'
+      : 'sessions.last_accessed_at DESC, sessions.created_at DESC';
+    const rows = this.db.prepare(
+      `SELECT sessions.*
+       FROM sessions
+       LEFT JOIN users ON users.id = sessions.user_id
+       ${whereClause}
+       ORDER BY ${orderBy}
+       LIMIT ? OFFSET ?`
+    ).all(
+      ...params,
+      Math.max(1, Number(limit) || 50),
+      Math.max(0, Number(offset) || 0)
+    );
+    return rows.map(rowToSession);
+  }
+
+  countAdminSessions({ q = '', userId = '', chatId = '', status = '' } = {}) {
+    const keyword = String(q || '').trim();
+    const filters = [];
+    const params = [];
+    if (keyword) {
+      filters.push(`(
+        sessions.id LIKE ? OR sessions.user_id LIKE ? OR sessions.chat_id LIKE ? OR sessions.name LIKE ? OR
+        users.username LIKE ? OR users.first_name LIKE ? OR users.last_name LIKE ?
+      )`);
+      params.push(...Array(7).fill(`%${keyword}%`));
+    }
+    if (userId) {
+      filters.push('sessions.user_id = ?');
+      params.push(String(userId));
+    }
+    if (chatId) {
+      filters.push('sessions.chat_id = ?');
+      params.push(String(chatId));
+    }
+    if (status) {
+      filters.push('sessions.status = ?');
+      params.push(String(status));
+    }
+    const whereClause = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
+    const row = this.db.prepare(
+      `SELECT COUNT(*) AS count
+       FROM sessions
+       LEFT JOIN users ON users.id = sessions.user_id
+       ${whereClause}`
+    ).get(...params);
+    return Number(row?.count || 0);
   }
 
   getSessionMessageSummary(sessionId, { limit = 20 } = {}) {

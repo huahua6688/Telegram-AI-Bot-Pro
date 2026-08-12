@@ -153,6 +153,8 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       color: var(--tg-theme-text-color, #111827);
       background: var(--tg-theme-bg-color, #f3f4f6);
+      -webkit-text-size-adjust: 100%;
+      text-size-adjust: 100%;
     }
 
     * { box-sizing: border-box; }
@@ -185,8 +187,8 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       align-items: center;
       justify-content: space-between;
       gap: 12px;
-      min-height: 58px;
-      padding: max(10px, env(safe-area-inset-top)) 16px 10px;
+      min-height: 50px;
+      padding: max(8px, env(safe-area-inset-top)) 14px 8px;
       border-bottom: 1px solid rgba(127, 127, 127, .14);
       background: var(--tg-theme-bg-color, #f3f4f6);
       background: color-mix(in srgb, var(--tg-theme-bg-color, #f3f4f6) 88%, transparent);
@@ -194,40 +196,8 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       -webkit-backdrop-filter: blur(20px) saturate(160%);
     }
 
-    .app-brand {
-      display: flex;
-      align-items: center;
-      gap: 10px;
+    .app-title {
       min-width: 0;
-    }
-
-    .app-mark {
-      display: grid;
-      place-items: center;
-      width: 34px;
-      height: 34px;
-      border-radius: 10px;
-      color: #fff;
-      background: linear-gradient(145deg, #2481cc, #6d5ce7);
-      box-shadow: 0 5px 14px rgba(36, 129, 204, .22);
-      font-size: 17px;
-      font-weight: 900;
-    }
-
-    .app-brand-copy { min-width: 0; }
-
-    .app-brand-copy span {
-      display: block;
-      color: var(--tg-theme-hint-color, #6b7280);
-      font-size: 10px;
-      font-weight: 800;
-      letter-spacing: .08em;
-      text-transform: uppercase;
-    }
-
-    .app-brand-copy strong {
-      display: block;
-      margin-top: 1px;
       overflow: hidden;
       font-size: 17px;
       text-overflow: ellipsis;
@@ -236,12 +206,12 @@ const MINI_APP_HTML = String.raw`<!doctype html>
 
     .header-close {
       width: auto;
-      min-height: 36px;
-      padding: 7px 12px;
-      border-radius: 999px;
+      min-height: 34px;
+      padding: 6px 8px;
+      border-radius: 10px;
       color: var(--tg-theme-button-color, #2481cc);
-      background: rgba(36, 129, 204, .1);
-      font-size: 13px;
+      background: transparent;
+      font-size: 14px;
     }
 
     .app-content {
@@ -306,39 +276,14 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       background: rgba(36, 129, 204, .08);
     }
 
-    .home-hero {
-      padding: 8px 4px 4px;
+    .page-heading { display: none; }
+
+    .welcome-line {
+      margin: 0 2px 10px;
+      color: var(--tg-theme-hint-color, #6b7280);
+      font-size: 13px;
+      line-height: 1.45;
     }
-
-    .home-hero h1 { font-size: 27px; }
-
-    .quick-grid {
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 10px;
-      margin-top: 12px;
-    }
-
-    .quick-grid.has-admin { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-
-    .quick-action {
-      min-height: 80px;
-      padding: 12px 10px;
-      border: 1px solid rgba(127, 127, 127, .12);
-      text-align: left;
-      background: var(--tg-theme-secondary-bg-color, #ffffff);
-      box-shadow: 0 6px 20px rgba(0, 0, 0, .035);
-    }
-
-    .quick-action span { display: block; font-size: 21px; }
-    .quick-action strong { display: block; margin-top: 7px; font-size: 13px; }
-
-    .page-heading {
-      padding: 4px 4px 2px;
-    }
-
-    .page-heading h1 { font-size: 25px; }
-    .page-heading p { margin: 6px 0 0; color: var(--tg-theme-hint-color, #6b7280); font-size: 13px; line-height: 1.45; }
 
     .eyebrow {
       margin: 0 0 8px;
@@ -366,7 +311,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
     }
 
     .card {
-      margin-top: 14px;
+      margin-top: 10px;
       padding: 16px;
       border: 1px solid rgba(127, 127, 127, .11);
       border-radius: 17px;
@@ -544,6 +489,8 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       background: var(--tg-theme-secondary-bg-color, #ffffff);
     }
 
+    .status-row > * { min-width: 0; }
+
     .feature-action {
       grid-column: 1 / -1;
       min-height: 52px;
@@ -636,6 +583,39 @@ const MINI_APP_HTML = String.raw`<!doctype html>
     .admin-section[open] > summary::after { transform: rotate(-90deg); }
     .admin-section-body { padding: 0 14px 14px; }
 
+    .admin-tabs {
+      position: sticky;
+      top: -14px;
+      z-index: 5;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 4px;
+      margin: -2px 0 12px;
+      padding: 4px;
+      border-radius: 13px;
+      background: rgba(127, 127, 127, .12);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+    }
+
+    .admin-tab {
+      min-height: 38px;
+      padding: 7px 8px;
+      border-radius: 10px;
+      color: var(--tg-theme-hint-color, #6b7280);
+      background: transparent;
+      font-size: 13px;
+    }
+
+    .admin-tab.active {
+      color: var(--tg-theme-text-color, #111827);
+      background: var(--tg-theme-secondary-bg-color, #ffffff);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, .07);
+    }
+
+    .admin-pane { display: none; }
+    .admin-pane.active { display: block; }
+
     .settings-details {
       margin-top: 16px;
       border-top: 1px solid rgba(127, 127, 127, .16);
@@ -718,6 +698,29 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       margin-bottom: 10px;
     }
 
+    .admin-filters {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .result-bar,
+    .pagination {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--tg-theme-hint-color, #6b7280);
+      font-size: 12px;
+    }
+
+    .pagination > span { flex: 0 0 auto; white-space: nowrap; }
+
+    .result-bar { margin: 4px 2px 10px; }
+    .pagination { margin-top: 12px; }
+    .pagination button { min-width: 76px; }
+
     input[type="search"],
     input[type="number"] {
       min-width: 0;
@@ -767,6 +770,21 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       justify-content: flex-end;
       margin-top: 11px;
     }
+
+    .user-head > div,
+    .session-item,
+    .provider-item > div { min-width: 0; }
+
+    .user-item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: center;
+      gap: 10px;
+      min-height: 72px;
+    }
+
+    .user-item .user-head { min-width: 0; }
+    .user-item .user-actions { margin: 0; }
 
     .quota-editor {
       display: grid;
@@ -941,6 +959,50 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       background: var(--tg-theme-bg-color, #f9fafb);
     }
 
+    .sheet-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      display: flex;
+      align-items: flex-end;
+      justify-content: center;
+      padding-top: env(safe-area-inset-top);
+      background: rgba(0, 0, 0, .32);
+    }
+
+    .sheet-backdrop.hidden { display: none; }
+
+    .sheet-panel {
+      width: min(100%, 640px);
+      max-height: min(88dvh, 760px);
+      overflow: hidden;
+      border-radius: 22px 22px 0 0;
+      background: var(--tg-theme-secondary-bg-color, #ffffff);
+      box-shadow: 0 -16px 42px rgba(0, 0, 0, .2);
+    }
+
+    .sheet-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 16px 10px;
+      border-bottom: 1px solid rgba(127, 127, 127, .15);
+    }
+
+    .sheet-head strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sheet-body { max-height: calc(min(88dvh, 760px) - 60px); overflow-y: auto; padding: 4px 16px max(18px, env(safe-area-inset-bottom)); }
+    .sheet-body .conversation-viewer { margin: 0; padding: 10px 0 0; background: transparent; }
+
+    .sheet-close {
+      width: auto;
+      min-height: 34px;
+      padding: 6px 9px;
+      color: var(--tg-theme-button-color, #2481cc);
+      background: rgba(36, 129, 204, .1);
+      font-size: 13px;
+    }
+
     .conversation-head {
       display: flex;
       align-items: center;
@@ -1004,45 +1066,146 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       text-align: center;
     }
 
-    @media (min-width: 641px) {
+    @media (hover: hover) and (pointer: fine) {
+      button:not(:disabled):hover { filter: brightness(.97); }
+      .nav-button:not(.active):hover,
+      .admin-tab:not(.active):hover { background: rgba(127, 127, 127, .08); }
+    }
+
+    @media (min-width: 840px) {
       body { background: #e8ebf0; }
-      .shell { box-shadow: 0 0 50px rgba(0, 0, 0, .12); }
+
+      .shell {
+        width: min(100%, 1280px);
+        display: grid;
+        grid-template-columns: clamp(188px, 18vw, 224px) minmax(0, 1fr);
+        grid-template-rows: auto minmax(0, 1fr);
+        box-shadow: 0 0 50px rgba(0, 0, 0, .12);
+      }
+
+      .app-header {
+        grid-column: 1 / -1;
+        grid-row: 1;
+        padding-right: 22px;
+        padding-left: 22px;
+      }
+
+      .app-content {
+        grid-column: 2;
+        grid-row: 2;
+        padding: clamp(20px, 3vw, 34px);
+        scrollbar-gutter: stable;
+      }
+
+      .app-view.active {
+        width: min(100%, 920px);
+        margin: 0 auto;
+      }
+
+      .app-view[data-view="admin"].active { width: 100%; }
+
+      .bottom-nav {
+        grid-column: 1;
+        grid-row: 2;
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        justify-content: flex-start;
+        gap: 5px;
+        padding: 18px 12px;
+        border-top: 0;
+        border-right: 1px solid rgba(127, 127, 127, .16);
+      }
+
+      .nav-button {
+        grid-template-columns: 28px minmax(0, 1fr);
+        place-items: center start;
+        gap: 10px;
+        min-height: 46px;
+        padding: 8px 12px;
+        text-align: left;
+        font-size: 14px;
+      }
+
+      .nav-button svg { width: 21px; height: 21px; }
+      .stats-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+
+      .sheet-backdrop {
+        align-items: center;
+        padding: 24px;
+      }
+
+      .sheet-panel {
+        width: min(720px, 100%);
+        max-height: min(84dvh, 780px);
+        border-radius: 22px;
+      }
+
+      .sheet-body { max-height: calc(min(84dvh, 780px) - 60px); }
+    }
+
+    @media (min-width: 1120px) {
+      .admin-pane[data-admin-pane="users"] .user-list,
+      .admin-pane[data-admin-pane="sessions"] .session-list {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 639px) {
+      select,
+      input[list],
+      input[type="search"],
+      input[type="number"] { font-size: 16px; }
+
+      .admin-filters { grid-template-columns: 1fr; }
     }
 
     @media (max-width: 390px) {
       .app-content { padding-right: 10px; padding-left: 10px; }
       .nav-button { font-size: 9px; }
       .card { padding: 14px; }
+      .status-row { gap: 10px; }
+      .value { max-width: 60%; }
+      .pagination button { min-width: 68px; padding-right: 9px; padding-left: 9px; }
+    }
+
+    @media (max-width: 340px) {
+      .actions { grid-template-columns: 1fr; }
+      .feature-action { grid-column: auto; }
+      .stats-grid { grid-template-columns: 1fr; }
+      .app-content { padding-right: 8px; padding-left: 8px; }
+      .bottom-nav { padding-right: 4px; padding-left: 4px; }
+      .nav-button svg { width: 20px; height: 20px; }
+    }
+
+    @media (max-height: 560px) and (max-width: 839px) {
+      .app-header { min-height: 44px; padding-top: 5px; padding-bottom: 5px; }
+      .bottom-nav { padding-top: 4px; padding-bottom: max(4px, env(safe-area-inset-bottom)); }
+      .nav-button { min-height: 43px; }
+      .nav-button svg { width: 19px; height: 19px; }
+      .app-content { padding-top: 10px; padding-bottom: 12px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        scroll-behavior: auto !important;
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .01ms !important;
+      }
     }
   </style>
 </head>
 <body>
   <main class="shell">
     <header class="app-header">
-      <div class="app-brand">
-        <div class="app-mark" aria-hidden="true">X</div>
-        <div class="app-brand-copy">
-          <span>Project Xiomn</span>
-          <strong id="appTitle">控制台</strong>
-        </div>
-      </div>
+      <strong class="app-title" id="appTitle">控制台</strong>
       <button class="header-close" id="closeButton" type="button">完成</button>
     </header>
 
     <div class="app-content" id="appContent">
     <section class="app-view active" id="homeView" data-view="home">
-      <div class="home-hero">
-        <p class="eyebrow">XIOMN AI ASSISTANT</p>
-        <h1>你好</h1>
-        <p class="lead" id="welcome">正在连接 Telegram 和 Bot 服务……</p>
-      </div>
-
-      <div class="quick-grid" id="quickGrid" aria-label="快捷入口">
-        <button class="quick-action" type="button" data-view-target="settings"><span>⚙️</span><strong>AI 设置</strong></button>
-        <button class="quick-action" type="button" data-view-target="billing"><span>⭐️</span><strong>余额与额度</strong></button>
-        <button class="quick-action" type="button" data-view-target="history"><span>💬</span><strong>聊天记录</strong></button>
-        <button class="quick-action hidden" id="adminQuickAction" type="button" data-view-target="admin"><span>🛡️</span><strong>管理中心</strong></button>
-      </div>
+      <p class="welcome-line" id="welcome">正在连接 Telegram 和 Bot 服务……</p>
 
     <section class="card">
       <div class="section-head">
@@ -1231,11 +1394,6 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       </div>
 
     <section class="card hidden" id="adminPanel">
-      <div class="section-head">
-        <h2>管理中心</h2>
-        <span class="badge">Admin</span>
-      </div>
-
       <div id="adminNotice" class="notice hidden"></div>
 
       <div class="stats-grid">
@@ -1257,39 +1415,64 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         </div>
       </div>
 
-      <details class="admin-section">
-        <summary>AI 平台状态</summary>
-        <div class="admin-section-body"><div class="provider-list" id="adminProviderList"></div></div>
-      </details>
+      <div class="admin-tabs" role="tablist" aria-label="管理分类">
+        <button class="admin-tab active" type="button" data-admin-pane-target="overview">概览</button>
+        <button class="admin-tab" type="button" data-admin-pane-target="users">用户</button>
+        <button class="admin-tab" type="button" data-admin-pane-target="sessions">会话</button>
+      </div>
 
-      <details class="admin-section">
-        <summary>用户与额度</summary>
-        <div class="admin-section-body">
-        <p class="small">这里单独覆盖的是账号的每日免费聊天额度；其他五类每日免费额度由部署环境统一配置，0 表示不限。</p>
-        <p class="small">六类已购额度余额可按账号独立修改，与每日免费额度分开计算；管理员使用仍然免费。</p>
+      <div class="admin-pane active" data-admin-pane="overview">
+        <details class="admin-section">
+          <summary>AI 平台状态</summary>
+          <div class="admin-section-body"><div class="provider-list" id="adminProviderList"></div></div>
+        </details>
+      </div>
+
+      <div class="admin-pane" data-admin-pane="users">
         <div class="admin-toolbar">
           <input id="adminUserSearch" type="search" placeholder="搜索 ID、用户名或姓名" />
           <button class="secondary compact-button" id="adminSearchButton" type="button">搜索</button>
         </div>
-        <div class="user-list" id="adminUserList"></div></div>
-      </details>
-
-      <details class="admin-section">
-        <summary>会话管理</summary>
-        <div class="admin-section-body">
-        <div class="admin-toolbar">
-          <input id="adminSessionUserSearch" type="search" placeholder="按 Telegram 用户 ID 筛选" />
-          <button class="secondary compact-button" id="adminSessionSearchButton" type="button">筛选</button>
+        <div class="admin-filters">
+          <select id="adminUserStatus" aria-label="用户状态">
+            <option value="all">全部状态</option><option value="active">正常用户</option>
+            <option value="blocked">已封禁</option><option value="admin">管理员</option>
+          </select>
+          <select id="adminUserSort" aria-label="用户排序">
+            <option value="recent">最近活跃</option><option value="usage">使用最多</option>
+            <option value="name">用户名</option><option value="oldest">最早注册</option>
+          </select>
         </div>
+        <div class="result-bar"><span id="adminUserResult">—</span><span>每页 20 人</span></div>
+        <div class="user-list" id="adminUserList"></div>
+        <div class="pagination">
+          <button class="secondary compact-button" id="adminUserPrev" type="button">上一页</button>
+          <span id="adminUserPage">—</span>
+          <button class="secondary compact-button" id="adminUserNext" type="button">下一页</button>
+        </div>
+      </div>
+
+      <div class="admin-pane" data-admin-pane="sessions">
+        <div class="admin-toolbar">
+          <input id="adminSessionSearch" type="search" placeholder="搜索用户、会话、聊天 ID" />
+          <button class="secondary compact-button" id="adminSessionSearchButton" type="button">搜索</button>
+        </div>
+        <div class="admin-filters">
+          <select id="adminSessionStatus" aria-label="会话状态">
+            <option value="">全部状态</option><option value="active">活跃</option><option value="archived">已归档</option>
+          </select>
+          <select id="adminSessionSort" aria-label="会话排序">
+            <option value="recent">最近更新</option><option value="oldest">最早更新</option>
+          </select>
+        </div>
+        <div class="result-bar"><span id="adminSessionResult">—</span><span>每页 20 个</span></div>
         <div class="session-list" id="adminSessionList"></div>
-        <div class="conversation-viewer hidden" id="adminSessionViewer">
-          <div class="conversation-head">
-            <strong id="adminSessionViewerTitle">会话摘要</strong>
-            <button class="secondary compact-button" id="adminSessionViewerClose" type="button">关闭</button>
-          </div>
-          <div class="conversation-messages" id="adminSessionMessages"></div>
-        </div></div>
-      </details>
+        <div class="pagination">
+          <button class="secondary compact-button" id="adminSessionPrev" type="button">上一页</button>
+          <span id="adminSessionPage">—</span>
+          <button class="secondary compact-button" id="adminSessionNext" type="button">下一页</button>
+        </div>
+      </div>
     </section>
     </section>
     </div>
@@ -1311,6 +1494,20 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 4.6 2.8 8 7 10 4.2-2 7-5.4 7-10V6Z"/><path d="m9 12 2 2 4-4"/></svg><span>管理</span>
       </button>
     </nav>
+
+    <div class="sheet-backdrop hidden" id="adminUserSheet" role="dialog" aria-modal="true" aria-labelledby="adminUserSheetTitle">
+      <div class="sheet-panel">
+        <div class="sheet-head"><strong id="adminUserSheetTitle">用户详情</strong><button class="sheet-close" id="adminUserSheetClose" type="button">关闭</button></div>
+        <div class="sheet-body" id="adminUserSheetBody"></div>
+      </div>
+    </div>
+
+    <div class="sheet-backdrop hidden" id="adminSessionSheet" role="dialog" aria-modal="true" aria-labelledby="adminSessionViewerTitle">
+      <div class="sheet-panel">
+        <div class="sheet-head"><strong id="adminSessionViewerTitle">会话摘要</strong><button class="sheet-close" id="adminSessionViewerClose" type="button">关闭</button></div>
+        <div class="sheet-body"><div class="conversation-viewer"><div class="conversation-messages" id="adminSessionMessages"></div></div></div>
+      </div>
+    </div>
   </main>
 
   <script>
@@ -1337,18 +1534,24 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       adminLoaded: false,
       adminUsers: [],
       adminSessions: [],
+      adminUsersLoaded: false,
+      adminSessionsLoaded: false,
+      adminUserPage: 0,
+      adminUserTotal: 0,
+      adminSelectedUserId: '',
+      adminSessionPage: 0,
+      adminSessionTotal: 0,
+      adminPageSize: 20,
       supportUrl: ''
     };
 
     const elements = {
       appContent: document.getElementById('appContent'),
       appTitle: document.getElementById('appTitle'),
-      quickGrid: document.getElementById('quickGrid'),
       appViews: Array.from(document.querySelectorAll('.app-view')),
       viewButtons: Array.from(document.querySelectorAll('[data-view-target]')),
       navButtons: Array.from(document.querySelectorAll('.nav-button')),
       adminNavButton: document.getElementById('adminNavButton'),
-      adminQuickAction: document.getElementById('adminQuickAction'),
       welcome: document.getElementById('welcome'),
       statusBadge: document.getElementById('statusBadge'),
       provider: document.getElementById('provider'),
@@ -1398,13 +1601,31 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       adminMessages: document.getElementById('adminMessages'),
       adminAiCalls: document.getElementById('adminAiCalls'),
       adminProviderList: document.getElementById('adminProviderList'),
+      adminTabs: Array.from(document.querySelectorAll('[data-admin-pane-target]')),
+      adminPanes: Array.from(document.querySelectorAll('[data-admin-pane]')),
       adminUserSearch: document.getElementById('adminUserSearch'),
+      adminUserStatus: document.getElementById('adminUserStatus'),
+      adminUserSort: document.getElementById('adminUserSort'),
       adminSearchButton: document.getElementById('adminSearchButton'),
       adminUserList: document.getElementById('adminUserList'),
-      adminSessionUserSearch: document.getElementById('adminSessionUserSearch'),
+      adminUserResult: document.getElementById('adminUserResult'),
+      adminUserPage: document.getElementById('adminUserPage'),
+      adminUserPrev: document.getElementById('adminUserPrev'),
+      adminUserNext: document.getElementById('adminUserNext'),
+      adminUserSheet: document.getElementById('adminUserSheet'),
+      adminUserSheetTitle: document.getElementById('adminUserSheetTitle'),
+      adminUserSheetBody: document.getElementById('adminUserSheetBody'),
+      adminUserSheetClose: document.getElementById('adminUserSheetClose'),
+      adminSessionSearch: document.getElementById('adminSessionSearch'),
+      adminSessionStatus: document.getElementById('adminSessionStatus'),
+      adminSessionSort: document.getElementById('adminSessionSort'),
       adminSessionSearchButton: document.getElementById('adminSessionSearchButton'),
       adminSessionList: document.getElementById('adminSessionList'),
-      adminSessionViewer: document.getElementById('adminSessionViewer'),
+      adminSessionResult: document.getElementById('adminSessionResult'),
+      adminSessionPage: document.getElementById('adminSessionPage'),
+      adminSessionPrev: document.getElementById('adminSessionPrev'),
+      adminSessionNext: document.getElementById('adminSessionNext'),
+      adminSessionSheet: document.getElementById('adminSessionSheet'),
       adminSessionViewerTitle: document.getElementById('adminSessionViewerTitle'),
       adminSessionViewerClose: document.getElementById('adminSessionViewerClose'),
       adminSessionMessages: document.getElementById('adminSessionMessages'),
@@ -1659,13 +1880,9 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       if (state.profile.isAdmin) {
         elements.adminPanel.classList.remove('hidden');
         elements.adminNavButton.classList.remove('hidden');
-        elements.adminQuickAction.classList.remove('hidden');
-        elements.quickGrid.classList.add('has-admin');
       } else {
         elements.adminPanel.classList.add('hidden');
         elements.adminNavButton.classList.add('hidden');
-        elements.adminQuickAction.classList.add('hidden');
-        elements.quickGrid.classList.remove('has-admin');
         if (state.activeView === 'admin') switchView('home', { instant: true });
       }
     }
@@ -2078,164 +2295,157 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       return Number(value || 0) > 0 ? String(Number(value)) : '不限';
     }
 
+    function appendAdminUserEditor(container, user) {
+      const meta = document.createElement('div');
+      meta.className = 'user-meta';
+      meta.textContent = [
+        'ID ' + user.id,
+        user.username ? '@' + user.username : '',
+        '今日免费聊天 ' + Number(user.dailyUsageCount || 0) + ' / ' + quotaDisplayValue(user.dailyQuota),
+        '累计请求 ' + Number(user.totalMessages || 0),
+        '最近活跃 ' + formatDateTime(user.lastSeenAt)
+      ].filter(Boolean).join(' · ');
+      container.appendChild(meta);
+
+      const actions = document.createElement('div');
+      actions.className = 'user-actions';
+      const blockButton = document.createElement('button');
+      blockButton.type = 'button';
+      blockButton.className = user.isBlocked ? 'success-button compact-button' : 'danger-button compact-button';
+      blockButton.textContent = user.isBlocked ? '解除封禁' : '封禁用户';
+      blockButton.dataset.userId = String(user.id);
+      blockButton.dataset.blocked = user.isBlocked ? 'true' : 'false';
+      blockButton.dataset.userAction = 'toggle-block';
+      const isSelf = state.profile && String(state.profile.id) === String(user.id);
+      blockButton.disabled = Boolean(user.isAdmin || isSelf);
+      if (isSelf) blockButton.textContent = '当前账号';
+      if (user.isAdmin && !isSelf) blockButton.textContent = '管理员账号';
+      actions.appendChild(blockButton);
+      container.appendChild(actions);
+
+      const quotaEditor = document.createElement('div');
+      quotaEditor.className = 'quota-editor';
+      const quotaField = document.createElement('label');
+      quotaField.className = 'quota-field';
+      quotaField.textContent = '个人每日免费聊天额度（0 表示不限）';
+      const quotaInput = document.createElement('input');
+      quotaInput.type = 'number';
+      quotaInput.min = '0';
+      quotaInput.max = '1000000';
+      quotaInput.step = '1';
+      quotaInput.inputMode = 'numeric';
+      quotaInput.dataset.userQuotaInput = String(user.id);
+      quotaInput.value = user.usesGlobalQuota ? '' : String(Number(user.dailyQuotaOverride || 0));
+      quotaInput.placeholder = '默认免费聊天：' + quotaDisplayValue(user.dailyQuota);
+      quotaField.appendChild(quotaInput);
+      const saveQuota = document.createElement('button');
+      saveQuota.type = 'button';
+      saveQuota.className = 'primary compact-button';
+      saveQuota.textContent = '保存';
+      saveQuota.dataset.userId = String(user.id);
+      saveQuota.dataset.userAction = 'save-quota';
+      const resetQuota = document.createElement('button');
+      resetQuota.type = 'button';
+      resetQuota.className = 'secondary compact-button';
+      resetQuota.textContent = '恢复默认';
+      resetQuota.dataset.userId = String(user.id);
+      resetQuota.dataset.userAction = 'reset-quota';
+      resetQuota.disabled = Boolean(user.usesGlobalQuota);
+      quotaEditor.appendChild(quotaField);
+      quotaEditor.appendChild(saveQuota);
+      quotaEditor.appendChild(resetQuota);
+      container.appendChild(quotaEditor);
+
+      const creditEditor = document.createElement('div');
+      creditEditor.className = 'credit-editor';
+      const creditHead = document.createElement('div');
+      creditHead.className = 'credit-editor-head';
+      creditHead.innerHTML = '<span class="credit-editor-title">已购额度余额</span><span class="credit-editor-note">不影响每日免费额度</span>';
+      creditEditor.appendChild(creditHead);
+      const creditGrid = document.createElement('div');
+      creditGrid.className = 'credit-grid';
+      const balances = user.creditBalances || {};
+      creditDefinitions.forEach(function (credit) {
+        const field = document.createElement('label');
+        field.className = 'credit-field';
+        field.textContent = credit.label;
+        const input = document.createElement('input');
+        input.type = 'number';
+        input.min = '0';
+        input.max = String(maxAdminCreditBalance);
+        input.step = '1';
+        input.inputMode = 'numeric';
+        input.value = String(Number(balances[credit.id] || 0));
+        input.dataset.userCreditInput = String(user.id);
+        input.dataset.creditType = credit.id;
+        field.appendChild(input);
+        creditGrid.appendChild(field);
+      });
+      creditEditor.appendChild(creditGrid);
+      const creditActions = document.createElement('div');
+      creditActions.className = 'credit-actions';
+      const saveCredits = document.createElement('button');
+      saveCredits.type = 'button';
+      saveCredits.className = 'primary compact-button';
+      saveCredits.textContent = '保存已购额度';
+      saveCredits.dataset.userId = String(user.id);
+      saveCredits.dataset.userAction = 'save-credits';
+      creditActions.appendChild(saveCredits);
+      creditEditor.appendChild(creditActions);
+      container.appendChild(creditEditor);
+    }
+
+    function openAdminUser(userId) {
+      const user = state.adminUsers.find(function (item) { return String(item.id) === String(userId); });
+      if (!user) return;
+      state.adminSelectedUserId = String(user.id);
+      elements.adminUserSheetTitle.textContent = userDisplayName(user);
+      elements.adminUserSheetBody.innerHTML = '';
+      appendAdminUserEditor(elements.adminUserSheetBody, user);
+      elements.adminUserSheet.classList.remove('hidden');
+    }
+
+    function closeAdminUser() {
+      state.adminSelectedUserId = '';
+      elements.adminUserSheet.classList.add('hidden');
+      elements.adminUserSheetBody.innerHTML = '';
+    }
+
     function renderAdminUsers(users) {
       state.adminUsers = users || [];
       elements.adminUserList.innerHTML = '';
-
       state.adminUsers.forEach(function (user) {
         const item = document.createElement('div');
         item.className = 'user-item';
-
         const head = document.createElement('div');
         head.className = 'user-head';
-
         const copy = document.createElement('div');
         const name = document.createElement('div');
-        const meta = document.createElement('div');
-        const pill = document.createElement('span');
-
         name.className = 'user-name';
         name.textContent = userDisplayName(user);
-
+        const meta = document.createElement('div');
         meta.className = 'user-meta';
-        const parts = [
-          'ID ' + user.id,
-          user.username ? '@' + user.username : '',
-          '今日免费聊天 ' + Number(user.dailyUsageCount || 0) + ' / ' + quotaDisplayValue(user.dailyQuota),
-          user.usesGlobalQuota
-            ? '使用默认免费聊天额度'
-            : '个人免费聊天额度 ' + quotaDisplayValue(user.dailyQuotaOverride),
-          '累计请求 ' + Number(user.totalMessages || 0)
-        ].filter(Boolean);
-        meta.textContent = parts.join(' · ');
-
-        if (user.isAdmin) {
-          pill.className = 'status-pill';
-          pill.textContent = '管理员';
-        } else if (user.isBlocked) {
-          pill.className = 'status-pill blocked';
-          pill.textContent = '已封禁';
-        } else {
-          pill.className = 'status-pill muted';
-          pill.textContent = '正常';
-        }
-
+        meta.textContent = ['ID ' + user.id, '今日 ' + Number(user.dailyUsageCount || 0), '累计 ' + Number(user.totalMessages || 0), formatDateTime(user.lastSeenAt)].join(' · ');
+        const pill = document.createElement('span');
+        pill.className = user.isBlocked ? 'status-pill blocked' : user.isAdmin ? 'status-pill' : 'status-pill muted';
+        pill.textContent = user.isBlocked ? '已封禁' : user.isAdmin ? '管理员' : '正常';
         copy.appendChild(name);
         copy.appendChild(meta);
         head.appendChild(copy);
         head.appendChild(pill);
-        item.appendChild(head);
-
         const actions = document.createElement('div');
         actions.className = 'user-actions';
-
-        const button = document.createElement('button');
-        button.type = 'button';
-        button.className = user.isBlocked
-          ? 'success-button compact-button'
-          : 'danger-button compact-button';
-        button.textContent = user.isBlocked ? '解除封禁' : '封禁用户';
-        button.dataset.userId = String(user.id);
-        button.dataset.blocked = user.isBlocked ? 'true' : 'false';
-        button.dataset.userAction = 'toggle-block';
-
-        const isSelf = state.profile && String(state.profile.id) === String(user.id);
-        button.disabled = Boolean(user.isAdmin || isSelf);
-        if (isSelf) button.textContent = '当前账号';
-        if (user.isAdmin && !isSelf) button.textContent = '管理员账号';
-
-        actions.appendChild(button);
+        const openButton = document.createElement('button');
+        openButton.type = 'button';
+        openButton.className = 'secondary compact-button';
+        openButton.textContent = '管理';
+        openButton.dataset.userId = String(user.id);
+        openButton.dataset.userAction = 'open';
+        actions.appendChild(openButton);
+        item.appendChild(head);
         item.appendChild(actions);
-
-        const quotaEditor = document.createElement('div');
-        quotaEditor.className = 'quota-editor';
-
-        const quotaField = document.createElement('label');
-        quotaField.className = 'quota-field';
-        quotaField.textContent = '个人每日免费聊天额度（0 表示不限）';
-
-        const quotaInput = document.createElement('input');
-        quotaInput.type = 'number';
-        quotaInput.min = '0';
-        quotaInput.max = '1000000';
-        quotaInput.step = '1';
-        quotaInput.inputMode = 'numeric';
-        quotaInput.dataset.userQuotaInput = String(user.id);
-        quotaInput.value = user.usesGlobalQuota ? '' : String(Number(user.dailyQuotaOverride || 0));
-        quotaInput.placeholder = '默认免费聊天：' + quotaDisplayValue(user.dailyQuota);
-        quotaField.appendChild(quotaInput);
-
-        const saveQuota = document.createElement('button');
-        saveQuota.type = 'button';
-        saveQuota.className = 'primary compact-button';
-        saveQuota.textContent = '保存个人免费聊天额度';
-        saveQuota.dataset.userId = String(user.id);
-        saveQuota.dataset.userAction = 'save-quota';
-
-        const resetQuota = document.createElement('button');
-        resetQuota.type = 'button';
-        resetQuota.className = 'secondary compact-button';
-        resetQuota.textContent = '恢复默认免费聊天额度';
-        resetQuota.dataset.userId = String(user.id);
-        resetQuota.dataset.userAction = 'reset-quota';
-        resetQuota.disabled = Boolean(user.usesGlobalQuota);
-
-        quotaEditor.appendChild(quotaField);
-        quotaEditor.appendChild(saveQuota);
-        quotaEditor.appendChild(resetQuota);
-        item.appendChild(quotaEditor);
-
-        const creditEditor = document.createElement('div');
-        creditEditor.className = 'credit-editor';
-
-        const creditHead = document.createElement('div');
-        creditHead.className = 'credit-editor-head';
-        const creditTitle = document.createElement('span');
-        creditTitle.className = 'credit-editor-title';
-        creditTitle.textContent = '已购额度余额';
-        const creditNote = document.createElement('span');
-        creditNote.className = 'credit-editor-note';
-        creditNote.textContent = '不影响每日免费额度';
-        creditHead.appendChild(creditTitle);
-        creditHead.appendChild(creditNote);
-        creditEditor.appendChild(creditHead);
-
-        const creditGrid = document.createElement('div');
-        creditGrid.className = 'credit-grid';
-        const balances = user.creditBalances || {};
-        creditDefinitions.forEach(function (credit) {
-          const field = document.createElement('label');
-          field.className = 'credit-field';
-          field.textContent = credit.label;
-
-          const input = document.createElement('input');
-          input.type = 'number';
-          input.min = '0';
-          input.max = String(maxAdminCreditBalance);
-          input.step = '1';
-          input.inputMode = 'numeric';
-          input.value = String(Number(balances[credit.id] || 0));
-          input.dataset.userCreditInput = String(user.id);
-          input.dataset.creditType = credit.id;
-          field.appendChild(input);
-          creditGrid.appendChild(field);
-        });
-        creditEditor.appendChild(creditGrid);
-
-        const creditActions = document.createElement('div');
-        creditActions.className = 'credit-actions';
-        const saveCredits = document.createElement('button');
-        saveCredits.type = 'button';
-        saveCredits.className = 'primary compact-button';
-        saveCredits.textContent = '保存已购额度';
-        saveCredits.dataset.userId = String(user.id);
-        saveCredits.dataset.userAction = 'save-credits';
-        creditActions.appendChild(saveCredits);
-        creditEditor.appendChild(creditActions);
-        item.appendChild(creditEditor);
         elements.adminUserList.appendChild(item);
       });
-
       if (!elements.adminUserList.children.length) {
         const empty = document.createElement('div');
         empty.className = 'notice';
@@ -2244,23 +2454,36 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       }
     }
 
-    async function fetchAdminUsers(query) {
-      const params = new URLSearchParams();
-      params.set('limit', '50');
-      if (query) params.set('q', query);
-
-      const response = await fetch('/api/miniapp/admin/users?' + params.toString(), {
-        method: 'GET',
-        cache: 'no-store',
-        headers: authHeaders()
+    async function fetchAdminUsers(options) {
+      const opts = options || {};
+      if (opts.resetPage) state.adminUserPage = 0;
+      const params = new URLSearchParams({
+        limit: String(state.adminPageSize),
+        offset: String(state.adminUserPage * state.adminPageSize),
+        status: elements.adminUserStatus.value,
+        sort: elements.adminUserSort.value
       });
-
+      const query = elements.adminUserSearch.value.trim();
+      if (query) params.set('q', query);
+      const response = await fetch('/api/miniapp/admin/users?' + params.toString(), {
+        method: 'GET', cache: 'no-store', headers: authHeaders()
+      });
       const data = await response.json();
-      if (!response.ok) {
-        throw new Error(data.message || data.error || '读取用户失败');
-      }
-
+      if (!response.ok) throw new Error(data.message || data.error || '读取用户失败');
+      state.adminUserTotal = Number(data.total || 0);
       renderAdminUsers(data.items || []);
+      const pageCount = Math.max(1, Math.ceil(state.adminUserTotal / state.adminPageSize));
+      elements.adminUserResult.textContent = '找到 ' + state.adminUserTotal + ' 人';
+      elements.adminUserPage.textContent = '第 ' + (state.adminUserPage + 1) + ' / ' + pageCount + ' 页';
+      elements.adminUserPrev.disabled = state.adminUserPage <= 0;
+      elements.adminUserNext.disabled = state.adminUserPage + 1 >= pageCount;
+      if (state.adminSelectedUserId) {
+        if (state.adminUsers.some(function (item) { return String(item.id) === state.adminSelectedUserId; })) {
+          openAdminUser(state.adminSelectedUserId);
+        } else {
+          closeAdminUser();
+        }
+      }
     }
 
     async function loadAdmin() {
@@ -2286,9 +2509,6 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         elements.adminMessages.textContent = String(stats.messagesHandled ?? 0);
         elements.adminAiCalls.textContent = String(stats.aiCalls ?? 0);
         renderProviderStatus(data.providers || []);
-        await fetchAdminUsers(elements.adminUserSearch.value.trim());
-        await fetchAdminSessions(elements.adminSessionUserSearch.value.trim());
-
         state.adminLoaded = true;
         hideAdminNotice();
       } catch (error) {
@@ -2332,7 +2552,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
           throw new Error(data.message || data.error || '操作失败');
         }
 
-        await fetchAdminUsers(elements.adminUserSearch.value.trim());
+        await fetchAdminUsers();
         showAdminNotice(nextBlocked ? '用户已封禁。' : '用户已解除封禁。', 'success');
 
         if (tg && tg.HapticFeedback) {
@@ -2351,7 +2571,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
 
       if (!resetToGlobal) {
         const input = Array.from(
-          elements.adminUserList.querySelectorAll('input[data-user-quota-input]')
+          elements.adminUserSheetBody.querySelectorAll('input[data-user-quota-input]')
         ).find(function (candidate) {
           return candidate.dataset.userQuotaInput === String(userId);
         });
@@ -2384,7 +2604,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
           throw new Error(data.message || data.error || '额度保存失败');
         }
 
-        await fetchAdminUsers(elements.adminUserSearch.value.trim());
+        await fetchAdminUsers();
         showAdminNotice(
           resetToGlobal ? '已恢复默认每日免费聊天额度。' : '个人每日免费聊天额度已保存。',
           'success'
@@ -2403,7 +2623,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
 
     async function updateUserCredits(userId) {
       const inputs = Array.from(
-        elements.adminUserList.querySelectorAll('input[data-user-credit-input]')
+        elements.adminUserSheetBody.querySelectorAll('input[data-user-credit-input]')
       ).filter(function (candidate) {
         return candidate.dataset.userCreditInput === String(userId);
       });
@@ -2448,7 +2668,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
           throw new Error(data.message || data.error || '已购额度保存失败');
         }
 
-        await fetchAdminUsers(elements.adminUserSearch.value.trim());
+        await fetchAdminUsers();
         showAdminNotice('六类已购额度已保存，每日免费额度未改变。', 'success');
         if (tg && tg.HapticFeedback) {
           tg.HapticFeedback.notificationOccurred('success');
@@ -2513,10 +2733,17 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       }
     }
 
-    async function fetchAdminSessions(userId) {
-      const params = new URLSearchParams();
-      params.set('limit', '50');
-      if (userId) params.set('userId', userId);
+    async function fetchAdminSessions(options) {
+      const opts = options || {};
+      if (opts.resetPage) state.adminSessionPage = 0;
+      const params = new URLSearchParams({
+        limit: String(state.adminPageSize),
+        offset: String(state.adminSessionPage * state.adminPageSize),
+        status: elements.adminSessionStatus.value,
+        sort: elements.adminSessionSort.value
+      });
+      const query = elements.adminSessionSearch.value.trim();
+      if (query) params.set('q', query);
 
       const response = await fetch('/api/miniapp/admin/sessions?' + params.toString(), {
         method: 'GET',
@@ -2525,7 +2752,13 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.message || data.error || '读取会话概况失败');
+      state.adminSessionTotal = Number(data.total || 0);
       renderAdminSessions(data.items || []);
+      const pageCount = Math.max(1, Math.ceil(state.adminSessionTotal / state.adminPageSize));
+      elements.adminSessionResult.textContent = '找到 ' + state.adminSessionTotal + ' 个会话';
+      elements.adminSessionPage.textContent = '第 ' + (state.adminSessionPage + 1) + ' / ' + pageCount + ' 页';
+      elements.adminSessionPrev.disabled = state.adminSessionPage <= 0;
+      elements.adminSessionNext.disabled = state.adminSessionPage + 1 >= pageCount;
     }
 
     async function viewAdminSession(sessionId) {
@@ -2542,9 +2775,8 @@ const MINI_APP_HTML = String.raw`<!doctype html>
 
         elements.adminSessionViewerTitle.textContent = sessionDisplayName(data.session || {}) + ' · 用户 ' + data.session.userId;
         renderConversationMessages(elements.adminSessionMessages, data.messages || []);
-        elements.adminSessionViewer.classList.remove('hidden');
+        elements.adminSessionSheet.classList.remove('hidden');
         hideAdminNotice();
-        elements.adminSessionViewer.scrollIntoView({ behavior: 'smooth', block: 'start' });
       } catch (error) {
         showAdminNotice(error.message || '读取会话摘要失败。', 'failure');
       }
@@ -2613,8 +2845,26 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       elements.historyViewer.classList.add('hidden');
     });
 
+    elements.adminTabs.forEach(function (button) {
+      button.addEventListener('click', function () {
+        const target = button.dataset.adminPaneTarget;
+        elements.adminTabs.forEach(function (tab) { tab.classList.toggle('active', tab === button); });
+        elements.adminPanes.forEach(function (pane) { pane.classList.toggle('active', pane.dataset.adminPane === target); });
+        if (target === 'users' && !state.adminUsersLoaded) {
+          fetchAdminUsers({ resetPage: true }).then(function () {
+            state.adminUsersLoaded = true;
+          }).catch(function (error) { showAdminNotice(error.message || '读取用户失败。', 'failure'); });
+        }
+        if (target === 'sessions' && !state.adminSessionsLoaded) {
+          fetchAdminSessions({ resetPage: true }).then(function () {
+            state.adminSessionsLoaded = true;
+          }).catch(function (error) { showAdminNotice(error.message || '读取会话失败。', 'failure'); });
+        }
+      });
+    });
+
     elements.adminSearchButton.addEventListener('click', function () {
-      fetchAdminUsers(elements.adminUserSearch.value.trim()).catch(function (error) {
+      fetchAdminUsers({ resetPage: true }).catch(function (error) {
         showAdminNotice(error.message || '搜索失败。', 'failure');
       });
     });
@@ -2630,6 +2880,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       const button = event.target.closest('button[data-user-id]');
       if (!button || button.disabled) return;
       const action = button.dataset.userAction;
+      if (action === 'open') openAdminUser(button.dataset.userId);
       if (action === 'toggle-block') {
         updateUserBlock(button.dataset.userId, button.dataset.blocked === 'true');
       }
@@ -2644,17 +2895,56 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       }
     });
 
+    elements.adminUserSheetBody.addEventListener('click', function (event) {
+      const button = event.target.closest('button[data-user-id]');
+      if (!button || button.disabled) return;
+      const action = button.dataset.userAction;
+      if (action === 'toggle-block') updateUserBlock(button.dataset.userId, button.dataset.blocked === 'true');
+      if (action === 'save-quota') updateUserQuota(button.dataset.userId, false);
+      if (action === 'reset-quota') updateUserQuota(button.dataset.userId, true);
+      if (action === 'save-credits') updateUserCredits(button.dataset.userId);
+    });
+
+    elements.adminUserSheetClose.addEventListener('click', closeAdminUser);
+    elements.adminUserSheet.addEventListener('click', function (event) {
+      if (event.target === elements.adminUserSheet) closeAdminUser();
+    });
+
+    elements.adminUserStatus.addEventListener('change', function () { elements.adminSearchButton.click(); });
+    elements.adminUserSort.addEventListener('change', function () { elements.adminSearchButton.click(); });
+    elements.adminUserPrev.addEventListener('click', function () {
+      if (state.adminUserPage <= 0) return;
+      state.adminUserPage -= 1;
+      fetchAdminUsers().catch(function (error) { showAdminNotice(error.message || '翻页失败。', 'failure'); });
+    });
+    elements.adminUserNext.addEventListener('click', function () {
+      state.adminUserPage += 1;
+      fetchAdminUsers().catch(function (error) { showAdminNotice(error.message || '翻页失败。', 'failure'); });
+    });
+
     elements.adminSessionSearchButton.addEventListener('click', function () {
-      fetchAdminSessions(elements.adminSessionUserSearch.value.trim()).catch(function (error) {
+      fetchAdminSessions({ resetPage: true }).catch(function (error) {
         showAdminNotice(error.message || '筛选会话失败。', 'failure');
       });
     });
 
-    elements.adminSessionUserSearch.addEventListener('keydown', function (event) {
+    elements.adminSessionSearch.addEventListener('keydown', function (event) {
       if (event.key === 'Enter') {
         event.preventDefault();
         elements.adminSessionSearchButton.click();
       }
+    });
+
+    elements.adminSessionStatus.addEventListener('change', function () { elements.adminSessionSearchButton.click(); });
+    elements.adminSessionSort.addEventListener('change', function () { elements.adminSessionSearchButton.click(); });
+    elements.adminSessionPrev.addEventListener('click', function () {
+      if (state.adminSessionPage <= 0) return;
+      state.adminSessionPage -= 1;
+      fetchAdminSessions().catch(function (error) { showAdminNotice(error.message || '翻页失败。', 'failure'); });
+    });
+    elements.adminSessionNext.addEventListener('click', function () {
+      state.adminSessionPage += 1;
+      fetchAdminSessions().catch(function (error) { showAdminNotice(error.message || '翻页失败。', 'failure'); });
     });
 
     elements.adminSessionList.addEventListener('click', function (event) {
@@ -2664,7 +2954,10 @@ const MINI_APP_HTML = String.raw`<!doctype html>
     });
 
     elements.adminSessionViewerClose.addEventListener('click', function () {
-      elements.adminSessionViewer.classList.add('hidden');
+      elements.adminSessionSheet.classList.add('hidden');
+    });
+    elements.adminSessionSheet.addEventListener('click', function (event) {
+      if (event.target === elements.adminSessionSheet) elements.adminSessionSheet.classList.add('hidden');
     });
 
     elements.closeButton.addEventListener('click', function () {
@@ -3448,16 +3741,22 @@ async function handleMiniAppAdminApi(req, res, context, url) {
 
   if (pathname === '/api/miniapp/admin/users' && req.method === 'GET') {
     const q = String(url.searchParams.get('q') || '').trim();
+    const status = ['active', 'blocked', 'admin'].includes(url.searchParams.get('status'))
+      ? url.searchParams.get('status')
+      : 'all';
+    const sort = ['recent', 'oldest', 'usage', 'name'].includes(url.searchParams.get('sort'))
+      ? url.searchParams.get('sort')
+      : 'recent';
     const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit')) || 50));
     const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
     const items = context.db
-      .listUsers({ q, limit, offset })
+      .listUsers({ q, status, sort, limit, offset })
       .map((user) => serializeAdminUser(context.db, user, context.config));
 
     sendJson(res, 200, {
       ok: true,
       items,
-      total: context.db.countUsers({ q }),
+      total: context.db.countUsers({ q, status }),
       limit,
       offset
     });
@@ -3465,14 +3764,21 @@ async function handleMiniAppAdminApi(req, res, context, url) {
   }
 
   if (pathname === '/api/miniapp/admin/sessions' && req.method === 'GET') {
+    const q = String(url.searchParams.get('q') || '').trim();
     const userId = String(url.searchParams.get('userId') || '').trim();
     const chatId = String(url.searchParams.get('chatId') || '').trim();
+    const status = ['active', 'archived'].includes(url.searchParams.get('status'))
+      ? url.searchParams.get('status')
+      : '';
+    const sort = url.searchParams.get('sort') === 'oldest' ? 'oldest' : 'recent';
     const limit = Math.max(1, Math.min(100, Number(url.searchParams.get('limit')) || 50));
     const offset = Math.max(0, Number(url.searchParams.get('offset')) || 0);
     const sessions = context.db.listAdminSessions({
+      q,
       userId,
       chatId,
-      status: '',
+      status,
+      sort,
       limit,
       offset
     });
@@ -3482,6 +3788,9 @@ async function handleMiniAppAdminApi(req, res, context, url) {
       items: sessions.map((session) =>
         serializeSession(session, context.db.findUser(session.userId) || null)
       ),
+      total: typeof context.db.countAdminSessions === 'function'
+        ? context.db.countAdminSessions({ q, userId, chatId, status })
+        : sessions.length,
       limit,
       offset
     });
