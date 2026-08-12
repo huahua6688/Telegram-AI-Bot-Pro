@@ -207,6 +207,18 @@ test('structured private replies use Telegram rich messages with safe regular fa
   assert.equal(calls[0].method, 'sendRichMessage');
   assert.equal(calls[0].payload.rich_message.markdown, markdown.trim());
 
+  calls.length = 0;
+  const shortNews = '# 今日新闻\n\n1. 一条带来源的新闻';
+  const forced = await TelegramAIBot.prototype.trySendRichAssistantReply.call(
+    fakeBot,
+    ctx,
+    shortNews,
+    {},
+    { force: true, kind: 'news' }
+  );
+  assert.equal(forced.rich, true);
+  assert.equal(calls[0].payload.rich_message.markdown, shortNews);
+
   ctx.telegram.callApi = async () => { throw new Error('method unavailable'); };
   assert.equal(await TelegramAIBot.prototype.trySendRichAssistantReply.call(fakeBot, ctx, markdown), null);
 });
@@ -957,6 +969,7 @@ test('search replies hide naked source URLs behind clickable titles', async () =
 
 test('direct today-news search uses dated RSS before the failing generic search tool', async () => {
   const replies = [];
+  const richCalls = [];
   const requested = [];
   let genericSearchCalls = 0;
   let refunds = 0;
@@ -986,6 +999,8 @@ test('direct today-news search uses dated RSS before the failing generic search 
       maxHistoryMessages: 20,
       maxOutputChars: 3500,
       requestTimeoutMs: 120000,
+      enableRichMessages: true,
+      richMessageMinChars: 600,
       newsRegion: 'MY',
       newsLanguage: 'auto',
       newsTimeZone: 'Asia/Kuala_Lumpur'
@@ -1041,6 +1056,12 @@ test('direct today-news search uses dated RSS before the failing generic search 
       from: { id: 1, language_code: 'zh' },
       chat: { id: 1, type: 'private' },
       message: { message_id: 10, text: '今日新闻' },
+      telegram: {
+        async callApi(method, payload) {
+          richCalls.push({ method, payload });
+          return { message_id: 88 };
+        }
+      },
       async sendChatAction() {},
       async reply(message, extra) {
         replies.push({ message, extra });
@@ -1057,13 +1078,15 @@ test('direct today-news search uses dated RSS before the failing generic search 
   assert.equal(requested[0].options.timeZone, 'Asia/Shanghai');
   assert.equal(genericSearchCalls, 0);
   assert.equal(refunds, 0);
-  assert.equal(replies.length, 1);
-  assert.equal(replies[0].extra.parse_mode, 'HTML');
-  assert.match(replies[0].message, /这是今天已核实的一条重要新闻摘要/);
-  assert.match(replies[0].message, /示例通讯社/);
-  assert.match(replies[0].message, /https:\/\/example\.com\/today-news/);
+  assert.equal(replies.length, 0);
+  assert.equal(richCalls.length, 1);
+  assert.equal(richCalls[0].method, 'sendRichMessage');
+  assert.match(richCalls[0].payload.rich_message.markdown, /^# 今日新闻/m);
+  assert.match(richCalls[0].payload.rich_message.markdown, /这是今天已核实的一条重要新闻摘要/);
+  assert.match(richCalls[0].payload.rich_message.markdown, /示例通讯社/);
+  assert.match(richCalls[0].payload.rich_message.markdown, /https:\/\/example\.com\/today-news/);
   assert.doesNotMatch(
-    replies[0].message,
+    richCalls[0].payload.rich_message.markdown,
     /TOOL_EXECUTION_FAILED|The tool could not complete|处理失败/
   );
 });

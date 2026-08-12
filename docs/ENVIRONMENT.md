@@ -148,7 +148,7 @@ ENABLE_RICH_MESSAGES=true
 RICH_MESSAGE_MIN_CHARS=600
 ```
 
-Short replies, group replies, and unsupported/failed rich-message requests automatically use the existing regular message path.
+News results in private chat and inline mode use Telegram Rich Messages even when the digest is short. Other short replies, group replies, and unsupported/failed rich-message requests automatically use the existing regular message path.
 
 请把 AI Hub 控制台提供的完整 API Base URL 填入 `AI_BASE_URL`。固定使用 `openai-compatible` 时，可以保持各 `ROUTER_*_PROVIDER` 为空，只填写该 Hub 实际支持的任务模型 ID；所有这些模型会共用同一个 `AI_API_KEY` 和 `AI_BASE_URL`。如果默认 Provider 为 `auto`，则每组任务配置都应显式写 `ROUTER_*_PROVIDER=openai-compatible`。
 

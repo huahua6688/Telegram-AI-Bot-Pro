@@ -767,6 +767,46 @@ function formatSearchReplyHtml(text = '', locale = 'zh') {
   return `${escapedBody}\n\n${heading}：\n${links.join('\n')}`.trim();
 }
 
+function escapeRichMarkdownLinkText(value = '') {
+  return String(value || '')
+    .replaceAll('\\', '\\\\')
+    .replaceAll('[', '\\[')
+    .replaceAll(']', '\\]')
+    .replaceAll('(', '\\(')
+    .replaceAll(')', '\\)');
+}
+
+function formatNewsRichMarkdown(
+  answer = '',
+  raw = '',
+  locale = 'zh',
+  timeZone = 'Asia/Shanghai',
+  maxChars = 12000
+) {
+  const english = String(locale || '').toLowerCase().startsWith('en');
+  const title = english ? '# Latest news' : '# 今日新闻';
+  const cleaned = naturalAgentInternals.stripBareUrls(
+    naturalAgentInternals.stripGeneratedReferences(String(answer || ''))
+  );
+  const body = cleanBotOutput(cleaned).trim();
+  const references = naturalAgentInternals.extractReferenceLinks(raw);
+  const sourceLines = references.map((item, index) => {
+    const timestamp = naturalAgentInternals.formatSourceTimestamp(
+      item.publishedAt,
+      locale,
+      timeZone
+    );
+    const label = escapeRichMarkdownLinkText(item.title || item.sourceName || '来源');
+    const safeUrl = String(item.url || '').replaceAll('(', '%28').replaceAll(')', '%29');
+    return `${index + 1}. [${label}](${safeUrl})${timestamp ? ` · ${timestamp}` : ''}`;
+  });
+  const sections = [title, body];
+  if (sourceLines.length) {
+    sections.push(english ? '## Sources' : '## 参考来源', sourceLines.join('\n'));
+  }
+  return truncateText(sections.filter(Boolean).join('\n\n'), Math.max(500, Number(maxChars) || 12000));
+}
+
 async function sendSearchReply(ctx, text, maxLength, locale = 'zh') {
   const truncated = truncateText(String(text || ''), Math.max(500, maxLength - 200));
   const html = formatSearchReplyHtml(truncated, locale);
@@ -5209,7 +5249,16 @@ export class TelegramAIBot {
             Math.min(3500, Number(this.config.maxOutputChars) || 3500),
             newsSettings.timeZone
           ),
-          html: true
+          html: true,
+          richMarkdown: toolName === 'web_search' && naturalAgentInternals.looksLikeNewsSearch(userText)
+            ? formatNewsRichMarkdown(
+                answer,
+                raw,
+                locale,
+                newsSettings.timeZone,
+                Math.min(12000, Number(this.config.maxOutputChars) || 3500)
+              )
+            : ''
         };
       }
 
@@ -5400,7 +5449,23 @@ export class TelegramAIBot {
               if (grounded?.text) {
                 await this.db.incrementStats('toolCalls');
                 await this.db.incrementStats('aiCalls');
-                await sendSearchReply(ctx, grounded.text, this.config.maxOutputChars, locale);
+                const richNews = isNewsQuery
+                  ? await this.trySendRichAssistantReply(
+                      ctx,
+                      formatNewsRichMarkdown(
+                        grounded.text,
+                        grounded.text,
+                        locale,
+                        newsSettings.timeZone,
+                        Math.min(12000, Number(this.config.maxOutputChars) || 3500)
+                      ),
+                      {},
+                      { force: true, kind: 'news' }
+                    )
+                  : null;
+                if (!richNews) {
+                  await sendSearchReply(ctx, grounded.text, this.config.maxOutputChars, locale);
+                }
                 await naturalAgentInternals.rememberHandledInteraction(
                   this,
                   ctx,
@@ -5468,7 +5533,17 @@ export class TelegramAIBot {
         raw,
         title: localText(locale, '联网搜索结果', 'Web search results')
       });
-      if (composed.html) {
+      const richNews = composed.richMarkdown
+        ? await this.trySendRichAssistantReply(
+            ctx,
+            composed.richMarkdown,
+            {},
+            { force: true, kind: 'news' }
+          )
+        : null;
+      if (richNews) {
+        // Rich Message already delivered.
+      } else if (composed.html) {
         await sendHtmlReply(ctx, composed.text, this.config.maxOutputChars);
       } else {
         await sendTextReply(ctx, composed.text, this.config.maxOutputChars);
@@ -8132,11 +8207,11 @@ export class TelegramAIBot {
     return { lastMessageId };
   }
 
-  async trySendRichAssistantReply(ctx, text, extra = {}) {
+  async trySendRichAssistantReply(ctx, text, extra = {}, options = {}) {
     if (!this.config.enableRichMessages || ctx.chat?.type !== 'private') return null;
     const markdown = String(text || '').trim();
     const structured = /(?:^|\n)(?:#{1,6}\s|```|\|.+\||\d+\.\s|[-*]\s)|\$\$[\s\S]+?\$\$/m.test(markdown);
-    if (!structured || markdown.length < this.config.richMessageMinChars) return null;
+    if (!structured || (!options.force && markdown.length < this.config.richMessageMinChars)) return null;
 
     try {
       const sent = await ctx.telegram.callApi('sendRichMessage', {
@@ -8149,6 +8224,7 @@ export class TelegramAIBot {
     } catch (error) {
       this.logger.warn('Rich message rendering failed; using regular Telegram message', {
         chatId: ctx.chat?.id,
+        kind: options.kind || 'assistant',
         error: error.message
       });
       return null;

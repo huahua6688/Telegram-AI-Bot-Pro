@@ -154,25 +154,30 @@ function decodeHtmlText(value = '') {
     .trim();
 }
 
-function inlineArticle(text, title = 'AI reply', { html = false } = {}) {
+function inlineArticle(text, title = 'AI reply', { html = false, rich = false } = {}) {
   const rawText = String(text || '').replace(/\u0000/g, '').trim();
+  const useRich = Boolean(rich && rawText);
   const useHtml = Boolean(html && rawText && rawText.length <= 4000);
   const messageText = useHtml
     ? rawText
     : safeText(cleanBotOutput(html ? decodeHtmlText(rawText) : rawText), 4000) || 'No reply.';
-  const descriptionText = useHtml
-    ? decodeHtmlText(messageText)
-    : messageText;
+  const descriptionText = useRich
+    ? cleanBotOutput(rawText)
+    : useHtml
+      ? decodeHtmlText(messageText)
+      : messageText;
   return {
     type: 'article',
     id: randomUUID().replace(/-/g, '').slice(0, 32),
     title: safeText(cleanBotOutput(title), 80) || 'AI reply',
     description: safeText(descriptionText.replace(/\s+/g, ' '), 180),
-    input_message_content: {
-      message_text: messageText,
-      ...(useHtml ? { parse_mode: 'HTML' } : {}),
-      link_preview_options: { is_disabled: true }
-    }
+    input_message_content: useRich
+      ? { rich_message: { markdown: rawText } }
+      : {
+          message_text: messageText,
+          ...(useHtml ? { parse_mode: 'HTML' } : {}),
+          link_preview_options: { is_disabled: true }
+        }
   };
 }
 
@@ -251,13 +256,40 @@ function formatInlineNewsDigest(raw = '', answer = '', locale = 'zh', timeZone =
   );
 }
 
+function escapeInlineRichLinkText(value = '') {
+  return String(value || '')
+    .replaceAll('\\', '\\\\')
+    .replaceAll('[', '\\[')
+    .replaceAll(']', '\\]')
+    .replaceAll('(', '\\(')
+    .replaceAll(')', '\\)');
+}
+
+function formatInlineNewsRichMarkdown(raw = '', answer = '', locale = 'zh', timeZone = 'Asia/Kuala_Lumpur') {
+  const items = parseInlineSourceItems(raw, 6);
+  const overview = safeText(cleanBotOutput(answer), 900);
+  const heading = localText(locale, '# 新闻速览', '# News briefing');
+  const sourcesHeading = localText(locale, '## 参考来源', '## Sources');
+  const sourceLines = items.map((item, index) => {
+    const label = escapeInlineRichLinkText(item.title || item.sourceName || localText(locale, '来源', 'Source'));
+    const url = String(item.url || '').replaceAll('(', '%28').replaceAll(')', '%29');
+    const timestamp = naturalAgentInternals.formatSourceTimestamp(item.publishedAt, locale, timeZone);
+    return `${index + 1}. [${label}](${url})${timestamp ? ` · ${timestamp}` : ''}`;
+  });
+  return [heading, overview, sourceLines.length ? sourcesHeading : '', sourceLines.join('\n')]
+    .filter(Boolean)
+    .join('\n\n')
+    .slice(0, 12000);
+}
+
 function buildInlineResponseResults({
   answer = '',
   query = '',
   kind = 'answer',
   context = '',
   locale = 'zh',
-  timeZone = 'Asia/Kuala_Lumpur'
+  timeZone = 'Asia/Kuala_Lumpur',
+  richMessages = false
 } = {}) {
   if (kind === 'translation') {
     return [inlineArticle(
@@ -269,10 +301,13 @@ function buildInlineResponseResults({
   if (kind === 'news') {
     const items = parseInlineSourceItems(context, 6);
     const digest = formatInlineNewsDigest(context, answer, locale, timeZone);
+    const richDigest = richMessages
+      ? formatInlineNewsRichMarkdown(context, answer, locale, timeZone)
+      : '';
     const results = [inlineArticle(
-      digest,
+      richDigest || digest,
       localText(locale, `新闻摘要 · ${items.length} 条`, `News digest · ${items.length} items`),
-      { html: true }
+      richDigest ? { rich: true } : { html: true }
     )];
     for (const item of items) {
       const itemRaw = JSON.stringify({ results: [item] });
@@ -338,6 +373,31 @@ function downgradeInlineHtmlResults(results = []) {
       }
     };
   });
+}
+
+function downgradeInlineRichResults(results = []) {
+  return (Array.isArray(results) ? results : []).map((result) => {
+    const richMessage = result?.input_message_content?.rich_message;
+    if (!richMessage) return result;
+    const source = richMessage.markdown || decodeHtmlText(richMessage.html || '');
+    const messageText = safeText(cleanBotOutput(source), 4000) || 'No reply.';
+    return {
+      ...result,
+      description: safeText(messageText.replace(/\s+/g, ' '), 180),
+      input_message_content: {
+        message_text: messageText,
+        link_preview_options: { is_disabled: true }
+      }
+    };
+  });
+}
+
+function isInlineRichMessageError(error) {
+  const code = Number(error?.response?.error_code || error?.error_code || error?.code || 0);
+  const detail = [error?.message, error?.description, error?.response?.description]
+    .filter(Boolean)
+    .join(' ');
+  return code === 400 && /rich.?message|input.?message.?content|can't parse|unsupported/i.test(detail);
 }
 
 function isInlineNewsQuery(text = '') {
@@ -1037,6 +1097,15 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
       }
       if (!isExpiredInlineQueryError(error)) {
         if (normalizedQueryId) this.answeredInlineQueryIds.delete(normalizedQueryId);
+        if (isInlineRichMessageError(error)) {
+          const plainResults = downgradeInlineRichResults(results);
+          if (
+            plainResults.some((item, index) => item !== results[index]) &&
+            (!deadlineAt || Number(deadlineAt) - Date.now() >= 100)
+          ) {
+            return this.answerInlineQuerySafely(ctx, queryId, plainResults, extra, false, deadlineAt);
+          }
+        }
         if (isInlineHtmlParseError(error)) {
           const plainResults = downgradeInlineHtmlResults(results);
           if (
@@ -1455,7 +1524,8 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
             kind: cachedAnswer.kind,
             context: cachedAnswer.context,
             locale,
-            timeZone: newsSettings.timeZone
+            timeZone: newsSettings.timeZone,
+            richMessages: this.config.enableRichMessages !== false
           }),
           extra: { cache_time: cachedAnswer.kind === 'news' ? 0 : 30, is_personal: true }
         };
@@ -1550,7 +1620,8 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
                 kind: fallbackKind,
                 context: retrievedContext,
                 locale,
-                timeZone: newsSettings.timeZone
+                timeZone: newsSettings.timeZone,
+                richMessages: this.config.enableRichMessages !== false
               }),
               extra: { cache_time: fallbackKind === 'news' ? 0 : 10, is_personal: true }
             };
@@ -1608,7 +1679,8 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
                   kind: responseKind,
                   context: retrievedContext,
                   locale,
-                  timeZone: newsSettings.timeZone
+                  timeZone: newsSettings.timeZone,
+                  richMessages: this.config.enableRichMessages !== false
                 }),
                 extra: { cache_time: responseKind === 'news' ? 0 : 30, is_personal: true }
               };

@@ -19,6 +19,7 @@ function createBot(overrides = {}) {
     inlineQueryResponseTimeoutMs: 7000,
     inlineQuerySearchTimeoutMs: 3500,
     inlineQueryCacheTtlMs: 60000,
+    enableRichMessages: false,
     enableToolCalls: true,
     enableWebSearch: true,
     ...overrides.config
@@ -763,6 +764,29 @@ test('inline articles use the same plain-text cleanup as private chat', () => {
   assert.doesNotMatch(article.input_message_content.message_text, /[\*#]/);
 });
 
+test('inline news can use Telegram InputRichMessageContent', () => {
+  const results = platformModesInternals.buildInlineResponseResults({
+    answer: '今天的重要新闻摘要。',
+    query: '今日新闻',
+    kind: 'news',
+    context: JSON.stringify({
+      results: [{
+        title: 'Verified update',
+        url: 'https://example.com/news',
+        publishedAt: '2026-08-12T03:00:00.000Z'
+      }]
+    }),
+    locale: 'zh',
+    timeZone: 'Asia/Shanghai',
+    richMessages: true
+  });
+
+  const content = results[0].input_message_content;
+  assert.match(content.rich_message.markdown, /^# 新闻速览/m);
+  assert.match(content.rich_message.markdown, /\[Verified update\]\(https:\/\/example\.com\/news\)/);
+  assert.equal('message_text' in content, false);
+});
+
 test('inline source HTML stays bounded and complete even when a result URL is oversized', () => {
   const raw = JSON.stringify({
     results: [
@@ -916,6 +940,32 @@ test('inline delivery retries malformed Telegram HTML once as plain text', async
   assert.equal(payloads.length, 2);
   assert.equal(payloads[0][0].input_message_content.parse_mode, 'HTML');
   assert.equal('parse_mode' in payloads[1][0].input_message_content, false);
+  assert.match(payloads[1][0].input_message_content.message_text, /Example/);
+});
+
+test('inline delivery retries unsupported rich content once as plain text', async () => {
+  const bot = createBot();
+  const payloads = [];
+  const error = new Error('400: Bad Request: unsupported InputRichMessageContent');
+  error.response = { error_code: 400, description: 'Bad Request: unsupported InputRichMessageContent' };
+  const article = platformModesInternals.inlineArticle(
+    '# 新闻速览\n\n1. [Example](https://example.com/news)',
+    '新闻',
+    { rich: true }
+  );
+
+  const delivered = await bot.answerInlineQuerySafely({
+    update: { inline_query: { id: 'rich-retry' } },
+    async answerInlineQuery(results) {
+      payloads.push(results);
+      if (payloads.length === 1) throw error;
+    }
+  }, 'rich-retry', [article], { cache_time: 1, is_personal: true });
+
+  assert.equal(delivered, true);
+  assert.equal(payloads.length, 2);
+  assert.ok(payloads[0][0].input_message_content.rich_message);
+  assert.equal('rich_message' in payloads[1][0].input_message_content, false);
   assert.match(payloads[1][0].input_message_content.message_text, /Example/);
 });
 
