@@ -48,6 +48,8 @@ AI_PROVIDER_RETRY_DELAY_MS=800
 AI_PROVIDER_COOLDOWN_MS=60000
 MODEL_LIST_CACHE_TTL_MS=3600000
 MODEL_DISCOVERY_ENABLED=true
+ENABLE_RICH_MESSAGES=false
+RICH_MESSAGE_MIN_CHARS=600
 
 # Google Gemini free-tier first
 GEMINI_API_KEY=
@@ -257,6 +259,8 @@ Zeabur AI Hub 按标准 OpenAI-compatible Provider 使用：设置 `DEFAULT_AI_P
 同步目录会按接口类型分流：聊天/视觉模型进入聊天与识图，图片生成模型进入画图，TTS 和语音识别模型进入对应语音功能。Embedding、Rerank 和 Video 也会保留在专用目录中，但只有项目存在兼容执行接口且相关功能已启用时才会调用，避免把专用模型错误发送到聊天接口。
 
 若 AI Hub 是收费平台，不要把它设为默认 Provider。可以保持 `DEFAULT_AI_PROVIDER=gemini`（或你实际拥有免费额度的 Provider），同时配置 `AI_API_KEY` / `AI_BASE_URL` 用于后台同步 Hub 模型；用户需要时再在 Mini App 手动选择 Hub。模型价格只有在平台返回零价格或模型 ID 明确包含 `:free` 时才显示“免费”，其余显示“收费”或“价格未知”。
+
+Telegram Rich Messages 默认关闭。设置 `ENABLE_RICH_MESSAGES=true` 后，私聊中达到 `RICH_MESSAGE_MIN_CHARS` 且包含标题、列表、表格、代码块或公式的长回复会使用 Telegram 原生 Rich Message；短回复、群聊以及发送失败时仍自动使用原有普通消息，不会中断回答。
 
 Gemini Live 只支持 Google 官方 Gemini Live API，必须使用独立的 `GEMINI_LIVE_API_KEY` 和兼容 Live 模型；不要把第三方 OpenAI-compatible / AI Hub 地址当作 `gemini-live`。
 

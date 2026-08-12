@@ -463,6 +463,8 @@ export function loadConfig() {
     groupTriggerKeyword: process.env.GROUP_TRIGGER_KEYWORD || 'ai',
     aiMaxToolSteps: parseInteger(process.env.AI_MAX_TOOL_STEPS, 3),
     enableStreamingReplies: parseBoolean(process.env.ENABLE_STREAMING_REPLIES, true),
+    enableRichMessages: parseBoolean(process.env.ENABLE_RICH_MESSAGES, false),
+    richMessageMinChars: Math.max(200, parseInteger(process.env.RICH_MESSAGE_MIN_CHARS, 600)),
     streamingEditIntervalMs: parseInteger(process.env.STREAMING_EDIT_INTERVAL_MS, 350),
     streamingMinLength: parseInteger(process.env.STREAMING_MIN_LENGTH, 160),
     personaPresets

@@ -183,6 +183,34 @@ test('assistant replies are cleaned before the main Telegram send path', async (
   assert.doesNotMatch(sent[0].text, /\*{2,}/);
 });
 
+test('structured private replies use Telegram rich messages with safe regular fallback', async () => {
+  const calls = [];
+  const fakeBot = {
+    config: { enableRichMessages: true, richMessageMinChars: 200 },
+    logger: logger()
+  };
+  const markdown = '# Report\n\n' + '- useful item\n'.repeat(25);
+  const ctx = {
+    chat: { id: 77, type: 'private' },
+    message: { message_id: 42 },
+    telegram: {
+      async callApi(method, payload) {
+        calls.push({ method, payload });
+        return { message_id: 91 };
+      }
+    }
+  };
+
+  const sent = await TelegramAIBot.prototype.trySendRichAssistantReply.call(fakeBot, ctx, markdown);
+  assert.equal(sent.lastMessageId, 91);
+  assert.equal(sent.rich, true);
+  assert.equal(calls[0].method, 'sendRichMessage');
+  assert.equal(calls[0].payload.rich_message.markdown, markdown.trim());
+
+  ctx.telegram.callApi = async () => { throw new Error('method unavailable'); };
+  assert.equal(await TelegramAIBot.prototype.trySendRichAssistantReply.call(fakeBot, ctx, markdown), null);
+});
+
 test('AI fallback retries another model for transient provider failures', async () => {
   const bot = Object.create(TelegramAIBot.prototype);
   const attempts = [];

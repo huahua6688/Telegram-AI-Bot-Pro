@@ -81,6 +81,9 @@ test('Mini App securely exposes settings without chat input actions', async (t) 
   assert.match(appHtml, /list="newsRegionOptions"/);
   assert.match(appHtml, /list="newsLanguageOptions"/);
   assert.match(appHtml, /list="newsTimeZoneOptions"/);
+  assert.match(appHtml, /设置语言（Language）/);
+  assert.match(appHtml, /获取 AI Hub 最新模型/);
+  assert.match(appHtml, /<summary>用户与额度<\/summary>/);
   const inlineScripts = [...appHtml.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)]
     .map((match) => match[1])
     .filter((script) => script.trim());

@@ -446,6 +446,28 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       font-size: 15px;
     }
 
+    .admin-section {
+      margin-top: 14px;
+      border: 1px solid rgba(127, 127, 127, .16);
+      border-radius: 16px;
+      background: var(--tg-theme-secondary-bg-color, #ffffff);
+      overflow: hidden;
+    }
+
+    .admin-section > summary {
+      min-height: 50px;
+      padding: 15px 16px;
+      cursor: pointer;
+      font-size: 15px;
+      font-weight: 800;
+      list-style: none;
+    }
+
+    .admin-section > summary::-webkit-details-marker { display: none; }
+    .admin-section > summary::after { content: '›'; float: right; color: var(--tg-theme-hint-color, #6b7280); transform: rotate(90deg); }
+    .admin-section[open] > summary::after { transform: rotate(-90deg); }
+    .admin-section-body { padding: 0 14px 14px; }
+
     .provider-list,
     .user-list {
       display: grid;
@@ -840,14 +862,14 @@ const MINI_APP_HTML = String.raw`<!doctype html>
 
       <form id="settingsForm">
         <div class="field">
-          <label for="providerSelect">AI Provider</label>
+          <label for="providerSelect">AI 平台</label>
           <select id="providerSelect" disabled>
             <option value="">加载中…</option>
           </select>
         </div>
 
         <div class="field">
-          <label for="modelSelect">模型</label>
+          <label for="modelSelect">AI 模型</label>
           <select id="modelSelect" disabled>
             <option value="">加载中…</option>
           </select>
@@ -855,26 +877,26 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         </div>
 
         <div class="field">
-          <label for="languageSelect">回复语言</label>
+          <label for="languageSelect">设置语言（Language）</label>
           <select id="languageSelect" disabled></select>
         </div>
 
         <div class="field">
-          <label for="newsRegionSelect">新闻地区</label>
+          <label for="newsRegionSelect">新闻地区（可选）</label>
           <input id="newsRegionSelect" list="newsRegionOptions" maxlength="2" autocomplete="off"
             placeholder="自动继承，也可输入 DE" disabled />
           <datalist id="newsRegionOptions"></datalist>
         </div>
 
         <div class="field">
-          <label for="newsLanguageSelect">新闻语言</label>
+          <label for="newsLanguageSelect">新闻语言（可选）</label>
           <input id="newsLanguageSelect" list="newsLanguageOptions" maxlength="35" autocomplete="off"
             placeholder="自动继承，也可输入 de-DE" disabled />
           <datalist id="newsLanguageOptions"></datalist>
         </div>
 
         <div class="field">
-          <label for="newsTimeZoneSelect">新闻时区</label>
+          <label for="newsTimeZoneSelect">新闻时区（可选）</label>
           <input id="newsTimeZoneSelect" list="newsTimeZoneOptions" maxlength="64" autocomplete="off"
             placeholder="自动继承，也可输入 Europe/Berlin" disabled />
           <datalist id="newsTimeZoneOptions"></datalist>
@@ -885,14 +907,14 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         </p>
 
         <div class="field">
-          <label for="personaSelect">助手人格</label>
+          <label for="personaSelect">回答风格</label>
           <select id="personaSelect" disabled></select>
         </div>
 
         <div class="switch-row">
           <div class="switch-copy">
-            <strong>自动备用切换</strong>
-            <span>当前模型不可用时，尝试其他已配置 Provider。</span>
+            <strong>故障时自动切换</strong>
+            <span>当前免费模型不可用时，尝试其他已配置的免费平台。</span>
           </div>
           <label class="switch">
             <input id="fallbackToggle" type="checkbox" disabled />
@@ -903,8 +925,8 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         <div id="settingsNotice" class="notice hidden"></div>
 
         <div class="actions">
-          <button class="primary" id="saveButton" type="submit" disabled>保存设置</button>
-          <button class="secondary" id="refreshButton" type="button">刷新</button>
+          <button class="primary" id="saveButton" type="submit" disabled>保存</button>
+          <button class="secondary" id="refreshButton" type="button">重新载入</button>
           <button class="primary feature-action hidden" id="syncModelsButton" type="button">🔄 获取 AI Hub 最新模型</button>
         </div>
       </form>
@@ -955,8 +977,8 @@ const MINI_APP_HTML = String.raw`<!doctype html>
 
     <section class="card hidden" id="adminPanel">
       <div class="section-head">
-        <h2>管理员面板</h2>
-        <span class="badge">管理员</span>
+        <h2>管理中心</h2>
+        <span class="badge">Admin</span>
       </div>
 
       <div id="adminNotice" class="notice hidden"></div>
@@ -980,24 +1002,26 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         </div>
       </div>
 
-      <div class="subsection">
-        <h3 class="subsection-title">Provider 配置状态</h3>
-        <div class="provider-list" id="adminProviderList"></div>
-      </div>
+      <details class="admin-section">
+        <summary>AI 平台状态</summary>
+        <div class="admin-section-body"><div class="provider-list" id="adminProviderList"></div></div>
+      </details>
 
-      <div class="subsection">
-        <h3 class="subsection-title">用户管理</h3>
+      <details class="admin-section">
+        <summary>用户与额度</summary>
+        <div class="admin-section-body">
         <p class="small">这里单独覆盖的是账号的每日免费聊天额度；其他五类每日免费额度由部署环境统一配置，0 表示不限。</p>
         <p class="small">六类已购额度余额可按账号独立修改，与每日免费额度分开计算；管理员使用仍然免费。</p>
         <div class="admin-toolbar">
           <input id="adminUserSearch" type="search" placeholder="搜索 ID、用户名或姓名" />
           <button class="secondary compact-button" id="adminSearchButton" type="button">搜索</button>
         </div>
-        <div class="user-list" id="adminUserList"></div>
-      </div>
+        <div class="user-list" id="adminUserList"></div></div>
+      </details>
 
-      <div class="subsection">
-        <h3 class="subsection-title">会话概况</h3>
+      <details class="admin-section">
+        <summary>会话管理</summary>
+        <div class="admin-section-body">
         <div class="admin-toolbar">
           <input id="adminSessionUserSearch" type="search" placeholder="按 Telegram 用户 ID 筛选" />
           <button class="secondary compact-button" id="adminSessionSearchButton" type="button">筛选</button>
@@ -1009,8 +1033,8 @@ const MINI_APP_HTML = String.raw`<!doctype html>
             <button class="secondary compact-button" id="adminSessionViewerClose" type="button">关闭</button>
           </div>
           <div class="conversation-messages" id="adminSessionMessages"></div>
-        </div>
-      </div>
+        </div></div>
+      </details>
     </section>
 
     <button class="secondary" id="closeButton" type="button" style="margin-top:14px">关闭控制台</button>

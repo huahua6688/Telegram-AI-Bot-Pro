@@ -141,6 +141,15 @@ MODEL_LIST_CACHE_TTL_MS=3600000
 
 When the AI Hub supports OpenAI-compatible `GET /models`, model-name variables may stay empty. The bot synchronizes the catalog at startup and administrators can refresh it from the Telegram admin panel. Provider metadata is displayed when available; otherwise inferred uses are explicitly labeled. Non-chat embedding, rerank, TTS, image, and video models are excluded from the chat selector. Explicit model variables remain a fallback when discovery is unavailable.
 
+Enable Telegram-native rich rendering for long structured private-chat replies with:
+
+```env
+ENABLE_RICH_MESSAGES=true
+RICH_MESSAGE_MIN_CHARS=600
+```
+
+Short replies, group replies, and unsupported/failed rich-message requests automatically use the existing regular message path.
+
 请把 AI Hub 控制台提供的完整 API Base URL 填入 `AI_BASE_URL`。固定使用 `openai-compatible` 时，可以保持各 `ROUTER_*_PROVIDER` 为空，只填写该 Hub 实际支持的任务模型 ID；所有这些模型会共用同一个 `AI_API_KEY` 和 `AI_BASE_URL`。如果默认 Provider 为 `auto`，则每组任务配置都应显式写 `ROUTER_*_PROVIDER=openai-compatible`。
 
 Gemini Live 仍只走 Google 官方 Gemini Live API，并使用独立的 `GEMINI_LIVE_API_KEY` 与兼容 Live 模型。第三方 OpenAI-compatible Hub 不能冒充 `gemini-live`；实时语音等专用模式需要时会绕过 Smart 路由。
