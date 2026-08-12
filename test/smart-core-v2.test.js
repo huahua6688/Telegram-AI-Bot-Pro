@@ -467,6 +467,42 @@ test('Mini App mode exposes start help and whoami commands', async () => {
   assert.deepEqual(calls[0].commands.map((item) => item.command), ['start', 'help', 'whoami']);
 });
 
+test('Telegram command rate limits do not crash startup or repeat localized requests', async () => {
+  const warnings = [];
+  let calls = 0;
+  const bot = Object.create(TelegramAIBot.prototype);
+  bot.config = { miniAppEnabled: true };
+  bot.logger = {
+    warn(message, meta) { warnings.push({ message, meta }); }
+  };
+  bot.bot = {
+    telegram: {
+      async setMyCommands() {
+        calls += 1;
+        const error = new Error('Too Many Requests: retry after 1275');
+        error.response = { parameters: { retry_after: 1275 } };
+        throw error;
+      }
+    }
+  };
+
+  assert.equal(await bot.setLocalizedBotCommands(), false);
+  assert.equal(calls, 1);
+  assert.equal(warnings[0].meta.retryAfter, 1275);
+  assert.match(warnings[0].message, /startup will continue/);
+});
+
+test('stopping a Telegram bot that never launched is an idempotent no-op', async () => {
+  const bot = Object.create(TelegramAIBot.prototype);
+  bot.logger = { info() {} };
+  bot.usageReservationSweepTimer = null;
+  bot.bot = {
+    stop() { throw new Error('Bot is not running!'); }
+  };
+
+  assert.equal(await bot.stop('INITIALIZATION_FAILED'), false);
+});
+
 test('Mini App mode does not duplicate the BotFather Console entry', () => {
   const bot = Object.create(TelegramAIBot.prototype);
   bot.config = { miniAppEnabled: true };
