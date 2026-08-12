@@ -111,6 +111,32 @@ test('blank canonical settings use Smart automatic routing without becoming a ma
   assert.equal(manualDefault.manualModel, false);
 });
 
+test('automatic routing ignores a stale per-user fallback-off preference', () => {
+  const settings = TelegramAIBot.prototype.getEffectiveAISettings.call(
+    {
+      db: {
+        getUserAISettings: () => ({
+          providerId: 'auto',
+          modelId: '',
+          fallbackEnabled: false
+        })
+      },
+      config: {
+        defaultAIProvider: 'auto',
+        aiProvider: 'auto',
+        defaultModel: 'free-model',
+        availableModels: ['free-model'],
+        enableProviderFallback: true
+      },
+      providerManager: { getProviderModels: () => ['free-model'] }
+    },
+    42
+  );
+
+  assert.equal(settings.autoRouting, true);
+  assert.equal(settings.fallbackEnabled, true);
+});
+
 test('explicit automatic provider is canonical even when the configured default is manual', () => {
   const settings = TelegramAIBot.prototype.getEffectiveAISettings.call(
     {

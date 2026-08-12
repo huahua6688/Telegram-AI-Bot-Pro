@@ -223,6 +223,57 @@ test('structured private replies use Telegram rich messages with safe regular fa
   assert.equal(await TelegramAIBot.prototype.trySendRichAssistantReply.call(fakeBot, ctx, markdown), null);
 });
 
+test('provider fragments use one throttled Telegram rich-message draft and persist a final reply', async () => {
+  const calls = [];
+  const fakeBot = {
+    config: {
+      enableStreamingReplies: true,
+      enableRichMessages: true,
+      streamingEditIntervalMs: 350,
+      maxOutputChars: 4096,
+      richMessageMinChars: 600
+    },
+    logger: logger(),
+    trySendRichAssistantReply: TelegramAIBot.prototype.trySendRichAssistantReply,
+    getLocale() { return 'en'; },
+    t() { return 'No reply.'; }
+  };
+  const ctx = {
+    chat: { id: 77, type: 'private' },
+    message: { message_id: 42 },
+    telegram: {
+      async callApi(method, payload) {
+        calls.push({ method, payload });
+        return method === 'sendRichMessage' ? { message_id: 92 } : true;
+      }
+    },
+    async reply() {
+      throw new Error('plain fallback should not be used');
+    }
+  };
+
+  const streamer = TelegramAIBot.prototype.createAssistantDraftStreamer.call(fakeBot, ctx);
+  await streamer.onTextDelta('Streaming ans', 'Streaming answer');
+  await streamer.onTextDelta(' continues', 'Streaming answer continues');
+  assert.equal(streamer.sent, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, 'sendRichMessageDraft');
+  assert.equal(calls[0].payload.chat_id, 77);
+  assert.ok(calls[0].payload.draft_id > 0);
+  assert.equal(calls[0].payload.rich_message.html, 'Streaming answer');
+
+  const final = await TelegramAIBot.prototype.sendAssistantReply.call(
+    fakeBot,
+    ctx,
+    'Streaming answer continues',
+    {},
+    { finalizeRichDraft: true, skipSimulatedStreaming: true }
+  );
+  assert.equal(final.lastMessageId, 92);
+  assert.equal(calls[1].method, 'sendRichMessage');
+  assert.equal(calls[1].payload.rich_message.markdown, 'Streaming answer continues');
+});
+
 test('AI fallback retries another model for transient provider failures', async () => {
   const bot = Object.create(TelegramAIBot.prototype);
   const attempts = [];

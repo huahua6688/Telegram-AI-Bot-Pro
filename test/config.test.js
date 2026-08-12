@@ -37,11 +37,12 @@ function clearSmartRoutingEnv() {
   }
 }
 
-test('loadConfig defaults to openai-compatible provider', () => {
+test('loadConfig defaults to automatic free-first provider routing', () => {
   resetEnv();
+  delete process.env.DEFAULT_AI_PROVIDER;
   delete process.env.AI_PROVIDER;
   const config = loadConfig();
-  assert.equal(config.aiProvider, 'openai-compatible');
+  assert.equal(config.aiProvider, 'auto');
 });
 
 test('loadConfig resolves anthropic provider aliases and keys', () => {
@@ -119,7 +120,7 @@ test('loadConfig uses the stable cross-provider fallback order by default', () =
   delete process.env.AI_PROVIDER_FALLBACK_ORDER;
 
   const config = loadConfig();
-  assert.deepEqual(config.aiProviderFallbackOrder, ['gemini', 'groq', 'openrouter']);
+  assert.deepEqual(config.aiProviderFallbackOrder, ['gemini', 'groq', 'openrouter', 'openai-compatible']);
 });
 
 test('loadConfig resolves first-batch native provider aliases', () => {

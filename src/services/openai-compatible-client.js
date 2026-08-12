@@ -1,6 +1,7 @@
 import { truncateText } from '../utils/text.js';
 
 import { createRequestAbort } from '../utils/request-abort.js';
+import { readSseJson } from '../utils/sse.js';
 
 function flattenContent(content) {
   if (typeof content === 'string') return content;
@@ -13,6 +14,30 @@ function flattenContent(content) {
     })
     .join('\n')
     .trim();
+}
+
+function flattenStreamContent(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content.map((part) => {
+    if (typeof part === 'string') return part;
+    if (part?.type === 'text') return part.text || '';
+    return '';
+  }).join('');
+}
+
+function mergeStreamToolCall(toolCalls, delta = {}, fallbackIndex = 0) {
+  const index = Number.isInteger(delta.index) ? delta.index : fallbackIndex;
+  const current = toolCalls[index] || {
+    id: '',
+    type: 'function',
+    function: { name: '', arguments: '' }
+  };
+  current.id += delta.id || '';
+  current.type = delta.type || current.type;
+  current.function.name += delta.function?.name || '';
+  current.function.arguments += delta.function?.arguments || '';
+  toolCalls[index] = current;
 }
 
 export class OpenAICompatibleClient {
@@ -61,7 +86,8 @@ export class OpenAICompatibleClient {
     tools = [],
     temperature = this.config.temperature,
     signal,
-    requestTimeoutMs
+    requestTimeoutMs,
+    onTextDelta
   }) {
     const payload = {
       model,
@@ -72,6 +98,18 @@ export class OpenAICompatibleClient {
     if (tools.length > 0) {
       payload.tools = tools;
       payload.tool_choice = 'auto';
+    }
+
+    if (typeof onTextDelta === 'function') {
+      try {
+        return await this.streamChatCompletion(payload, { signal, requestTimeoutMs, onTextDelta });
+      } catch (error) {
+        const canRetryWithoutStreaming = /AI request failed \((?:400|404|405|415|422)\)/.test(error.message);
+        if (!canRetryWithoutStreaming || signal?.aborted) throw error;
+        this.logger?.warn?.('Provider rejected streaming; retrying as a regular completion', {
+          error: error.message
+        });
+      }
     }
 
     return this.request('/chat/completions', {
@@ -90,7 +128,77 @@ export class OpenAICompatibleClient {
     });
   }
 
-  async completeWithTools({ model, messages, tools = [], toolRunner, temperature, signal, requestTimeoutMs }) {
+  async streamChatCompletion(payload, { signal, requestTimeoutMs, onTextDelta }) {
+    const requestAbort = createRequestAbort({
+      signal,
+      timeoutMs: requestTimeoutMs,
+      fallbackTimeoutMs: this.config.requestTimeoutMs
+    });
+    const baseUrl = String(this.nativeBaseUrl || this.config.aiBaseUrl || '').replace(/\/$/, '');
+    const apiKey = this.nativeApiKey || this.config.aiApiKey;
+
+    try {
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer ' + apiKey,
+          'Content-Type': 'application/json',
+          ...(this.nativeHeaders || {})
+        },
+        body: JSON.stringify({ ...payload, stream: true }),
+        signal: requestAbort.signal
+      });
+
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`AI request failed (${response.status}): ${truncateText(body, 600)}`);
+      }
+
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.includes('text/event-stream')) {
+        return response.json();
+      }
+
+      let content = '';
+      const toolCalls = [];
+      let finishReason = null;
+      let usage;
+      await readSseJson(response, async (event) => {
+        if (event?.error) {
+          throw new Error(`AI streaming failed: ${truncateText(event.error?.message || JSON.stringify(event.error), 600)}`);
+        }
+        usage = event.usage || usage;
+        const choice = event.choices?.[0];
+        if (!choice) return;
+        finishReason = choice.finish_reason ?? finishReason;
+        const delta = choice.delta || {};
+        const textDelta = flattenStreamContent(delta.content);
+        if (textDelta) {
+          content += textDelta;
+          await onTextDelta(textDelta, content);
+        }
+        for (let index = 0; index < (delta.tool_calls || []).length; index += 1) {
+          mergeStreamToolCall(toolCalls, delta.tool_calls[index], index);
+        }
+      });
+
+      return {
+        choices: [{
+          finish_reason: finishReason,
+          message: {
+            role: 'assistant',
+            content,
+            tool_calls: toolCalls.filter(Boolean).length > 0 ? toolCalls.filter(Boolean) : undefined
+          }
+        }],
+        usage
+      };
+    } finally {
+      requestAbort.dispose();
+    }
+  }
+
+  async completeWithTools({ model, messages, tools = [], toolRunner, temperature, signal, requestTimeoutMs, onTextDelta }) {
     const workingMessages = [...messages];
 
     for (let step = 0; step < Math.max(1, this.config.aiMaxToolSteps); step += 1) {
@@ -100,7 +208,8 @@ export class OpenAICompatibleClient {
         tools,
         temperature,
         signal,
-        requestTimeoutMs
+        requestTimeoutMs,
+        onTextDelta
       });
       const choice = response.choices?.[0];
       if (!choice?.message) {
@@ -137,7 +246,8 @@ export class OpenAICompatibleClient {
       messages: workingMessages,
       temperature,
       signal,
-      requestTimeoutMs
+      requestTimeoutMs,
+      onTextDelta
     });
     const finalChoice = finalResponse.choices?.[0]?.message;
     return {

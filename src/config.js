@@ -192,7 +192,7 @@ function compactList(...values) {
 
 export function loadConfig() {
   const aiProvider = normalizeProvider(
-    process.env.DEFAULT_AI_PROVIDER || process.env.AI_PROVIDER || 'openai-compatible'
+    process.env.DEFAULT_AI_PROVIDER || process.env.AI_PROVIDER || 'auto'
   );
   const smartRoutingModels = {};
   const smartRoutingProviders = {};
@@ -285,7 +285,7 @@ export function loadConfig() {
   }
   const fallbackOrder = normalizeProviderList(
     process.env.AI_PROVIDER_FALLBACK_ORDER,
-    ['gemini', 'groq', 'openrouter']
+    ['gemini', 'groq', 'openrouter', 'openai-compatible']
   ).filter((item) => item !== 'auto');
   const databaseFile = path.resolve(process.cwd(), process.env.DATABASE_FILE || './data/bot-data.db');
   const legacyDataFile = path.resolve(process.cwd(), process.env.DATA_FILE || './data/bot-data.json');

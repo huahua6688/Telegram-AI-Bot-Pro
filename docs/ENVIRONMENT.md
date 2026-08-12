@@ -15,7 +15,7 @@
 ## 推荐
 
     ENABLE_PROVIDER_FALLBACK=true
-    AI_PROVIDER_FALLBACK_ORDER=gemini,groq,openrouter
+    AI_PROVIDER_FALLBACK_ORDER=gemini,groq,openrouter,openai-compatible
     GEMINI_FALLBACK_MODELS=gemini-2.5-flash-lite
     AI_PROVIDER_MAX_RETRIES=1  首次失败后的额外重试次数；1 表示每个模型最多尝试 2 次
     TRANSLATION_MODEL    翻译模型
@@ -118,6 +118,8 @@ ROUTER_CHEAP_MODEL=
 
 Smart 路由只决定首次目标，不会改变 `ENABLE_PROVIDER_FALLBACK`、备用模型列表、重试次数或跨 Provider 回退顺序。
 
+免费优先、付费兜底时使用 `DEFAULT_AI_PROVIDER=gemini`，并把 `openai-compatible` 放在 `AI_PROVIDER_FALLBACK_ORDER` 最后。AI Hub 即使不是默认平台仍会同步模型；免费平台返回 429、额度耗尽、模型不可用、超时或临时错误后，会继续尝试下一个平台。用户选择“自动”时会自动恢复故障切换。
+
 - `DEFAULT_AI_PROVIDER=auto` 时，每个非空的 `ROUTER_*_MODEL` 都必须同时配置对应的具体 `ROUTER_*_PROVIDER`。只填模型无法安全判断它属于哪个平台。
 - `DEFAULT_AI_PROVIDER` 是固定、非 `auto` Provider 时，`ROUTER_*_PROVIDER` 可以留空；对应任务模型会归入这个固定 Provider，同一个 Key / 网关可以使用多个模型。
 - Provider 别名会规范化，例如 `google` → `gemini`、`claude` → `anthropic`、`custom` → `openai-compatible`。
@@ -146,9 +148,13 @@ Enable Telegram-native rich rendering for long structured private-chat replies w
 ```env
 ENABLE_RICH_MESSAGES=true
 RICH_MESSAGE_MIN_CHARS=600
+ENABLE_STREAMING_REPLIES=true
+STREAMING_EDIT_INTERVAL_MS=350
 ```
 
 News results in private chat and inline mode use Telegram Rich Messages even when the digest is short. Other short replies, group replies, and unsupported/failed rich-message requests automatically use the existing regular message path.
+
+With both rich messages and streaming replies enabled, Gemini and OpenAI-compatible providers request an SSE response and forward generated fragments to Telegram `sendRichMessageDraft`. The draft is rate-limited by `STREAMING_EDIT_INTERVAL_MS`; a final `sendRichMessage` persists the completed answer. Providers that reject streaming and Telegram clients/API paths that do not support rich drafts automatically fall back to a regular complete reply.
 
 请把 AI Hub 控制台提供的完整 API Base URL 填入 `AI_BASE_URL`。固定使用 `openai-compatible` 时，可以保持各 `ROUTER_*_PROVIDER` 为空，只填写该 Hub 实际支持的任务模型 ID；所有这些模型会共用同一个 `AI_API_KEY` 和 `AI_BASE_URL`。如果默认 Provider 为 `auto`，则每组任务配置都应显式写 `ROUTER_*_PROVIDER=openai-compatible`。
 

@@ -1310,7 +1310,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         <div class="switch-row">
           <div class="switch-copy">
             <strong>故障时自动切换</strong>
-            <span>当前免费模型不可用时，尝试其他已配置的免费平台。</span>
+            <span>免费平台额度不足、限流或不可用时，依次切换备用平台，最后使用已配置的付费 API。</span>
           </div>
           <label class="switch">
             <input id="fallbackToggle" type="checkbox" disabled />
@@ -1875,6 +1875,8 @@ const MINI_APP_HTML = String.raw`<!doctype html>
 
       if (elements.providerSelect.value === 'auto') {
         elements.modelSelect.disabled = true;
+        elements.fallbackToggle.checked = true;
+        elements.fallbackToggle.disabled = true;
       }
 
       if (state.profile.isAdmin) {
@@ -2809,6 +2811,12 @@ const MINI_APP_HTML = String.raw`<!doctype html>
 
     elements.providerSelect.addEventListener('change', function () {
       updateModelOptions('');
+      if (elements.providerSelect.value === 'auto') {
+        elements.fallbackToggle.checked = true;
+        elements.fallbackToggle.disabled = true;
+      } else {
+        elements.fallbackToggle.disabled = false;
+      }
     });
     elements.viewButtons.forEach(function (button) {
       button.addEventListener('click', function () {
@@ -3403,7 +3411,7 @@ function validateSettingsPayload(payload, config, providerManager = null) {
   return {
     providerId,
     modelId,
-    fallbackEnabled: payload.fallbackEnabled !== false,
+    fallbackEnabled: providerId === 'auto' ? true : payload.fallbackEnabled !== false,
     preferredLanguage,
     persona,
     newsPatch

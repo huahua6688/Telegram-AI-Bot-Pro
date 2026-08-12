@@ -1,6 +1,7 @@
 import { truncateText } from '../utils/text.js';
 import { UnsupportedClientFeatureError } from './unsupported-client-feature-error.js';
 import { createRequestAbort } from '../utils/request-abort.js';
+import { readSseJson } from '../utils/sse.js';
 
 function flattenContent(content) {
   if (typeof content === 'string') return content;
@@ -166,6 +167,71 @@ export class GeminiClient {
     }
   }
 
+  async requestStream(model, payload, { signal, requestTimeoutMs, onTextDelta } = {}) {
+    const requestAbort = createRequestAbort({
+      signal,
+      timeoutMs: requestTimeoutMs,
+      fallbackTimeoutMs: this.config.requestTimeoutMs
+    });
+    const baseUrl = String(this.liveBaseUrl || this.config.geminiBaseUrl || '').replace(/\/$/, '');
+    const apiKey = this.liveApiKey || this.config.geminiApiKey;
+
+    try {
+      const endpoint = `${baseUrl}/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse&key=${encodeURIComponent(apiKey)}`;
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: requestAbort.signal
+      });
+
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`AI request failed (${response.status}): ${truncateText(body, 600)}`);
+      }
+
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.includes('text/event-stream')) {
+        return response.json();
+      }
+
+      let text = '';
+      const functionParts = [];
+      let groundingMetadata;
+      let finishReason;
+      let usageMetadata;
+      await readSseJson(response, async (event) => {
+        if (event?.error) {
+          throw new Error(`AI streaming failed: ${truncateText(event.error?.message || JSON.stringify(event.error), 600)}`);
+        }
+        usageMetadata = event.usageMetadata || usageMetadata;
+        const candidate = event.candidates?.[0];
+        if (!candidate) return;
+        groundingMetadata = candidate.groundingMetadata || groundingMetadata;
+        finishReason = candidate.finishReason || finishReason;
+        for (const part of candidate.content?.parts || []) {
+          if (typeof part.text === 'string' && part.text) {
+            text += part.text;
+            await onTextDelta(part.text, text);
+          } else if (part.functionCall?.name) {
+            functionParts.push(part);
+          }
+        }
+      });
+
+      return {
+        candidates: [{
+          content: { role: 'model', parts: [...(text ? [{ text }] : []), ...functionParts] },
+          groundingMetadata,
+          finishReason
+        }],
+        usageMetadata
+      };
+    } finally {
+      requestAbort.dispose();
+    }
+  }
+
   toGeminiPayload(messages, tools = [], temperature = this.config.temperature, model = '') {
     const systemParts = [];
     const contents = [];
@@ -257,13 +323,26 @@ export class GeminiClient {
     tools = [],
     temperature = this.config.temperature,
     signal,
-    requestTimeoutMs
+    requestTimeoutMs,
+    onTextDelta
   }) {
     const payload = this.toGeminiPayload(messages, tools, temperature, model);
+    if (typeof onTextDelta === 'function') {
+      try {
+        return await this.requestStream(model, payload, { signal, requestTimeoutMs, onTextDelta });
+      } catch (error) {
+        const canRetryWithoutStreaming = /AI request failed \((?:400|404|405|415|422)\)/.test(error.message);
+        if (!canRetryWithoutStreaming || signal?.aborted) throw error;
+        this.logger?.warn?.('Gemini rejected streaming; retrying as a regular completion', {
+          model,
+          error: error.message
+        });
+      }
+    }
     return this.request(model, payload, { signal, requestTimeoutMs });
   }
 
-  async completeWithTools({ model, messages, tools = [], toolRunner, temperature, signal, requestTimeoutMs }) {
+  async completeWithTools({ model, messages, tools = [], toolRunner, temperature, signal, requestTimeoutMs, onTextDelta }) {
     const workingMessages = [...messages];
 
     for (let step = 0; step < Math.max(1, this.config.aiMaxToolSteps); step += 1) {
@@ -273,7 +352,8 @@ export class GeminiClient {
         tools,
         temperature,
         signal,
-        requestTimeoutMs
+        requestTimeoutMs,
+        onTextDelta
       });
       const candidate = response.candidates?.[0];
       if (!candidate?.content?.parts) {
@@ -323,7 +403,8 @@ export class GeminiClient {
       messages: workingMessages,
       temperature,
       signal,
-      requestTimeoutMs
+      requestTimeoutMs,
+      onTextDelta
     });
     const finalCandidate = finalResponse.candidates?.[0] || {};
     const finalText = appendGroundingSources(

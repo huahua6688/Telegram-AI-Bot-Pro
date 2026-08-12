@@ -72,9 +72,10 @@ test('fixed model under auto provider remains visible in the settings panel', ()
   assert.match(panel, /Current model: fixed-model/);
 });
 
-test('automatic model callback stores auto without changing fallback preference', async () => {
+test('automatic model callback restores provider failover', async () => {
   let storedPatch;
   const bot = {
+    config: { enableProviderFallback: true },
     db: {
       setUserAISettings(userId, patch) {
         assert.equal(userId, 42);
@@ -103,6 +104,6 @@ test('automatic model callback stores auto without changing fallback preference'
   assert.deepEqual(storedPatch, {
     providerId: 'auto',
     modelId: '',
-    fallbackEnabled: false
+    fallbackEnabled: true
   });
 });

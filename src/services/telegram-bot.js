@@ -1643,9 +1643,13 @@ export class TelegramAIBot {
       userId: String(userId || ''),
       providerId,
       modelId,
-      fallbackEnabled: Object.hasOwn(stored, 'fallbackEnabled')
-        ? Boolean(stored.fallbackEnabled)
-        : Boolean(this.config.enableProviderFallback),
+      // Auto mode must survive free-provider 429/quota exhaustion even when
+      // an older per-user preference had fallback disabled.
+      fallbackEnabled: autoRouting
+        ? Boolean(this.config.enableProviderFallback)
+        : Object.hasOwn(stored, 'fallbackEnabled')
+          ? Boolean(stored.fallbackEnabled)
+          : Boolean(this.config.enableProviderFallback),
       rawProviderId,
       rawModelId,
       manualProvider,
@@ -7242,7 +7246,7 @@ export class TelegramAIBot {
       settings = this.db.setUserAISettings?.(userId, {
         providerId: 'auto',
         modelId: '',
-        fallbackEnabled: settings.fallbackEnabled
+        fallbackEnabled: Boolean(this.config.enableProviderFallback)
       }) || settings;
       settings = this.getEffectiveAISettings(userId);
       await this.editAssistantMessageText(
@@ -7866,6 +7870,9 @@ export class TelegramAIBot {
       });
       const model = smartRoute.model || smartRoute.modelId || activeAiModel;
       const toolUsage = { count: 0 };
+      const draftStreamer = typeof this.createAssistantDraftStreamer === 'function'
+        ? this.createAssistantDraftStreamer(ctx)
+        : null;
       const completion = await this.completeWithAiFallback({
         scope: 'chat',
         capability: requestCapability,
@@ -7880,6 +7887,7 @@ export class TelegramAIBot {
           this.config.enableToolCalls
             ? this.toolRegistry.getDefinitions()
             : [],
+          onTextDelta: draftStreamer?.onTextDelta,
           toolRunner: async (toolCall) => {
             const output = await this.toolRegistry.execute(toolCall, {
               source: 'assistant_chat',
@@ -7949,7 +7957,10 @@ export class TelegramAIBot {
         this.logger.warn('Failed to update memory after reply', { error: this.formatLogError(error) });
       }
 
-      const reply = await this.sendAssistantReply(ctx, visibleAssistantText);
+      const reply = await this.sendAssistantReply(ctx, visibleAssistantText, {}, {
+        finalizeRichDraft: Boolean(draftStreamer?.sent),
+        skipSimulatedStreaming: Boolean(draftStreamer?.sent)
+      });
       assistantDelivered = true;
       if (reply?.lastMessageId && this.config?.miniAppEnabled === false) {
         const state = this.createAssistantActionState({
@@ -8144,17 +8155,67 @@ export class TelegramAIBot {
     }
   }
 
-  async sendAssistantReply(ctx, text, extra = {}) {
+  createAssistantDraftStreamer(ctx) {
+    if (!this.config.enableStreamingReplies || !this.config.enableRichMessages) return null;
+    if (ctx.chat?.type !== 'private' || typeof ctx.telegram?.callApi !== 'function') return null;
+
+    this.richDraftSequence = ((Number(this.richDraftSequence) || 0) + 1) % 100000;
+    const draftId = ((Date.now() % 2_000_000_000) + this.richDraftSequence) || 1;
+    const intervalMs = Math.max(250, Number(this.config.streamingEditIntervalMs) || 350);
+    let lastUpdateAt = 0;
+    let lastText = '';
+    let disabled = false;
+    let sent = false;
+
+    const onTextDelta = async (_delta, fullText) => {
+      if (disabled) return;
+      const cleaned = cleanBotOutput(fullText);
+      if (!cleaned || cleaned.length < 12 || cleaned === lastText) return;
+      const now = Date.now();
+      if (lastUpdateAt && now - lastUpdateAt < intervalMs) return;
+
+      const preview = truncateText(cleaned, Math.max(500, Number(this.config.maxOutputChars) || 4096));
+      try {
+        await ctx.telegram.callApi('sendRichMessageDraft', {
+          chat_id: ctx.chat.id,
+          message_thread_id: ctx.message?.message_thread_id,
+          draft_id: draftId,
+          rich_message: { html: escapeTelegramHtml(preview) }
+        });
+        sent = true;
+        lastText = cleaned;
+        lastUpdateAt = Date.now();
+      } catch (error) {
+        disabled = true;
+        this.logger?.warn?.('Rich message draft streaming unavailable; using final reply only', {
+          chatId: ctx.chat?.id,
+          error: error.message
+        });
+      }
+    };
+
+    return {
+      onTextDelta,
+      get sent() {
+        return sent;
+      }
+    };
+  }
+
+  async sendAssistantReply(ctx, text, extra = {}, options = {}) {
     const locale = typeof this.getLocale === 'function' ? this.getLocale(ctx) : 'zh';
     const fallbackText = typeof this.t === 'function' ? this.t(locale, 'noReply') : 'No reply.';
     const richReply = typeof this.trySendRichAssistantReply === 'function'
-      ? await this.trySendRichAssistantReply(ctx, text, extra)
+      ? await this.trySendRichAssistantReply(ctx, text, extra, {
+          force: Boolean(options.finalizeRichDraft),
+          kind: options.finalizeRichDraft ? 'stream_final' : 'assistant'
+        })
       : null;
     if (richReply) return richReply;
     const chunks = splitMessage(cleanBotOutput(text) || fallbackText, this.config.maxOutputChars);
     let lastMessageId = null;
     for (const chunk of chunks) {
-      if (!this.config.enableStreamingReplies) {
+      if (!this.config.enableStreamingReplies || options.skipSimulatedStreaming) {
         const sent = await ctx.reply(chunk, {
           ...extra,
           reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined
@@ -8211,7 +8272,7 @@ export class TelegramAIBot {
     if (!this.config.enableRichMessages || ctx.chat?.type !== 'private') return null;
     const markdown = String(text || '').trim();
     const structured = /(?:^|\n)(?:#{1,6}\s|```|\|.+\||\d+\.\s|[-*]\s)|\$\$[\s\S]+?\$\$/m.test(markdown);
-    if (!structured || (!options.force && markdown.length < this.config.richMessageMinChars)) return null;
+    if (!options.force && (!structured || markdown.length < this.config.richMessageMinChars)) return null;
 
     try {
       const sent = await ctx.telegram.callApi('sendRichMessage', {

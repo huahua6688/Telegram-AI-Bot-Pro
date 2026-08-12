@@ -41,7 +41,7 @@ ENABLE_USER_MODEL_SELECTION=true
 # Automatic fallback
 ENABLE_PROVIDER_FALLBACK=true
 # 每个备用平台都必须配置自己的 API Key，才能真正跨平台切换
-AI_PROVIDER_FALLBACK_ORDER=gemini,groq,openrouter
+AI_PROVIDER_FALLBACK_ORDER=gemini,groq,openrouter,openai-compatible
 # 首次失败后的额外重试次数；1 表示每个模型最多尝试 2 次
 AI_PROVIDER_MAX_RETRIES=1
 AI_PROVIDER_RETRY_DELAY_MS=800
@@ -50,6 +50,8 @@ MODEL_LIST_CACHE_TTL_MS=3600000
 MODEL_DISCOVERY_ENABLED=true
 ENABLE_RICH_MESSAGES=true
 RICH_MESSAGE_MIN_CHARS=600
+ENABLE_STREAMING_REPLIES=true
+STREAMING_EDIT_INTERVAL_MS=350
 
 # Google Gemini free-tier first
 GEMINI_API_KEY=
@@ -260,7 +262,7 @@ Zeabur AI Hub 按标准 OpenAI-compatible Provider 使用：设置 `DEFAULT_AI_P
 
 若 AI Hub 是收费平台，不要把它设为默认 Provider。可以保持 `DEFAULT_AI_PROVIDER=gemini`（或你实际拥有免费额度的 Provider），同时配置 `AI_API_KEY` / `AI_BASE_URL` 用于后台同步 Hub 模型；用户需要时再在 Mini App 手动选择 Hub。模型价格只有在平台返回零价格或模型 ID 明确包含 `:free` 时才显示“免费”，其余显示“收费”或“价格未知”。
 
-Telegram Rich Messages 默认开启。私聊和内联模式中的新闻搜索会直接使用带标题、正文和可点击来源的 Telegram 原生 Rich Message；其他回复达到 `RICH_MESSAGE_MIN_CHARS` 且包含标题、列表、表格、代码块或公式时也会使用富消息。群聊、旧版 Telegram 客户端以及发送失败时会自动降级为原有普通消息，不会中断回答。设置 `ENABLE_RICH_MESSAGES=false` 可显式关闭。
+Telegram Rich Messages 默认开启。私聊和内联模式中的新闻搜索会直接使用带标题、正文和可点击来源的 Telegram 原生 Rich Message；其他回复达到 `RICH_MESSAGE_MIN_CHARS` 且包含标题、列表、表格、代码块或公式时也会使用富消息。开启 `ENABLE_STREAMING_REPLIES=true` 后，Gemini 和 OpenAI-compatible 类平台会直接请求 SSE 流，并通过 `sendRichMessageDraft` 把已生成片段持续显示在 Telegram 私聊中；完成后再发送正式 Rich Message 保存到聊天记录。平台或 Telegram 不支持时会自动降级为普通完整回复，不会中断回答。`STREAMING_EDIT_INTERVAL_MS` 限制草稿刷新频率，避免触发 Telegram 429。设置 `ENABLE_RICH_MESSAGES=false` 可显式关闭富消息及富消息草稿。
 
 Gemini Live 只支持 Google 官方 Gemini Live API，必须使用独立的 `GEMINI_LIVE_API_KEY` 和兼容 Live 模型；不要把第三方 OpenAI-compatible / AI Hub 地址当作 `gemini-live`。
 
@@ -372,7 +374,7 @@ ENABLE_USER_MODEL_SELECTION=true
 # Automatic fallback
 ENABLE_PROVIDER_FALLBACK=true
 # Each fallback provider needs its own API key for real cross-provider failover
-AI_PROVIDER_FALLBACK_ORDER=gemini,groq,openrouter
+AI_PROVIDER_FALLBACK_ORDER=gemini,groq,openrouter,openai-compatible
 # Extra retries after the first failure; 1 means at most 2 attempts per model
 AI_PROVIDER_MAX_RETRIES=1
 AI_PROVIDER_RETRY_DELAY_MS=800
@@ -551,6 +553,8 @@ To switch provider or model, open `Settings -> Model`. User choices are stored i
 `SMART_ROUTING_ENABLED=true` routes general, translation, code, reasoning, long-context, document, vision, OCR, tool, and low-cost tasks to configured targets. Set it to `false` to bypass this layer. `SMART_ROUTING_DEBUG` enables diagnostics, while `SMART_ROUTING_MIN_CONFIDENCE` defaults to `0.55`; invalid values use the default and numeric values are clamped to `0`–`1`.
 
 Selection priority is: explicit user model → explicit user provider → dedicated feature/mode provider and model (translation, vision/media, and similar modes) → Smart rule target → default provider/model → the existing failure fallback chain. Dedicated modes bypass Smart routing where required. Smart routing selects the first target only; it does not change `ENABLE_PROVIDER_FALLBACK`, same-provider fallback models, or `AI_PROVIDER_FALLBACK_ORDER`.
+
+For a free-first deployment with a paid Zeabur AI Hub safety net, keep `DEFAULT_AI_PROVIDER=gemini`, enable fallback, and set `AI_PROVIDER_FALLBACK_ORDER=gemini,groq,openrouter,openai-compatible`. Model discovery for `openai-compatible` remains active even though it is not the default. HTTP 429, quota exhaustion, unavailable models, timeouts, and transient failures continue through the list. Automatic mode always restores fallback; a manually pinned provider/model can still disable it.
 
 Configuration rules:
 

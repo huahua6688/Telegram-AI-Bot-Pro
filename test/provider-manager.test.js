@@ -100,6 +100,53 @@ test('AIProviderManager skips remaining models for provider-wide quota failures'
   ]);
 });
 
+test('free-provider quota exhaustion falls through to the paid OpenAI-compatible safety net', async () => {
+  const calls = [];
+  const manager = new AIProviderManager({
+    config: baseConfig({
+      aiProvider: 'gemini',
+      defaultModel: 'gemini-free',
+      providerModels: {
+        gemini: ['gemini-free'],
+        groq: ['groq-free'],
+        openrouter: ['openrouter/free'],
+        'openai-compatible': ['paid-hub-model']
+      },
+      availableModels: ['gemini-free'],
+      aiProviderFallbackOrder: ['gemini', 'groq', 'openrouter', 'openai-compatible'],
+      aiApiKey: 'paid-hub-key'
+    }),
+    logger,
+    clientFactory: fakeFactory({
+      gemini: [new Error('AI request failed (429): project quota exhausted')],
+      groq: [new Error('AI request failed (429): account rate limit exceeded')],
+      openrouter: [new Error('AI request failed (429): insufficient credits')],
+      'openai-compatible': [{
+        text: 'paid fallback ok',
+        messages: [{ role: 'assistant', content: 'paid fallback ok' }]
+      }]
+    }, calls)
+  });
+
+  const result = await manager.execute({
+    capability: 'chat',
+    preferredProvider: 'gemini',
+    preferredModel: 'gemini-free',
+    fallbackEnabled: true,
+    request: { messages: [{ role: 'user', content: 'hello' }], tools: [] }
+  });
+
+  assert.equal(result.providerId, 'openai-compatible');
+  assert.equal(result.model, 'paid-hub-model');
+  assert.equal(result.switched, true);
+  assert.deepEqual(calls.map((item) => `${item.providerId}/${item.model}`), [
+    'gemini/gemini-free',
+    'groq/groq-free',
+    'openrouter/openrouter/free',
+    'openai-compatible/paid-hub-model'
+  ]);
+});
+
 test('AIProviderManager still switches Gemini models for model-scoped quota failures', async () => {
   const calls = [];
   const manager = new AIProviderManager({
