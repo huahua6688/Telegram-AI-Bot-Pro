@@ -84,6 +84,14 @@ test('Mini App securely exposes settings without chat input actions', async (t) 
   assert.match(appHtml, /设置语言（Language）/);
   assert.match(appHtml, /获取 AI Hub 最新模型/);
   assert.match(appHtml, /<summary>用户与额度<\/summary>/);
+  assert.match(appHtml, /class="bottom-nav"/);
+  assert.match(appHtml, /data-view-target="settings"/);
+  assert.match(appHtml, /data-view-target="billing"/);
+  assert.match(appHtml, /data-view-target="history"/);
+  assert.match(appHtml, /id="adminNavButton"/);
+  assert.match(appHtml, /新闻与地区高级设置/);
+  assert.match(appHtml, /function switchView\(viewId, options\)/);
+  assert.match(appHtml, /disableVerticalSwipes/);
   const inlineScripts = [...appHtml.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/gi)]
     .map((match) => match[1])
     .filter((script) => script.trim());
