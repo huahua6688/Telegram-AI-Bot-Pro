@@ -160,18 +160,185 @@ const MINI_APP_HTML = String.raw`<!doctype html>
     body {
       margin: 0;
       min-height: 100vh;
-      padding:
-        max(18px, env(safe-area-inset-top))
-        16px
-        max(28px, env(safe-area-inset-bottom));
+      min-height: 100dvh;
+      overflow: hidden;
       background: var(--tg-theme-bg-color, #f3f4f6);
       color: var(--tg-theme-text-color, #111827);
+      -webkit-tap-highlight-color: transparent;
     }
 
     .shell {
       width: min(100%, 640px);
+      height: 100vh;
+      height: 100dvh;
       margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--tg-theme-bg-color, #f3f4f6);
     }
+
+    .app-header {
+      z-index: 20;
+      flex: 0 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      min-height: 58px;
+      padding: max(10px, env(safe-area-inset-top)) 16px 10px;
+      border-bottom: 1px solid rgba(127, 127, 127, .14);
+      background: var(--tg-theme-bg-color, #f3f4f6);
+      background: color-mix(in srgb, var(--tg-theme-bg-color, #f3f4f6) 88%, transparent);
+      backdrop-filter: blur(20px) saturate(160%);
+      -webkit-backdrop-filter: blur(20px) saturate(160%);
+    }
+
+    .app-brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .app-mark {
+      display: grid;
+      place-items: center;
+      width: 34px;
+      height: 34px;
+      border-radius: 10px;
+      color: #fff;
+      background: linear-gradient(145deg, #2481cc, #6d5ce7);
+      box-shadow: 0 5px 14px rgba(36, 129, 204, .22);
+      font-size: 17px;
+      font-weight: 900;
+    }
+
+    .app-brand-copy { min-width: 0; }
+
+    .app-brand-copy span {
+      display: block;
+      color: var(--tg-theme-hint-color, #6b7280);
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .app-brand-copy strong {
+      display: block;
+      margin-top: 1px;
+      overflow: hidden;
+      font-size: 17px;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .header-close {
+      width: auto;
+      min-height: 36px;
+      padding: 7px 12px;
+      border-radius: 999px;
+      color: var(--tg-theme-button-color, #2481cc);
+      background: rgba(36, 129, 204, .1);
+      font-size: 13px;
+    }
+
+    .app-content {
+      flex: 1 1 auto;
+      min-height: 0;
+      overflow-x: hidden;
+      overflow-y: auto;
+      overscroll-behavior-y: contain;
+      padding: 14px 14px 22px;
+      scroll-behavior: smooth;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .app-view { display: none; }
+    .app-view.active { display: block; animation: view-in .18s ease-out; }
+
+    @keyframes view-in {
+      from { opacity: .55; transform: translateY(4px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .bottom-nav {
+      z-index: 20;
+      flex: 0 0 auto;
+      display: grid;
+      grid-auto-flow: column;
+      grid-auto-columns: 1fr;
+      gap: 2px;
+      padding: 7px 8px max(7px, env(safe-area-inset-bottom));
+      border-top: 1px solid rgba(127, 127, 127, .16);
+      background: var(--tg-theme-secondary-bg-color, #ffffff);
+      background: color-mix(in srgb, var(--tg-theme-secondary-bg-color, #ffffff) 90%, transparent);
+      backdrop-filter: blur(22px) saturate(170%);
+      -webkit-backdrop-filter: blur(22px) saturate(170%);
+    }
+
+    .nav-button {
+      display: grid;
+      place-items: center;
+      gap: 2px;
+      min-height: 49px;
+      padding: 4px 2px;
+      border-radius: 12px;
+      color: var(--tg-theme-hint-color, #6b7280);
+      background: transparent;
+      font-size: 10px;
+      font-weight: 700;
+    }
+
+    .nav-button svg {
+      width: 22px;
+      height: 22px;
+      fill: none;
+      stroke: currentColor;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      stroke-width: 1.9;
+    }
+
+    .nav-button.active {
+      color: var(--tg-theme-button-color, #2481cc);
+      background: rgba(36, 129, 204, .08);
+    }
+
+    .home-hero {
+      padding: 8px 4px 4px;
+    }
+
+    .home-hero h1 { font-size: 27px; }
+
+    .quick-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .quick-grid.has-admin { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+    .quick-action {
+      min-height: 80px;
+      padding: 12px 10px;
+      border: 1px solid rgba(127, 127, 127, .12);
+      text-align: left;
+      background: var(--tg-theme-secondary-bg-color, #ffffff);
+      box-shadow: 0 6px 20px rgba(0, 0, 0, .035);
+    }
+
+    .quick-action span { display: block; font-size: 21px; }
+    .quick-action strong { display: block; margin-top: 7px; font-size: 13px; }
+
+    .page-heading {
+      padding: 4px 4px 2px;
+    }
+
+    .page-heading h1 { font-size: 25px; }
+    .page-heading p { margin: 6px 0 0; color: var(--tg-theme-hint-color, #6b7280); font-size: 13px; line-height: 1.45; }
 
     .eyebrow {
       margin: 0 0 8px;
@@ -200,10 +367,11 @@ const MINI_APP_HTML = String.raw`<!doctype html>
 
     .card {
       margin-top: 14px;
-      padding: 18px;
-      border-radius: 18px;
+      padding: 16px;
+      border: 1px solid rgba(127, 127, 127, .11);
+      border-radius: 17px;
       background: var(--tg-theme-secondary-bg-color, #ffffff);
-      box-shadow: 0 8px 30px rgba(0, 0, 0, .06);
+      box-shadow: 0 6px 22px rgba(0, 0, 0, .04);
     }
 
     .section-head {
@@ -467,6 +635,26 @@ const MINI_APP_HTML = String.raw`<!doctype html>
     .admin-section > summary::after { content: '›'; float: right; color: var(--tg-theme-hint-color, #6b7280); transform: rotate(90deg); }
     .admin-section[open] > summary::after { transform: rotate(-90deg); }
     .admin-section-body { padding: 0 14px 14px; }
+
+    .settings-details {
+      margin-top: 16px;
+      border-top: 1px solid rgba(127, 127, 127, .16);
+      border-bottom: 1px solid rgba(127, 127, 127, .16);
+    }
+
+    .settings-details > summary {
+      padding: 14px 2px;
+      cursor: pointer;
+      color: var(--tg-theme-button-color, #2481cc);
+      font-size: 14px;
+      font-weight: 800;
+      list-style: none;
+    }
+
+    .settings-details > summary::-webkit-details-marker { display: none; }
+    .settings-details > summary::after { content: '›'; float: right; transition: transform .18s; }
+    .settings-details[open] > summary::after { transform: rotate(90deg); }
+    .settings-details-body { padding: 0 2px 14px; }
 
     .provider-list,
     .user-list {
@@ -815,13 +1003,46 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       line-height: 1.5;
       text-align: center;
     }
+
+    @media (min-width: 641px) {
+      body { background: #e8ebf0; }
+      .shell { box-shadow: 0 0 50px rgba(0, 0, 0, .12); }
+    }
+
+    @media (max-width: 390px) {
+      .app-content { padding-right: 10px; padding-left: 10px; }
+      .nav-button { font-size: 9px; }
+      .card { padding: 14px; }
+    }
   </style>
 </head>
 <body>
   <main class="shell">
-    <p class="eyebrow">PROJECT XIOMN</p>
-    <h1>Xiomn Bot 控制台</h1>
-    <p class="lead" id="welcome">正在连接 Telegram 和 Bot 服务……</p>
+    <header class="app-header">
+      <div class="app-brand">
+        <div class="app-mark" aria-hidden="true">X</div>
+        <div class="app-brand-copy">
+          <span>Project Xiomn</span>
+          <strong id="appTitle">控制台</strong>
+        </div>
+      </div>
+      <button class="header-close" id="closeButton" type="button">完成</button>
+    </header>
+
+    <div class="app-content" id="appContent">
+    <section class="app-view active" id="homeView" data-view="home">
+      <div class="home-hero">
+        <p class="eyebrow">XIOMN AI ASSISTANT</p>
+        <h1>你好</h1>
+        <p class="lead" id="welcome">正在连接 Telegram 和 Bot 服务……</p>
+      </div>
+
+      <div class="quick-grid" id="quickGrid" aria-label="快捷入口">
+        <button class="quick-action" type="button" data-view-target="settings"><span>⚙️</span><strong>AI 设置</strong></button>
+        <button class="quick-action" type="button" data-view-target="billing"><span>⭐️</span><strong>余额与额度</strong></button>
+        <button class="quick-action" type="button" data-view-target="history"><span>💬</span><strong>聊天记录</strong></button>
+        <button class="quick-action hidden" id="adminQuickAction" type="button" data-view-target="admin"><span>🛡️</span><strong>管理中心</strong></button>
+      </div>
 
     <section class="card">
       <div class="section-head">
@@ -849,6 +1070,13 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         <span class="value" id="aiCalls">—</span>
       </div>
     </section>
+    </section>
+
+    <section class="app-view" id="settingsView" data-view="settings">
+      <div class="page-heading">
+        <h1>AI 设置</h1>
+        <p>选择平台、模型、语言与回答风格。</p>
+      </div>
 
     <section class="card">
       <div class="section-head">
@@ -881,30 +1109,35 @@ const MINI_APP_HTML = String.raw`<!doctype html>
           <select id="languageSelect" disabled></select>
         </div>
 
-        <div class="field">
-          <label for="newsRegionSelect">新闻地区（可选）</label>
-          <input id="newsRegionSelect" list="newsRegionOptions" maxlength="2" autocomplete="off"
-            placeholder="自动继承，也可输入 DE" disabled />
-          <datalist id="newsRegionOptions"></datalist>
-        </div>
+        <details class="settings-details">
+          <summary>新闻与地区高级设置</summary>
+          <div class="settings-details-body">
+            <div class="field">
+              <label for="newsRegionSelect">新闻地区（可选）</label>
+              <input id="newsRegionSelect" list="newsRegionOptions" maxlength="2" autocomplete="off"
+                placeholder="自动继承，也可输入 DE" disabled />
+              <datalist id="newsRegionOptions"></datalist>
+            </div>
 
-        <div class="field">
-          <label for="newsLanguageSelect">新闻语言（可选）</label>
-          <input id="newsLanguageSelect" list="newsLanguageOptions" maxlength="35" autocomplete="off"
-            placeholder="自动继承，也可输入 de-DE" disabled />
-          <datalist id="newsLanguageOptions"></datalist>
-        </div>
+            <div class="field">
+              <label for="newsLanguageSelect">新闻语言（可选）</label>
+              <input id="newsLanguageSelect" list="newsLanguageOptions" maxlength="35" autocomplete="off"
+                placeholder="自动继承，也可输入 de-DE" disabled />
+              <datalist id="newsLanguageOptions"></datalist>
+            </div>
 
-        <div class="field">
-          <label for="newsTimeZoneSelect">新闻时区（可选）</label>
-          <input id="newsTimeZoneSelect" list="newsTimeZoneOptions" maxlength="64" autocomplete="off"
-            placeholder="自动继承，也可输入 Europe/Berlin" disabled />
-          <datalist id="newsTimeZoneOptions"></datalist>
-        </div>
+            <div class="field">
+              <label for="newsTimeZoneSelect">新闻时区（可选）</label>
+              <input id="newsTimeZoneSelect" list="newsTimeZoneOptions" maxlength="64" autocomplete="off"
+                placeholder="自动继承，也可输入 Europe/Berlin" disabled />
+              <datalist id="newsTimeZoneOptions"></datalist>
+            </div>
 
-        <p class="small" id="newsEffectiveLabel">
-          未单独设置时，会根据你的语言判断；无法可靠判断时才使用服务器默认值。
-        </p>
+            <p class="small" id="newsEffectiveLabel">
+              未单独设置时，会根据你的语言判断；无法可靠判断时才使用服务器默认值。
+            </p>
+          </div>
+        </details>
 
         <div class="field">
           <label for="personaSelect">回答风格</label>
@@ -931,6 +1164,13 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         </div>
       </form>
     </section>
+    </section>
+
+    <section class="app-view" id="billingView" data-view="billing">
+      <div class="page-heading">
+        <h1>余额与额度</h1>
+        <p>查看每日免费额度、已购余额和 Stars 套餐。</p>
+      </div>
 
     <section class="card" id="billingPanel">
       <div class="section-head">
@@ -950,6 +1190,13 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         </div>
       </div>
     </section>
+    </section>
+
+    <section class="app-view" id="historyView" data-view="history">
+      <div class="page-heading">
+        <h1>聊天记录</h1>
+        <p>按会话查看机器人保留的上下文和回答。</p>
+      </div>
 
     <section class="card" id="historyPanel">
       <div class="section-head">
@@ -974,6 +1221,14 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         <div class="conversation-messages" id="historyMessages"></div>
       </div>
     </section>
+
+    </section>
+
+    <section class="app-view" id="adminView" data-view="admin">
+      <div class="page-heading">
+        <h1>管理中心</h1>
+        <p>管理平台状态、用户额度和会话数据。</p>
+      </div>
 
     <section class="card hidden" id="adminPanel">
       <div class="section-head">
@@ -1036,12 +1291,26 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         </div></div>
       </details>
     </section>
+    </section>
+    </div>
 
-    <button class="secondary" id="closeButton" type="button" style="margin-top:14px">关闭控制台</button>
-
-    <p class="small">
-      登录身份由 Telegram Mini App 签名验证。网页不会显示或传输任何 AI API Key。
-    </p>
+    <nav class="bottom-nav" aria-label="控制台导航">
+      <button class="nav-button active" type="button" data-view-target="home" aria-current="page">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9h13v-9"/><path d="M9.5 19v-5h5v5"/></svg><span>首页</span>
+      </button>
+      <button class="nav-button" type="button" data-view-target="settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.1-1l2-1.5-2-3.4-2.4 1a8 8 0 0 0-1.7-1L14.5 3h-5l-.3 3.1a8 8 0 0 0-1.7 1l-2.4-1-2 3.4L5.1 11a7 7 0 0 0 0 2l-2 1.5 2 3.4 2.4-1a8 8 0 0 0 1.7 1l.3 3.1h5l.3-3.1a8 8 0 0 0 1.7-1l2.4 1 2-3.4-2-1.5a7 7 0 0 0 .1-1Z"/></svg><span>设置</span>
+      </button>
+      <button class="nav-button" type="button" data-view-target="billing">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.6 5.3 5.9.9-4.3 4.1 1 5.9-5.2-2.8-5.2 2.8 1-5.9-4.3-4.1 5.9-.9Z"/></svg><span>额度</span>
+      </button>
+      <button class="nav-button" type="button" data-view-target="history">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16v11H8l-4 3Z"/><path d="M8 9h8M8 12h5"/></svg><span>记录</span>
+      </button>
+      <button class="nav-button hidden" id="adminNavButton" type="button" data-view-target="admin">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 5 6v5c0 4.6 2.8 8 7 10 4.2-2 7-5.4 7-10V6Z"/><path d="m9 12 2 2 4-4"/></svg><span>管理</span>
+      </button>
+    </nav>
   </main>
 
   <script>
@@ -1062,6 +1331,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       catalog: [],
       settings: null,
       profile: null,
+      activeView: 'home',
       historyLoaded: false,
       sessions: [],
       adminLoaded: false,
@@ -1071,6 +1341,14 @@ const MINI_APP_HTML = String.raw`<!doctype html>
     };
 
     const elements = {
+      appContent: document.getElementById('appContent'),
+      appTitle: document.getElementById('appTitle'),
+      quickGrid: document.getElementById('quickGrid'),
+      appViews: Array.from(document.querySelectorAll('.app-view')),
+      viewButtons: Array.from(document.querySelectorAll('[data-view-target]')),
+      navButtons: Array.from(document.querySelectorAll('.nav-button')),
+      adminNavButton: document.getElementById('adminNavButton'),
+      adminQuickAction: document.getElementById('adminQuickAction'),
       welcome: document.getElementById('welcome'),
       statusBadge: document.getElementById('statusBadge'),
       provider: document.getElementById('provider'),
@@ -1132,6 +1410,39 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       adminSessionMessages: document.getElementById('adminSessionMessages'),
       closeButton: document.getElementById('closeButton')
     };
+
+    const viewTitles = {
+      home: '控制台',
+      settings: 'AI 设置',
+      billing: '余额与额度',
+      history: '聊天记录',
+      admin: '管理中心'
+    };
+
+    function switchView(viewId, options) {
+      const target = String(viewId || 'home');
+      if (!viewTitles[target]) return;
+      if (target === 'admin' && !(state.profile && state.profile.isAdmin)) return;
+
+      state.activeView = target;
+      elements.appViews.forEach(function (view) {
+        view.classList.toggle('active', view.dataset.view === target);
+      });
+      elements.navButtons.forEach(function (button) {
+        const active = button.dataset.viewTarget === target;
+        button.classList.toggle('active', active);
+        if (active) button.setAttribute('aria-current', 'page');
+        else button.removeAttribute('aria-current');
+      });
+      elements.appTitle.textContent = viewTitles[target];
+      elements.appContent.scrollTo({ top: 0, behavior: options && options.instant ? 'auto' : 'smooth' });
+
+      if (target === 'history' && !state.historyLoaded) loadMySessions();
+      if (target === 'admin' && !state.adminLoaded) loadAdmin();
+      if (tg && tg.HapticFeedback && typeof tg.HapticFeedback.selectionChanged === 'function') {
+        tg.HapticFeedback.selectionChanged();
+      }
+    }
 
     function formatUptime(seconds) {
       const total = Number(seconds || 0);
@@ -1345,17 +1656,17 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         elements.modelSelect.disabled = true;
       }
 
-      if (!state.historyLoaded) {
-        loadMySessions();
-      }
-
       if (state.profile.isAdmin) {
         elements.adminPanel.classList.remove('hidden');
-        if (!state.adminLoaded) {
-          loadAdmin();
-        }
+        elements.adminNavButton.classList.remove('hidden');
+        elements.adminQuickAction.classList.remove('hidden');
+        elements.quickGrid.classList.add('has-admin');
       } else {
         elements.adminPanel.classList.add('hidden');
+        elements.adminNavButton.classList.add('hidden');
+        elements.adminQuickAction.classList.add('hidden');
+        elements.quickGrid.classList.remove('has-admin');
+        if (state.activeView === 'admin') switchView('home', { instant: true });
       }
     }
 
@@ -2240,13 +2551,16 @@ const MINI_APP_HTML = String.raw`<!doctype html>
     }
 
     function setupTelegram() {
-      if (!tg) {
+      if (!tg || !tg.initData) {
         elements.welcome.textContent = '当前在普通浏览器中打开，可查看状态；个人设置需要从 Telegram 打开。';
         return;
       }
 
       tg.ready();
       tg.expand();
+      if (typeof tg.disableVerticalSwipes === 'function') tg.disableVerticalSwipes();
+      if (typeof tg.setHeaderColor === 'function') tg.setHeaderColor('secondary_bg_color');
+      if (typeof tg.setBottomBarColor === 'function') tg.setBottomBarColor('secondary_bg_color');
 
       const user = tg.initDataUnsafe && tg.initDataUnsafe.user
         ? tg.initDataUnsafe.user
@@ -2264,6 +2578,11 @@ const MINI_APP_HTML = String.raw`<!doctype html>
     elements.providerSelect.addEventListener('change', function () {
       updateModelOptions('');
     });
+    elements.viewButtons.forEach(function (button) {
+      button.addEventListener('click', function () {
+        switchView(button.dataset.viewTarget);
+      });
+    });
     elements.modelSelect.addEventListener('change', updateModelDescription);
     elements.syncModelsButton.addEventListener('click', syncProviderModels);
 
@@ -2272,8 +2591,8 @@ const MINI_APP_HTML = String.raw`<!doctype html>
     elements.refreshButton.addEventListener('click', function () {
       loadStatus();
       loadSettings();
-      loadMySessions();
-      if (state.profile && state.profile.isAdmin) {
+      if (state.activeView === 'history') loadMySessions();
+      if (state.activeView === 'admin' && state.profile && state.profile.isAdmin) {
         loadAdmin();
       }
     });
