@@ -4262,7 +4262,16 @@ export class TelegramAIBot {
 
   async setLocalizedBotCommands() {
     const compact = this.config?.miniAppEnabled !== false;
-    await this.bot.telegram.setMyCommands(createLocalizedBotCommands('en', compact));
+    try {
+      await this.bot.telegram.setMyCommands(createLocalizedBotCommands('en', compact));
+    } catch (error) {
+      const retryAfter = Number(error?.response?.parameters?.retry_after || 0);
+      this.logger?.warn?.('Failed to set default bot commands; startup will continue', {
+        retryAfter,
+        error: error.message
+      });
+      return false;
+    }
 
     for (const languageCode of Object.keys(BOT_COMMAND_DESCRIPTIONS)) {
       if (!/^[a-z]{2,3}$/.test(languageCode)) continue;
@@ -4271,12 +4280,16 @@ export class TelegramAIBot {
           language_code: languageCode
         });
       } catch (error) {
+        const retryAfter = Number(error?.response?.parameters?.retry_after || 0);
         this.logger?.warn?.('Failed to set localized bot commands', {
           languageCode,
+          retryAfter,
           error: error.message
         });
+        if (retryAfter > 0) break;
       }
     }
+    return true;
   }
 
   async setChatBotCommands(ctx, locale = 'en') {
@@ -8044,7 +8057,16 @@ export class TelegramAIBot {
     this.logger.info(`Stopping Telegram bot: ${reason}`);
     clearInterval(this.usageReservationSweepTimer);
     this.usageReservationSweepTimer = null;
-    await this.bot.stop(reason);
+    try {
+      await this.bot.stop(reason);
+      return true;
+    } catch (error) {
+      if (error?.message === 'Bot is not running!') {
+        this.logger?.info?.('Telegram bot was already stopped', { reason });
+        return false;
+      }
+      throw error;
+    }
   }
 
   async sendAssistantReply(ctx, text, extra = {}) {
