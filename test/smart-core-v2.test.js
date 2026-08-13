@@ -10,6 +10,7 @@ import { ToolRegistry } from '../src/services/tool-registry.js';
 import {
   TelegramAIBot,
   cleanBotOutput,
+  formatNewsRichMarkdown,
   sanitizeRichMarkdown
 } from '../src/services/telegram-bot.js';
 import { PrivacyTelegramAIBot } from '../src/services/privacy-telegram-bot.js';
@@ -360,6 +361,29 @@ test('plain fallback converts markdown tables and HTML breaks into readable vert
   const plain = cleanBotOutput('| Direction | Progress |\n|---|---|\n| Models | Faster<br>Smarter |');
   assert.equal(plain, 'Models\nProgress：Faster；Smarter');
   assert.doesNotMatch(plain, /<br|^\|/m);
+});
+
+test('news renderer merges model references with appended verified source links after composition', () => {
+  const answer = [
+    '今天新闻小结。',
+    '',
+    '## 参考来源',
+    '1. 国药现代大宗交易分析',
+    '2. 白宫发言人离职消息'
+  ].join('\n');
+  const raw = JSON.stringify({
+    results: [
+      { title: '东方财富报道', url: 'https://example.com/market', sourceName: '东方财富' },
+      { title: '新唐人电视台报道', url: 'https://example.com/white-house', sourceName: '新唐人电视台' }
+    ]
+  });
+
+  const markdown = formatNewsRichMarkdown(answer, raw, 'zh', 'Asia/Shanghai');
+
+  assert.equal((markdown.match(/^## 参考来源$/gm) || []).length, 1);
+  assert.match(markdown, /1\. \[国药现代大宗交易分析\]\(https:\/\/example\.com\/market\)/);
+  assert.match(markdown, /2\. \[白宫发言人离职消息\]\(https:\/\/example\.com\/white-house\)/);
+  assert.doesNotMatch(markdown, /东方财富｜东方财富报道/);
 });
 
 test('AI fallback retries another model for transient provider failures', async () => {
