@@ -4,6 +4,7 @@ import { personaPresets } from '../config.js';
 
 const TARGET_LANGUAGE_PATTERN =
   '(韩语|韓語|韩国语|韓國語|korean|日语|日語|japanese|英语|英文|english|中文|chinese|高棉语|高棉語|柬埔寨语|柬埔寨語|khmer|粤语|粵語|cantonese|泰语|泰語|thai|马来语|馬來語|malay|越南语|越南語|vietnamese|法语|法語|french|西班牙语|西班牙語|spanish)';
+const MAX_SEARCH_RESULTS = 8;
 
 function isChineseLocale(locale = '') {
   return String(locale || '').toLowerCase().startsWith('zh');
@@ -211,6 +212,11 @@ function normalizeUrl(url = '') {
   }
 }
 
+function normalizeSourceUrl(url = '') {
+  const normalized = normalizeUrl(url);
+  return normalized && normalized.length <= 1400 ? normalized : '';
+}
+
 function formatSourceTimestamp(value = '', locale = 'zh', timeZone = 'Asia/Kuala_Lumpur') {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return '';
@@ -233,7 +239,7 @@ function extractReferenceLinks(raw = '') {
   const links = [];
 
   function add(title, url, { sourceName = '', publishedAt = '' } = {}) {
-    const cleanUrl = normalizeUrl(url);
+    const cleanUrl = normalizeSourceUrl(url);
     const cleanTitle = cleanPlainText(title || '');
     const cleanSourceName = cleanPlainText(sourceName || '');
 
@@ -266,7 +272,7 @@ function extractReferenceLinks(raw = '') {
           publishedAt: item.publishedAt || item.pubDate || item.date || ''
         }
       );
-      if (links.length >= 6) break;
+      if (links.length >= MAX_SEARCH_RESULTS) break;
     }
 
     if (data.url) add(data.heading || data.title || '网页来源', data.url);
@@ -274,14 +280,14 @@ function extractReferenceLinks(raw = '') {
     const urls = String(raw || '').match(/https?:\/\/[^\s)）]+/g) || [];
     for (const url of urls) {
       add('', url);
-      if (links.length >= 6) break;
+      if (links.length >= MAX_SEARCH_RESULTS) break;
     }
   }
 
-  return links.slice(0, 6);
+  return links.slice(0, MAX_SEARCH_RESULTS);
 }
 
-function compactToolPayload(raw = '', maxChars = 6000) {
+function compactToolPayload(raw = '', maxChars = 6000, { requireSourceUrls = false } = {}) {
   const text = String(raw || '').trim();
   if (!text) return '';
 
@@ -296,6 +302,9 @@ function compactToolPayload(raw = '', maxChars = 6000) {
         ? data.topics
         : [];
 
+    const sourcedResults = requireSourceUrls
+      ? results.filter((item) => normalizeSourceUrl(item.url || item.FirstURL || item.link || ''))
+      : results;
     const compact = {
         heading: truncateText(String(data.heading || ''), 300),
         answer: truncateText(String(data.answer || ''), 1200),
@@ -303,12 +312,10 @@ function compactToolPayload(raw = '', maxChars = 6000) {
         location: data.location || '',
         current: data.current || null,
         forecast: Array.isArray(data.forecast) ? data.forecast.slice(0, 5) : [],
-        results: results.slice(0, 6).map((item) => ({
+        results: sourcedResults.slice(0, MAX_SEARCH_RESULTS).map((item) => ({
           title: truncateText(String(item.title || item.Text || ''), 220),
           description: truncateText(String(item.description || item.snippet || item.Text || ''), 600),
-          url: String(item.url || item.FirstURL || item.link || '').length <= 1400
-            ? String(item.url || item.FirstURL || item.link || '')
-            : '',
+          url: normalizeSourceUrl(item.url || item.FirstURL || item.link || ''),
           sourceName: truncateText(String(item.sourceName || item.source || item.publisher || ''), 120),
           publishedAt: item.publishedAt || item.pubDate || item.date || ''
         }))
@@ -448,7 +455,7 @@ function rawFallbackText(raw = '', title = '结果') {
 
     if (results.length > 0) {
       lines.push('', '简要结果：');
-      for (const item of results.slice(0, 5)) {
+      for (const item of results.slice(0, MAX_SEARCH_RESULTS)) {
         const itemTitle = item.title || item.Text || '-';
         const desc = item.description || item.Text || '';
         lines.push(`- ${itemTitle}${desc && desc !== itemTitle ? `：${desc}` : ''}`);
@@ -657,7 +664,7 @@ async function fetchNewsFallback(query = '今日新闻', {
     freshOnly: shouldFilterFresh,
     strictToday,
     timeZone,
-    results: items.slice(0, 6).map((item) => ({
+    results: items.slice(0, MAX_SEARCH_RESULTS).map((item) => ({
       title: item.title,
       description: [item.sourceName, formatSourceTimestamp(item.publishedAt, normalizedLanguage, timeZone)]
         .filter(Boolean)
@@ -769,7 +776,8 @@ function resolveCompletionTarget(bot, ctx, {
 
 async function composeHumanAnswer(bot, ctx, { userText, toolName, raw, title }) {
   const locale = bot.getLocale(ctx);
-  const payload = compactToolPayload(raw);
+  const isSearch = toolName === 'web_search';
+  const payload = compactToolPayload(raw, 6000, { requireSourceUrls: isSearch });
   const recentContext = getRecentContext(bot, ctx);
   const personaInstruction = getPersonaInstruction(bot, ctx);
 
@@ -812,6 +820,8 @@ async function composeHumanAnswer(bot, ctx, { userText, toolName, raw, title }) 
               'Do not say “according to the search results” too mechanically.',
               'Give a useful synthesized answer first.',
               'For news/search: summarize the key points, explain what matters, and avoid copying original titles verbatim.',
+              'For news/search: use only facts present in the supplied results. Do not add events, figures, people, or claims from memory.',
+              'Every factual news/search item in the answer must be supported by at least one supplied result.',
               'For URL pages: explain what the page is about and what the user should know.',
               'For weather: answer directly with practical advice.',
               'Do not include raw URLs in the answer body. References will be appended separately as clickable links.',
