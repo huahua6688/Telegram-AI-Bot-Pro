@@ -844,6 +844,34 @@ test('inline search payload compaction preserves valid JSON and source metadata'
   assert.equal(parsed.results[0].publishedAt, '2026-07-16T03:00:00.000Z');
 });
 
+test('search composition keeps every valid provider result up to the eight-result search limit', () => {
+  const results = Array.from({ length: 10 }, (_, index) => ({
+    title: `Result ${index + 1}`,
+    snippet: `Summary ${index + 1}`,
+    url: `https://example.com/${index + 1}`,
+    sourceName: `Source ${index + 1}`
+  }));
+  const raw = JSON.stringify({
+    results: [
+      { title: 'Missing source URL', snippet: 'Must not reach the answer composer.' },
+      ...results
+    ]
+  });
+
+  const references = naturalAgentInternals.extractReferenceLinks(raw);
+  const compact = JSON.parse(
+    naturalAgentInternals.compactToolPayload(raw, 6000, { requireSourceUrls: true })
+  );
+  const rendered = naturalAgentInternals.appendClickableReferences('摘要', raw, 'zh', 3900);
+
+  assert.equal(references.length, 8);
+  assert.equal(compact.results.length, 8);
+  assert.doesNotMatch(JSON.stringify(compact), /Missing source URL/);
+  assert.equal((rendered.match(/<a /g) || []).length, 8);
+  assert.match(rendered, /https:\/\/example\.com\/8/);
+  assert.doesNotMatch(rendered, /https:\/\/example\.com\/9/);
+});
+
 test('unsafe Google News redirect targets never become Telegram link protocols', () => {
   const raw = JSON.stringify({
     results: [{
