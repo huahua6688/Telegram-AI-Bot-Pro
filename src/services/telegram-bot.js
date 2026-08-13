@@ -761,7 +761,9 @@ function mergeDuplicateReferenceSections(text = '') {
     const safeTitle = escapeRichMarkdownLinkText(title);
     return url ? `${number}. [${safeTitle}](${url})` : `${number}. ${title}`;
   });
-  const heading = last[0].replace(/^#{1,6}\s*/, '').replace(/\s*[:：]?\s*$/, '');
+  const headingMarker = last[0].trim().match(/^(#{1,6})\s*/)?.[1] || '';
+  const headingLabel = last[0].replace(/^#{1,6}\s*/, '').replace(/\s*[:：]?\s*$/, '');
+  const heading = headingMarker ? `${headingMarker} ${headingLabel}` : headingLabel;
   return [source.slice(0, matches[0].index).trim(), `${heading}\n${merged.join('\n')}`]
     .filter(Boolean)
     .join('\n\n')
@@ -920,7 +922,7 @@ function escapeRichMarkdownLinkText(value = '') {
     .replaceAll(')', '\\)');
 }
 
-function formatNewsRichMarkdown(
+export function formatNewsRichMarkdown(
   answer = '',
   raw = '',
   locale = 'zh',
@@ -929,11 +931,14 @@ function formatNewsRichMarkdown(
 ) {
   const english = String(locale || '').toLowerCase().startsWith('en');
   const title = english ? '# Latest news' : '# 今日新闻';
-  const cleaned = naturalAgentInternals.stripBareUrls(
-    naturalAgentInternals.stripGeneratedReferences(String(answer || ''))
-  );
-  const body = sanitizeRichMarkdown(cleaned).trim();
   const references = naturalAgentInternals.extractReferenceLinks(raw);
+  // Keep the model's descriptive source labels when verified search results are
+  // available. The final sanitizer then merges both reference sections and
+  // attaches the verified URLs instead of showing two separate source lists.
+  const sourceAnswer = references.length
+    ? String(answer || '')
+    : naturalAgentInternals.stripGeneratedReferences(String(answer || ''));
+  const body = naturalAgentInternals.stripBareUrls(sourceAnswer).trim();
   const sourceLines = references.map((item, index) => {
     const timestamp = naturalAgentInternals.formatSourceTimestamp(
       item.publishedAt,
@@ -948,7 +953,10 @@ function formatNewsRichMarkdown(
   if (sourceLines.length) {
     sections.push(english ? '## Sources' : '## 参考来源', sourceLines.join('\n'));
   }
-  return truncateText(sections.filter(Boolean).join('\n\n'), Math.max(500, Number(maxChars) || 12000));
+  return truncateText(
+    sanitizeRichMarkdown(sections.filter(Boolean).join('\n\n')),
+    Math.max(500, Number(maxChars) || 12000)
+  );
 }
 
 async function sendSearchReply(ctx, text, maxLength, locale = 'zh') {
