@@ -715,15 +715,61 @@ function normalizeRichMarkdownUrl(url = '') {
   }
 }
 
-function removeDuplicateReferenceSections(text = '') {
+function parseReferenceSectionEntries(section = '') {
+  const entries = new Map();
+  for (const line of String(section || '').split(/\r?\n/)) {
+    const match = line.match(/^\s*(\d+)[.)、]\s*(.+?)\s*$/);
+    if (!match) continue;
+    const number = Number(match[1]);
+    const content = match[2].trim();
+    const markdownLink = content.match(/\[([^\]]+)]\((https?:\/\/[^)]+)\)/i);
+    const parenthesizedUrl = content.match(/\((https?:\/\/[^)]+)\)\s*$/i);
+    const bareUrl = content.match(/https?:\/\/\S+/i);
+    const url = normalizeRichMarkdownUrl(markdownLink?.[2] || parenthesizedUrl?.[1] || bareUrl?.[0] || '');
+    const title = String(markdownLink?.[1] || content)
+      .replace(/\s*\(https?:\/\/[^)]+\)\s*$/i, '')
+      .replace(/https?:\/\/\S+/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    entries.set(number, { number, title, url });
+  }
+  return entries;
+}
+
+function mergeDuplicateReferenceSections(text = '') {
   const sourceHeading = /^(?:#{1,6}\s*)?(?:参考链接|参考来源|来源|References?|Sources?)(?:\s*[（(][^\n）)]*[）)])?\s*[:：]?\s*$/gim;
-  const matches = Array.from(String(text || '').matchAll(sourceHeading));
-  if (matches.length < 2) return String(text || '');
-  return `${String(text || '').slice(0, matches[0].index).trim()}\n\n${String(text || '').slice(matches.at(-1).index).trim()}`.trim();
+  const source = String(text || '');
+  const matches = Array.from(source.matchAll(sourceHeading));
+  if (matches.length < 2) return source;
+
+  const firstStart = matches[0].index + matches[0][0].length;
+  const firstEnd = matches[1].index;
+  const last = matches.at(-1);
+  const lastStart = last.index + last[0].length;
+  const firstEntries = parseReferenceSectionEntries(source.slice(firstStart, firstEnd));
+  const lastEntries = parseReferenceSectionEntries(source.slice(lastStart));
+  const numbers = Array.from(new Set([...firstEntries.keys(), ...lastEntries.keys()])).sort((a, b) => a - b);
+  if (!numbers.length) {
+    return `${source.slice(0, matches[0].index).trim()}\n\n${source.slice(last.index).trim()}`.trim();
+  }
+
+  const merged = numbers.map((number) => {
+    const descriptive = firstEntries.get(number);
+    const linked = lastEntries.get(number);
+    const title = descriptive?.title || linked?.title || `Source ${number}`;
+    const url = linked?.url || descriptive?.url || '';
+    const safeTitle = escapeRichMarkdownLinkText(title);
+    return url ? `${number}. [${safeTitle}](${url})` : `${number}. ${title}`;
+  });
+  const heading = last[0].replace(/^#{1,6}\s*/, '').replace(/\s*[:：]?\s*$/, '');
+  return [source.slice(0, matches[0].index).trim(), `${heading}\n${merged.join('\n')}`]
+    .filter(Boolean)
+    .join('\n\n')
+    .trim();
 }
 
 export function sanitizeRichMarkdown(text = '') {
-  let markdown = removeDuplicateReferenceSections(String(text || '').replace(/\u0000/g, ''));
+  let markdown = mergeDuplicateReferenceSections(String(text || '').replace(/\u0000/g, ''));
   markdown = markdown
     .split(/\r?\n/)
     .map((line) => line.includes('|')
@@ -739,7 +785,7 @@ export function sanitizeRichMarkdown(text = '') {
 export function cleanBotOutput(text = '') {
   const blocks = [];
 
-  let out = removeDuplicateReferenceSections(String(text || '')).replace(/```[\s\S]*?```/g, (x) => {
+  let out = mergeDuplicateReferenceSections(String(text || '')).replace(/```[\s\S]*?```/g, (x) => {
     const k = '__CODE_BLOCK_' + blocks.length + '__';
     blocks.push(
       x
