@@ -363,7 +363,7 @@ test('plain fallback converts markdown tables and HTML breaks into readable vert
   assert.doesNotMatch(plain, /<br|^\|/m);
 });
 
-test('news renderer merges model references with appended verified source links after composition', () => {
+test('news renderer removes model-written references and keeps only verified source links', () => {
   const answer = [
     '今天新闻小结。',
     '',
@@ -381,9 +381,9 @@ test('news renderer merges model references with appended verified source links 
   const markdown = formatNewsRichMarkdown(answer, raw, 'zh', 'Asia/Shanghai');
 
   assert.equal((markdown.match(/^## 参考来源$/gm) || []).length, 1);
-  assert.match(markdown, /1\. \[国药现代大宗交易分析\]\(https:\/\/example\.com\/market\)/);
-  assert.match(markdown, /2\. \[白宫发言人离职消息\]\(https:\/\/example\.com\/white-house\)/);
-  assert.doesNotMatch(markdown, /东方财富｜东方财富报道/);
+  assert.match(markdown, /1\. \[东方财富｜东方财富报道\]\(https:\/\/example\.com\/market\)/);
+  assert.match(markdown, /2\. \[新唐人电视台｜新唐人电视台报道\]\(https:\/\/example\.com\/white-house\)/);
+  assert.doesNotMatch(markdown, /国药现代大宗交易分析|白宫发言人离职消息/);
 });
 
 test('AI fallback retries another model for transient provider failures', async () => {

@@ -427,6 +427,16 @@ test('source cleanup only removes a dedicated references heading', () => {
     naturalAgentInternals.stripGeneratedReferences('正文保留\nSources:\n1. https://example.com'),
     '正文保留'
   );
+  assert.equal(
+    naturalAgentInternals.stripGeneratedReferences(
+      '正文【1】和结论 [2]\n\n**参考来源**\n1. 模型自带来源【1】\n（点击编号查看原文）'
+    ),
+    '正文和结论'
+  );
+  assert.equal(
+    naturalAgentInternals.stripGeneratedReferences('正文\n\n## 参考来源\n1. 模型自带来源'),
+    '正文'
+  );
 
   const context = JSON.stringify({
     results: Array.from({ length: 4 }, (_, index) => ({
