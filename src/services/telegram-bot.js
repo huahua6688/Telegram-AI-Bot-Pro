@@ -642,10 +642,104 @@ export function createSystemPrompt(config, chatSettings, userSettings, locale) {
 
 
 
+function splitMarkdownTableRow(line = '') {
+  const value = String(line || '').trim();
+  if (!value.includes('|')) return [];
+  const inner = value.replace(/^\|/, '').replace(/\|$/, '');
+  return inner.split(/(?<!\\)\|/).map((cell) => cell.replace(/\\\|/g, '|').trim());
+}
+
+function isMarkdownTableSeparator(line = '') {
+  const cells = splitMarkdownTableRow(line);
+  return cells.length > 1 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.replace(/\s+/g, '')));
+}
+
+function cleanTableCell(value = '') {
+  return String(value || '')
+    .replace(/<br\s*\/?\s*>/gi, '；')
+    .replace(/\s*；\s*/g, '；')
+    .replace(/；{2,}/g, '；')
+    .trim();
+}
+
+function convertMarkdownTables(text = '', { rich = false } = {}) {
+  const lines = String(text || '').split(/\r?\n/);
+  const output = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const headers = splitMarkdownTableRow(lines[index]);
+    if (
+      headers.length < 2 ||
+      index + 1 >= lines.length ||
+      !isMarkdownTableSeparator(lines[index + 1])
+    ) {
+      output.push(lines[index]);
+      continue;
+    }
+
+    const rows = [];
+    index += 2;
+    while (index < lines.length) {
+      const cells = splitMarkdownTableRow(lines[index]);
+      if (cells.length < 2) break;
+      rows.push(cells);
+      index += 1;
+    }
+    index -= 1;
+
+    for (const cells of rows) {
+      const title = cleanTableCell(cells[0]);
+      if (title) output.push(rich ? `### ${title}` : title);
+      for (let cellIndex = 1; cellIndex < Math.max(headers.length, cells.length); cellIndex += 1) {
+        const label = cleanTableCell(headers[cellIndex] || `字段 ${cellIndex + 1}`);
+        const value = cleanTableCell(cells[cellIndex]);
+        if (!value) continue;
+        output.push(rich ? `- **${label}：** ${value}` : `${label}：${value}`);
+      }
+      output.push('');
+    }
+  }
+
+  return output.join('\n').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+function normalizeRichMarkdownUrl(url = '') {
+  let value = String(url || '').trim();
+  value = value.replace(/(?:%22|%27|["',，])+$/gi, '');
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return value;
+    return parsed.toString();
+  } catch {
+    return value;
+  }
+}
+
+function removeDuplicateReferenceSections(text = '') {
+  const sourceHeading = /^(?:#{1,6}\s*)?(?:参考链接|参考来源|来源|References?|Sources?)(?:\s*[（(][^\n）)]*[）)])?\s*[:：]?\s*$/gim;
+  const matches = Array.from(String(text || '').matchAll(sourceHeading));
+  if (matches.length < 2) return String(text || '');
+  return `${String(text || '').slice(0, matches[0].index).trim()}\n\n${String(text || '').slice(matches.at(-1).index).trim()}`.trim();
+}
+
+export function sanitizeRichMarkdown(text = '') {
+  let markdown = removeDuplicateReferenceSections(String(text || '').replace(/\u0000/g, ''));
+  markdown = markdown
+    .split(/\r?\n/)
+    .map((line) => line.includes('|')
+      ? line.replace(/<br\s*\/?\s*>/gi, '；')
+      : line.replace(/<br\s*\/?\s*>/gi, '\n'))
+    .join('\n');
+  markdown = markdown.replace(/\]\((https?:\/\/[^\s)]+)\)/gi, (_match, url) =>
+    `](${normalizeRichMarkdownUrl(url)})`
+  );
+  return markdown.replace(/\n{3,}/g, '\n\n').trim();
+}
+
 export function cleanBotOutput(text = '') {
   const blocks = [];
 
-  let out = String(text || '').replace(/```[\s\S]*?```/g, (x) => {
+  let out = removeDuplicateReferenceSections(String(text || '')).replace(/```[\s\S]*?```/g, (x) => {
     const k = '__CODE_BLOCK_' + blocks.length + '__';
     blocks.push(
       x
@@ -656,7 +750,10 @@ export function cleanBotOutput(text = '') {
     return k;
   });
 
+  out = convertMarkdownTables(out);
+
   out = out
+    .replace(/<br\s*\/?\s*>/gi, '\n')
     .replace(/^\s*(?:\*{3,}|_{3,}|-{3,}|={3,})\s*$/gm, '')
     .replace(/\*\*\*([^*\n]+)\*\*\*/g, '$1')
     .replace(/___([^_\n]+)___/g, '$1')
@@ -789,7 +886,7 @@ function formatNewsRichMarkdown(
   const cleaned = naturalAgentInternals.stripBareUrls(
     naturalAgentInternals.stripGeneratedReferences(String(answer || ''))
   );
-  const body = cleanBotOutput(cleaned).trim();
+  const body = sanitizeRichMarkdown(cleaned).trim();
   const references = naturalAgentInternals.extractReferenceLinks(raw);
   const sourceLines = references.map((item, index) => {
     const timestamp = naturalAgentInternals.formatSourceTimestamp(
@@ -8270,7 +8367,7 @@ export class TelegramAIBot {
 
   async trySendRichAssistantReply(ctx, text, extra = {}, options = {}) {
     if (!this.config.enableRichMessages || ctx.chat?.type !== 'private') return null;
-    const markdown = String(text || '').trim();
+    const markdown = sanitizeRichMarkdown(text);
     const hasSpecialRichBlock = /```[\s\S]*?```|\$\$[\s\S]+?\$\$|(?:^|\n)\|[^\n]+\|\s*\n\|(?:\s*:?-+:?\s*\|)+/m.test(markdown);
     const hasStructuredLayout = /(?:^|\n)(?:#{1,6}\s|\d+\.\s|[-*]\s)/m.test(markdown);
     const modelChoseRichStructure = hasSpecialRichBlock || (
@@ -8292,6 +8389,24 @@ export class TelegramAIBot {
         kind: options.kind || 'assistant',
         error: error.message
       });
+      if (hasSpecialRichBlock && /(?:^|\n)\|[^\n]+\|\s*\n\|(?:\s*:?-+:?\s*\|)+/m.test(markdown)) {
+        const verticalMarkdown = convertMarkdownTables(markdown, { rich: true });
+        try {
+          const sent = await ctx.telegram.callApi('sendRichMessage', {
+            chat_id: ctx.chat.id,
+            rich_message: { markdown: verticalMarkdown },
+            reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined,
+            reply_markup: extra?.reply_markup
+          });
+          return { lastMessageId: sent?.message_id || null, rich: true, layout: 'vertical' };
+        } catch (retryError) {
+          this.logger.warn('Vertical rich message fallback failed; using regular Telegram message', {
+            chatId: ctx.chat?.id,
+            kind: options.kind || 'assistant',
+            error: retryError.message
+          });
+        }
+      }
       return null;
     }
   }

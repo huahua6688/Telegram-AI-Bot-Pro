@@ -124,7 +124,7 @@ function getRecentContext(bot, ctx) {
 
 function stripGeneratedReferences(answer = '') {
   return String(answer || '')
-    .replace(/(?:^|\n)[ \t]*(?:参考链接|参考来源|来源|References|Sources)(?:[ \t]*[:：][\s\S]*|[ \t]*(?:\r?\n[\s\S]*)?)$/i, '')
+    .replace(/(?:^|\n)[ \t]*(?:参考链接|参考来源|来源|References|Sources)(?:[ \t]*[（(][^\n）)]*[）)])?(?:[ \t]*[:：][\s\S]*|[ \t]*(?:\r?\n[\s\S]*)?)$/i, '')
     .trim();
 }
 
@@ -187,7 +187,9 @@ function hasUsefulToolResult(raw = '') {
 }
 
 function normalizeUrl(url = '') {
-  const raw = String(url || '').trim();
+  const raw = String(url || '')
+    .trim()
+    .replace(/(?:%22|%27|["',，])+$/gi, '');
   if (!/^https?:\/\//i.test(raw)) return '';
 
   try {

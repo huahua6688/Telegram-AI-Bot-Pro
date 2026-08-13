@@ -7,7 +7,11 @@ import {
   rankMemoryItems
 } from '../src/services/memory-manager.js';
 import { ToolRegistry } from '../src/services/tool-registry.js';
-import { TelegramAIBot } from '../src/services/telegram-bot.js';
+import {
+  TelegramAIBot,
+  cleanBotOutput,
+  sanitizeRichMarkdown
+} from '../src/services/telegram-bot.js';
 import { PrivacyTelegramAIBot } from '../src/services/privacy-telegram-bot.js';
 import {
   naturalAgentInternals,
@@ -300,6 +304,61 @@ test('short code selected by the model still uses rich rendering without forcing
   );
   assert.equal(result.rich, true);
   assert.equal(calls[0].method, 'sendRichMessage');
+});
+
+test('rich table output removes unsupported breaks, duplicate sources, and malformed URL suffixes', () => {
+  const markdown = sanitizeRichMarkdown([
+    '# AI overview',
+    '',
+    '| Direction | Progress |',
+    '|---|---|',
+    '| Models | First item<br>Second item |',
+    '',
+    '参考来源（点击可查看原文）',
+    '1. Provider name',
+    '',
+    '参考来源：',
+    '1. [Provider](https://example.com/report%22,)'
+  ].join('\n'));
+
+  assert.match(markdown, /\| Models \| First item；Second item \|/);
+  assert.doesNotMatch(markdown, /<br|参考来源（点击可查看原文）|%22,/i);
+  assert.match(markdown, /\[Provider\]\(https:\/\/example\.com\/report\)/);
+});
+
+test('rejected rich tables retry as a vertical rich layout and never expose table source', async () => {
+  const calls = [];
+  const fakeBot = {
+    config: { enableRichMessages: true, richMessageMinChars: 200 },
+    logger: logger()
+  };
+  const ctx = {
+    chat: { id: 77, type: 'private' },
+    message: { message_id: 42 },
+    telegram: {
+      async callApi(method, payload) {
+        calls.push({ method, payload });
+        if (calls.length === 1) throw new Error('rich table rejected');
+        return { message_id: 94 };
+      }
+    }
+  };
+  const markdown = '# Report\n\n| Direction | Progress | Impact |\n|---|---|---|\n| Models | Faster<br>Smarter | Better tools |';
+
+  const result = await TelegramAIBot.prototype.trySendRichAssistantReply.call(fakeBot, ctx, markdown);
+
+  assert.equal(result.rich, true);
+  assert.equal(result.layout, 'vertical');
+  assert.equal(calls.length, 2);
+  assert.match(calls[1].payload.rich_message.markdown, /### Models/);
+  assert.match(calls[1].payload.rich_message.markdown, /\*\*Progress：\*\* Faster；Smarter/);
+  assert.doesNotMatch(calls[1].payload.rich_message.markdown, /^\|/m);
+});
+
+test('plain fallback converts markdown tables and HTML breaks into readable vertical text', () => {
+  const plain = cleanBotOutput('| Direction | Progress |\n|---|---|\n| Models | Faster<br>Smarter |');
+  assert.equal(plain, 'Models\nProgress：Faster；Smarter');
+  assert.doesNotMatch(plain, /<br|^\|/m);
 });
 
 test('AI fallback retries another model for transient provider failures', async () => {
