@@ -8314,6 +8314,9 @@ export class TelegramAIBot {
     let lastText = '';
     let disabled = false;
     let sent = false;
+    let richDraftEnabled = Boolean(this.config.enableRichMessages);
+    let richDraftSent = false;
+    let richFallbackLogged = false;
 
     const onTextDelta = async (_delta, fullText) => {
       if (disabled) return;
@@ -8322,16 +8325,49 @@ export class TelegramAIBot {
       const now = Date.now();
       if (lastUpdateAt && now - lastUpdateAt < intervalMs) return;
 
-      const preview = truncateText(
-        cleaned,
-        Math.min(4096, Math.max(500, Number(this.config.maxOutputChars) || 4096))
+      const previewLimit = Math.min(
+        4096,
+        Math.max(500, Number(this.config.maxOutputChars) || 4096)
       );
+      const plainPreview = truncateText(
+        cleaned,
+        previewLimit
+      );
+      const richPreview = truncateText(sanitizeRichMarkdown(fullText), previewLimit);
+
+      if (richDraftEnabled && richPreview) {
+        try {
+          await ctx.telegram.callApi('sendRichMessageDraft', {
+            chat_id: ctx.chat.id,
+            message_thread_id: ctx.message?.message_thread_id,
+            draft_id: draftId,
+            rich_message: { markdown: richPreview }
+          });
+          sent = true;
+          richDraftSent = true;
+          lastText = cleaned;
+          lastUpdateAt = Date.now();
+          return;
+        } catch (error) {
+          if (!richFallbackLogged) {
+            richFallbackLogged = true;
+            this.logger?.warn?.('Telegram rich message draft streaming unavailable; using plain draft', {
+              chatId: ctx.chat?.id,
+              error: error.message
+            });
+          }
+          if (/method\s+not\s+found|unknown\s+method|not\s+implemented|unsupported/i.test(String(error?.message || ''))) {
+            richDraftEnabled = false;
+          }
+        }
+      }
+
       try {
         await ctx.telegram.callApi('sendMessageDraft', {
           chat_id: ctx.chat.id,
           message_thread_id: ctx.message?.message_thread_id,
           draft_id: draftId,
-          text: preview
+          text: plainPreview
         });
         sent = true;
         lastText = cleaned;
@@ -8349,6 +8385,9 @@ export class TelegramAIBot {
       onTextDelta,
       get sent() {
         return sent;
+      },
+      get rich() {
+        return richDraftSent;
       }
     };
   }

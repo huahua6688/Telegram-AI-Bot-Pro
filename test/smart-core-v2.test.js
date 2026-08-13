@@ -228,7 +228,7 @@ test('structured private replies use Telegram rich messages with safe regular fa
   assert.equal(await TelegramAIBot.prototype.trySendRichAssistantReply.call(fakeBot, ctx, markdown), null);
 });
 
-test('provider fragments use one throttled plain draft and let final model structure choose rendering', async () => {
+test('provider fragments use one throttled rich draft and let final model structure choose persistence', async () => {
   const calls = [];
   const plainReplies = [];
   const fakeBot = {
@@ -263,11 +263,12 @@ test('provider fragments use one throttled plain draft and let final model struc
   await streamer.onTextDelta('Streaming ans', 'Streaming answer');
   await streamer.onTextDelta(' continues', 'Streaming answer continues');
   assert.equal(streamer.sent, true);
+  assert.equal(streamer.rich, true);
   assert.equal(calls.length, 1);
-  assert.equal(calls[0].method, 'sendMessageDraft');
+  assert.equal(calls[0].method, 'sendRichMessageDraft');
   assert.equal(calls[0].payload.chat_id, 77);
   assert.ok(calls[0].payload.draft_id > 0);
-  assert.equal(calls[0].payload.text, 'Streaming answer');
+  assert.equal(calls[0].payload.rich_message.markdown, 'Streaming answer');
 
   const final = await TelegramAIBot.prototype.sendAssistantReply.call(
     fakeBot,
@@ -279,6 +280,41 @@ test('provider fragments use one throttled plain draft and let final model struc
   assert.equal(final.lastMessageId, 92);
   assert.deepEqual(plainReplies, ['Streaming answer continues']);
   assert.equal(calls.length, 1);
+});
+
+test('rich draft failures fall back to the existing plain Telegram draft', async () => {
+  const calls = [];
+  const warnings = [];
+  const fakeBot = {
+    config: {
+      enableStreamingReplies: true,
+      enableRichMessages: true,
+      streamingEditIntervalMs: 350,
+      maxOutputChars: 4096
+    },
+    logger: { warn(message) { warnings.push(message); } }
+  };
+  const ctx = {
+    chat: { id: 77, type: 'private' },
+    message: { message_id: 42 },
+    telegram: {
+      async callApi(method, payload) {
+        calls.push({ method, payload });
+        if (method === 'sendRichMessageDraft') throw new Error('method not found');
+        return true;
+      }
+    }
+  };
+
+  const streamer = TelegramAIBot.prototype.createAssistantDraftStreamer.call(fakeBot, ctx);
+  await streamer.onTextDelta('**Streaming**', '**Streaming answer**');
+
+  assert.equal(streamer.sent, true);
+  assert.equal(streamer.rich, false);
+  assert.deepEqual(calls.map((item) => item.method), ['sendRichMessageDraft', 'sendMessageDraft']);
+  assert.equal(calls[0].payload.rich_message.markdown, '**Streaming answer**');
+  assert.equal(calls[1].payload.text, 'Streaming answer');
+  assert.equal(warnings.length, 1);
 });
 
 test('short code selected by the model still uses rich rendering without forcing ordinary replies', async () => {
