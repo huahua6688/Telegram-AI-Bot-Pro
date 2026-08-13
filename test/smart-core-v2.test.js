@@ -315,7 +315,7 @@ test('rich table output removes unsupported breaks, duplicate sources, and malfo
     '| Models | First item<br>Second item |',
     '',
     '参考来源（点击可查看原文）',
-    '1. Provider name',
+    '1. Provider name – detailed report title',
     '',
     '参考来源：',
     '1. [Provider](https://example.com/report%22,)'
@@ -323,7 +323,8 @@ test('rich table output removes unsupported breaks, duplicate sources, and malfo
 
   assert.match(markdown, /\| Models \| First item；Second item \|/);
   assert.doesNotMatch(markdown, /<br|参考来源（点击可查看原文）|%22,/i);
-  assert.match(markdown, /\[Provider\]\(https:\/\/example\.com\/report\)/);
+  assert.match(markdown, /\[Provider name – detailed report title\]\(https:\/\/example\.com\/report\)/);
+  assert.doesNotMatch(markdown, /\[Provider\]\(/);
 });
 
 test('rejected rich tables retry as a vertical rich layout and never expose table source', async () => {
