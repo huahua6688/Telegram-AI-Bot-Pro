@@ -262,7 +262,7 @@ Zeabur AI Hub 按标准 OpenAI-compatible Provider 使用：设置 `DEFAULT_AI_P
 
 若 AI Hub 是收费平台，不要把它设为默认 Provider。可以保持 `DEFAULT_AI_PROVIDER=gemini`（或你实际拥有免费额度的 Provider），同时配置 `AI_API_KEY` / `AI_BASE_URL` 用于后台同步 Hub 模型；用户需要时再在 Mini App 手动选择 Hub。模型价格只有在平台返回零价格或模型 ID 明确包含 `:free` 时才显示“免费”，其余显示“收费”或“价格未知”。
 
-Telegram Rich Messages 默认开启。私聊和内联模式中的新闻搜索会直接使用带标题、正文和可点击来源的 Telegram 原生 Rich Message；其他回复达到 `RICH_MESSAGE_MIN_CHARS` 且包含标题、列表、表格、代码块或公式时也会使用富消息。开启 `ENABLE_STREAMING_REPLIES=true` 后，Gemini 和 OpenAI-compatible 类平台会直接请求 SSE 流，并通过 `sendRichMessageDraft` 把已生成片段持续显示在 Telegram 私聊中；完成后再发送正式 Rich Message 保存到聊天记录。平台或 Telegram 不支持时会自动降级为普通完整回复，不会中断回答。`STREAMING_EDIT_INTERVAL_MS` 限制草稿刷新频率，避免触发 Telegram 429。设置 `ENABLE_RICH_MESSAGES=false` 可显式关闭富消息及富消息草稿。
+Telegram Rich Messages 默认开启。模型会自行选择适合答案的表达方式：普通回答使用普通消息；代码块、公式、表格或足够长的标题/列表结构才使用 Rich Message。为改善手机体验，系统会提示模型默认优先使用正文和纵向列表，只有用户要求表格或多字段对比确实更清楚时才使用表格。新闻搜索仍使用带标题、正文和可点击来源的原生 Rich Message。开启 `ENABLE_STREAMING_REPLIES=true` 后，Gemini 和 OpenAI-compatible 类平台会直接请求 SSE 流，并通过普通 `sendMessageDraft` 持续显示生成片段；完成后再根据模型最终采用的结构决定保存为普通消息还是 Rich Message。平台或 Telegram 不支持草稿时会自动降级为普通完整回复。`STREAMING_EDIT_INTERVAL_MS` 限制草稿刷新频率，避免触发 Telegram 429。
 
 Gemini Live 只支持 Google 官方 Gemini Live API，必须使用独立的 `GEMINI_LIVE_API_KEY` 和兼容 Live 模型；不要把第三方 OpenAI-compatible / AI Hub 地址当作 `gemini-live`。
 
