@@ -124,8 +124,14 @@ function getRecentContext(bot, ctx) {
 
 
 function stripGeneratedReferences(answer = '') {
-  return String(answer || '')
-    .replace(/(?:^|\n)[ \t]*(?:参考链接|参考来源|来源|References|Sources)(?:[ \t]*[（(][^\n）)]*[）)])?(?:[ \t]*[:：][\s\S]*|[ \t]*(?:\r?\n[\s\S]*)?)$/i, '')
+  const source = String(answer || '');
+  const heading = /(?:^|\n)[ \t]*(?:#{1,6}[ \t]+)?(?:\*{1,3}|_{1,3})?[ \t]*(?:参考链接|参考来源|来源|References?|Sources?)(?:[ \t]*[（(][^\n）)]*[）)])?[ \t]*(?:\*{1,3}|_{1,3})?[ \t]*[:：]?[ \t]*(?=\r?$)/im;
+  const match = heading.exec(source);
+  const body = match ? source.slice(0, match.index) : source;
+  return body
+    .replace(/(?:【|\[)\s*\d{1,3}\s*(?:】|\])(?!\s*\()/g, '')
+    .replace(/[ \t]+([,，。；;:：])/g, '$1')
+    .replace(/[ \t]{2,}/g, ' ')
     .trim();
 }
 

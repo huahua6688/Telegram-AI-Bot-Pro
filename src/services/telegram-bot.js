@@ -932,12 +932,9 @@ export function formatNewsRichMarkdown(
   const english = String(locale || '').toLowerCase().startsWith('en');
   const title = english ? '# Latest news' : '# 今日新闻';
   const references = naturalAgentInternals.extractReferenceLinks(raw);
-  // Keep the model's descriptive source labels when verified search results are
-  // available. The final sanitizer then merges both reference sections and
-  // attaches the verified URLs instead of showing two separate source lists.
-  const sourceAnswer = references.length
-    ? String(answer || '')
-    : naturalAgentInternals.stripGeneratedReferences(String(answer || ''));
+  // Model-written citation lists are not authoritative and their numbering can
+  // differ from the retrieved results. Keep only verified tool URLs and titles.
+  const sourceAnswer = naturalAgentInternals.stripGeneratedReferences(String(answer || ''));
   const body = naturalAgentInternals.stripBareUrls(sourceAnswer).trim();
   const sourceLines = references.map((item, index) => {
     const timestamp = naturalAgentInternals.formatSourceTimestamp(
