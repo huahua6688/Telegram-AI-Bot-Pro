@@ -819,20 +819,24 @@ test('Telegram launch reuses the getMe result already verified during init', asy
   const verifiedBotInfo = { id: 123, username: 'MainTestBot', is_bot: true };
   let ready = 0;
   let botInfoAtLaunch = null;
+  let finishPolling;
   bot.botInfo = verifiedBotInfo;
   bot.logger = logger();
   bot.bot = {
     botInfo: null,
-    async launch(onLaunch) {
+    launch() {
       botInfoAtLaunch = this.botInfo;
-      onLaunch?.();
+      return new Promise((resolve) => { finishPolling = resolve; });
     }
   };
 
-  await bot.launch(() => { ready += 1; });
+  const launchPromise = bot.launch(() => { ready += 1; });
+  await new Promise((resolve) => setImmediate(resolve));
 
   assert.equal(botInfoAtLaunch, verifiedBotInfo);
   assert.equal(ready, 1);
+  finishPolling();
+  await launchPromise;
 });
 
 test('Telegram bot sweeps expired in-memory interaction state without touching active entries', () => {

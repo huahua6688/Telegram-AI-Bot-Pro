@@ -259,8 +259,9 @@ export class SupportTelegramBot {
       onLaunch?.();
     };
 
-    await this.bot.launch(markLaunched);
+    const pollingPromise = this.bot.launch();
     markLaunched();
+    await pollingPromise;
     return this;
   }
 

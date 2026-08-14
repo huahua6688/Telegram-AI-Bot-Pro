@@ -8572,8 +8572,12 @@ export class TelegramAIBot {
       onLaunch?.();
     };
 
-    await this.bot.launch(markLaunched);
+    // init() has already authenticated with Telegram and registered every
+    // handler. Telegraf's optional onLaunch/onMe callback is not consistently
+    // fired by every runtime/build, so readiness must not depend on it.
+    const pollingPromise = this.bot.launch();
     markLaunched();
+    await pollingPromise;
   }
 
   async stop(reason) {
