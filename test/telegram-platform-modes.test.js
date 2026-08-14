@@ -819,6 +819,36 @@ test('inline rich news keeps verified multi-source citations compact and inline'
   assert.doesNotMatch(markdown, /## 参考来源|First source|Second source/);
 });
 
+test('inline RSS news removes repeated publisher metadata from previews and sent results', () => {
+  const results = platformModesInternals.buildInlineResponseResults({
+    answer: '以下是搜索到的最新新闻：',
+    query: '今日新闻',
+    kind: 'news',
+    context: JSON.stringify({
+      provider: 'google-news-rss',
+      results: [{
+        title: '德国西部发生森林火灾 1800 多人被疏散 - chinanews.com.cn',
+        description: 'chinanews.com.cn · 2026/08/14 18:48',
+        url: 'https://example.com/news',
+        sourceName: 'chinanews.com.cn',
+        sourceUrl: 'https://chinanews.com.cn',
+        publishedAt: '2026-08-14T10:48:00.000Z'
+      }]
+    }),
+    locale: 'zh',
+    timeZone: 'Asia/Shanghai',
+    richMessages: true
+  });
+
+  assert.equal(results.length, 2);
+  assert.equal(results[1].title, '德国西部发生森林火灾 1800 多人被疏散');
+  assert.equal(results[0].description, '德国西部发生森林火灾 1800 多人被疏散');
+  assert.doesNotMatch(results[0].input_message_content.rich_message.markdown, /chinanews\.com\.cn\s*[·:]\s*chinanews\.com\.cn/);
+  assert.match(results[1].input_message_content.message_text, /<a href="https:\/\/example\.com\/news">chinanews\.com\.cn<\/a>/);
+  assert.doesNotMatch(results[1].input_message_content.message_text, /参考来源|Sources/);
+  assert.equal((results[1].description.match(/chinanews\.com\.cn/g) || []).length, 1);
+});
+
 test('inline source HTML stays bounded and complete even when a result URL is oversized', () => {
   const raw = JSON.stringify({
     results: [
