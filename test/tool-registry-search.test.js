@@ -473,6 +473,13 @@ test('Google News freshness uses the configured local year and recognizes today 
   assert.equal(raw, '');
   assert.equal(naturalAgentInternals.isStrictTodayNewsQuery('当天新闻'), true);
   assert.equal(naturalAgentInternals.isStrictTodayNewsQuery('當日要聞'), true);
+  assert.equal(
+    naturalAgentInternals.normalizeNewsSearchQuery(
+      '请联网搜索今天3条AI新闻，每条新闻在对应句子后标注来源，至少一条使用两个独立来源。'
+    ),
+    'AI新闻'
+  );
+  assert.equal(naturalAgentInternals.normalizeNewsSearchQuery('今日AI新闻，附来源'), 'AI新闻');
 });
 
 test('Google News allows explicitly date-scoped history from the current year', async () => {

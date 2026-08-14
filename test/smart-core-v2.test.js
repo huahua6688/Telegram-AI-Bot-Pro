@@ -484,7 +484,7 @@ test('news renderer removes model-written references and keeps only verified sou
   assert.doesNotMatch(markdown, /国药现代大宗交易分析|白宫发言人离职消息/);
 });
 
-test('news renderer converts only verified inline citations into Rich Message references', () => {
+test('news renderer converts only verified inline citations into Rich Message source popups', () => {
   const answer = [
     '第一条事实。[1]',
     '第二条事实【2】；无效编号不应保留。[9]',
@@ -501,15 +501,15 @@ test('news renderer converts only verified inline citations into Rich Message re
   });
 
   const markdown = formatNewsRichMarkdown(answer, raw, 'zh', 'Asia/Shanghai');
-  assert.match(markdown, /第一条事实。\[\^src1\]/);
-  assert.match(markdown, /第二条事实\[\^src2\]/);
+  assert.match(markdown, /第一条事实。 <a href="#source-group-1">🔗<\/a>/);
+  assert.match(markdown, /第二条事实 <a href="#source-group-2">🔗<\/a>/);
   assert.doesNotMatch(markdown, /\[9\]|虚构/);
-  assert.match(markdown, /\[\^src1\]: \[Source A\]\(https:\/\/example\.com\/a\)/);
-  assert.match(markdown, /\[\^src2\]: \[Source B\]\(https:\/\/example\.com\/b\)/);
+  assert.match(markdown, /<tg-reference name="source-group-1"><a href="https:\/\/example\.com\/a">Source A<\/a><\/tg-reference>/);
+  assert.match(markdown, /<tg-reference name="source-group-2"><a href="https:\/\/example\.com\/b">Source B<\/a><\/tg-reference>/);
   assert.doesNotMatch(markdown, /## 参考来源|Unused Source|example\.com\/unused/);
 });
 
-test('multiple verified citations stay adjacent for Telegram grouped source preview', () => {
+test('multiple verified citations become one Telegram grouped source popup', () => {
   const raw = JSON.stringify({
     results: [
       { title: 'Source A', url: 'https://example.com/a' },
@@ -517,8 +517,9 @@ test('multiple verified citations stay adjacent for Telegram grouped source prev
     ]
   });
   const markdown = formatNewsRichMarkdown('同一结论由两个来源支持。[1][2]', raw, 'zh', 'Asia/Shanghai');
-  assert.match(markdown, /同一结论由两个来源支持。\[\^src1\]\[\^src2\]/);
-  assert.equal((markdown.match(/^\[\^src\d+\]:/gm) || []).length, 2);
+  assert.match(markdown, /同一结论由两个来源支持。 <a href="#source-group-1">🔗 \+1<\/a>/);
+  assert.match(markdown, /<tg-reference name="source-group-1">.*example\.com\/a.*example\.com\/b.*<\/tg-reference>/);
+  assert.equal((markdown.match(/<tg-reference /g) || []).length, 1);
   assert.doesNotMatch(markdown, /## 参考来源/);
 });
 

@@ -993,7 +993,8 @@ export function formatNewsRichMarkdown(
     return {
       number: index + 1,
       cited: body.includes(`[^src${index + 1}]`),
-      line: hasInlineCitations ? `[^src${index + 1}]: ${reference}` : `${index + 1}. ${reference}`
+      line: `${index + 1}. ${reference}`,
+      popup: `<a href="${escapeTelegramHtml(safeUrl)}">${escapeTelegramHtml(item.title || item.sourceName || '来源')}</a>${timestamp ? ` · ${escapeTelegramHtml(timestamp)}` : ''}`
     };
   });
   const limit = Math.max(500, Number(maxChars) || 12000);
@@ -1011,13 +1012,34 @@ export function formatNewsRichMarkdown(
   }
   const retainedNumbers = new Set(retained.map((entry) => entry.number));
   const safeBody = body.replace(/\[\^src(\d+)\]/g, (marker, value) => retainedNumbers.has(Number(value)) ? marker : '');
-  const sourceLines = retained.sort((a, b) => a.number - b.number).map((entry) => entry.line).join('\n');
-  const sourceBlock = retained.length
-    ? [visibleHeading, sourceLines].filter(Boolean).join('\n')
-    : '';
-  const bodyBudget = Math.max(0, limit - title.length - sourceBlock.length - (sourceBlock ? 4 : 2));
+  const retainedByNumber = new Map(retained.map((entry) => [entry.number, entry]));
+
+  const buildReferencePopups = (input = '') => {
+    const definitions = [];
+    const renderedBody = String(input || '').replace(/(?:\[\^src\d+\])+/g, (sequence) => {
+      const numbers = Array.from(sequence.matchAll(/\[\^src(\d+)\]/g), (match) => Number(match[1]))
+        .filter((number, index, items) => retainedByNumber.has(number) && items.indexOf(number) === index);
+      if (!numbers.length) return '';
+      const name = `source-group-${definitions.length + 1}`;
+      const lines = numbers.map((number) => retainedByNumber.get(number).popup);
+      definitions.push(`<tg-reference name="${name}">${lines.join(' · ')}</tg-reference>`);
+      const additional = numbers.length > 1 ? ` +${numbers.length - 1}` : '';
+      return ` <a href="#${name}">🔗${additional}</a>`;
+    });
+    return { renderedBody, sourceBlock: definitions.join('\n') };
+  };
+
+  const sortedRetained = retained.sort((a, b) => a.number - b.number);
+  const visibleSourceLines = sortedRetained.map((entry) => entry.line).join('\n');
+  const preliminarySources = hasInlineCitations
+    ? buildReferencePopups(safeBody).sourceBlock
+    : (sortedRetained.length ? [visibleHeading, visibleSourceLines].filter(Boolean).join('\n') : '');
+  const bodyBudget = Math.max(0, limit - title.length - preliminarySources.length - (preliminarySources ? 4 : 2));
   const fittedBody = fitRichMarkdownBlocks(safeBody, bodyBudget);
-  return sanitizeRichMarkdown([title, fittedBody, sourceBlock].filter(Boolean).join('\n\n'));
+  const popupResult = hasInlineCitations ? buildReferencePopups(fittedBody) : null;
+  const renderedBody = popupResult?.renderedBody || fittedBody;
+  const sourceBlock = popupResult?.sourceBlock || preliminarySources;
+  return sanitizeRichMarkdown([title, renderedBody, sourceBlock].filter(Boolean).join('\n\n'));
 }
 
 async function sendSearchReply(ctx, text, maxLength, locale = 'zh') {

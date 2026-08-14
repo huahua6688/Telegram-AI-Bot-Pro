@@ -551,6 +551,30 @@ function isBroadNewsQuery(query = '') {
     /^(?:(?:show|give|find|search)\s+)?(?:me\s+)?(?:(?:today'?s?|latest|current)\s+)?(?:news|headlines|top stories)(?:\s+(?:summary|overview))?$/i.test(text);
 }
 
+function normalizeNewsSearchQuery(query = '') {
+  const original = String(query || '').replace(/\s+/g, ' ').trim();
+  if (!original) return '今日新闻';
+
+  // Search providers need the subject, not Telegram presentation instructions.
+  // Keep only the leading request clause before directions such as citation,
+  // layout, source count, or output style requirements.
+  const leadingClause = original.split(/[，,。；;！!？?\n]/, 1)[0].trim();
+  let subject = leadingClause
+    .replace(/^(?:请|請|麻烦|麻煩)?\s*(?:帮我|幫我|给我|給我)?\s*/i, '')
+    .replace(/^(?:联网|聯網|实时|實時|在线|在線)?\s*(?:搜索|搜尋|查找|查询|查詢|检索|檢索|看看|查看|找出)\s*/i, '')
+    .replace(/(?:今天|今日|本日|当日|當日|当天|當天)/gi, ' ')
+    .replace(/\b(?:today'?s?|today|current|latest)\b/gi, ' ')
+    .replace(/\b(?:search|find|show|give)(?:\s+me)?\b/gi, ' ')
+    .replace(/\d+\s*(?:条|條|则|則|篇|个|個)\s*/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!subject || !looksLikeNewsSearch(subject)) {
+    subject = isBroadNewsQuery(original) ? '新闻' : subject;
+  }
+  return subject || '新闻';
+}
+
 function getExplicitNewsDateScope(query = '', now = Date.now(), timeZone = 'Asia/Kuala_Lumpur') {
   const text = String(query || '');
   const [currentYear] = newsLocalDateKey(now, timeZone).split('-').map(Number);
@@ -601,6 +625,7 @@ async function fetchNewsFallback(query = '今日新闻', {
   todayOnly = false
 } = {}) {
   const q = String(query || '今日新闻').trim();
+  const searchQuery = normalizeNewsSearchQuery(q);
   const nowMs = now instanceof Date ? now.getTime() : Number(now);
   const safeNowMs = Number.isFinite(nowMs) ? nowMs : Date.now();
   const currentYear = Number(newsLocalDateKey(safeNowMs, timeZone).slice(0, 4));
@@ -619,9 +644,9 @@ async function fetchNewsFallback(query = '今日新闻', {
       ? freshOnly
       : !isHistoricalQuery;
   const strictToday = shouldFilterFresh && (todayOnly || explicitTodayIntent);
-  const rssQuery = shouldFilterFresh && !/\bwhen:\d+[hd]\b/i.test(q)
-    ? `${q} when:1d`
-    : q;
+  const rssQuery = shouldFilterFresh && !/\bwhen:\d+[hd]\b/i.test(searchQuery)
+    ? `${searchQuery} when:1d`
+    : searchQuery;
   const parsedTimeout = Number(timeoutMs);
   const boundedTimeout = Math.max(50, Math.min(
     8000,
@@ -636,7 +661,7 @@ async function fetchNewsFallback(query = '今日新闻', {
     : normalizedLanguageLower.startsWith('zh')
       ? 'zh-Hans'
       : normalizedLanguage.split('-')[0];
-  const broadNews = isBroadNewsQuery(q);
+  const broadNews = isBroadNewsQuery(q) || isBroadNewsQuery(searchQuery);
   const googleUrl = broadNews
     ? 'https://news.google.com/rss?' +
       `hl=${encodeURIComponent(normalizedLanguage)}&gl=${encodeURIComponent(normalizedRegion)}` +
@@ -897,6 +922,8 @@ async function composeHumanAnswer(bot, ctx, { userText, toolName, raw, title }) 
               'Every factual news/search item in the answer must be supported by at least one supplied result.',
               'Search results are numbered by their order in the supplied results array, starting at 1.',
               'For news/search, end each factual sentence or bullet with citations such as [1] or [1][2]. Use only valid supplied result numbers.',
+              'Put citation markers directly after the factual claim they support. Never move them into a separate attribution sentence such as “the information above comes from...”.',
+              'Treat separate claims from one source as one news item. If the user asks for N items and at least N distinct supplied results exist, return N distinct news items.',
               'Do not invent citation numbers and do not add a separate Sources or References section.',
               'For URL pages: explain what the page is about and what the user should know.',
               'For weather: answer directly with practical advice.',
@@ -1419,6 +1446,7 @@ export const naturalAgentInternals = {
   extractWeatherLocation,
   looksLikeNewsSearch,
   isStrictTodayNewsQuery,
+  normalizeNewsSearchQuery,
   looksLikeCurrentSearch,
   normalizeSearchQuery,
   cleanPlainText,
