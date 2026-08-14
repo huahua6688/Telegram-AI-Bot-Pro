@@ -421,6 +421,10 @@ export function loadConfig() {
     toolBlockedUserIds: new Set(parseList(process.env.TOOL_BLOCKED_USER_IDS).map(String)),
     toolAdminOnlyNames: new Set(parseList(process.env.TOOL_ADMIN_ONLY_NAMES).map(String)),
     toolMaxCallsPerMessage: parseInteger(process.env.TOOL_MAX_CALLS_PER_MESSAGE, 4),
+    toolMaxConcurrentCalls: Math.max(
+      1,
+      Math.min(64, parseInteger(process.env.TOOL_MAX_CONCURRENT_CALLS, 8))
+    ),
     toolUserWindowMs: parseInteger(process.env.TOOL_USER_WINDOW_MS, 60000),
     toolUserMaxCalls: parseInteger(process.env.TOOL_USER_MAX_CALLS, 20),
     networkToolScope: (process.env.NETWORK_TOOL_SCOPE || 'all').toLowerCase(),

@@ -5,14 +5,40 @@ import { withRequestContext } from '../core/observability/request-context.js';
 import { listAIProviderDefinitions } from './ai-provider-registry.js';
 import { buildBillingCatalog, getDefaultChatFreeQuota } from './billing-catalog.js';
 
+const MAX_ADMIN_JSON_BODY_BYTES = 64 * 1024;
+
+function applySecurityHeaders(res) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  res.setHeader('Cache-Control', 'no-store');
+}
+
 function json(res, status, payload) {
+  applySecurityHeaders(res);
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(payload));
 }
 
 async function readJson(req) {
+  const declaredLength = Number(req.headers['content-length'] || 0);
+  if (declaredLength > MAX_ADMIN_JSON_BODY_BYTES) {
+    req.resume();
+    const error = new Error('Request body is too large.');
+    error.code = 'PAYLOAD_TOO_LARGE';
+    error.statusCode = 413;
+    throw error;
+  }
   const chunks = [];
+  let size = 0;
   for await (const chunk of req) {
+    size += chunk.length;
+    if (size > MAX_ADMIN_JSON_BODY_BYTES) {
+      req.resume();
+      const error = new Error('Request body is too large.');
+      error.code = 'PAYLOAD_TOO_LARGE';
+      error.statusCode = 413;
+      throw error;
+    }
     chunks.push(chunk);
   }
   const body = Buffer.concat(chunks).toString('utf8').trim();
@@ -479,6 +505,7 @@ export function startAdminApiServer({ config, db, logger, accessControl, port = 
                   .join(',')
               );
             }
+            applySecurityHeaders(res);
             res.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8' });
             res.end(lines.join('\n'));
             return;
@@ -499,17 +526,22 @@ export function startAdminApiServer({ config, db, logger, accessControl, port = 
           actorType: 'admin_api',
           action: 'request.error',
           targetType: 'http',
-          targetId: req.url || '',
+          targetId: urlObj.pathname,
           result: 'error',
           requestId: String(requestId),
           ip: req.socket.remoteAddress || '',
           userAgent: req.headers['user-agent'] || '',
-          details: { message: error.message }
+          details: { code: String(error.code || error.name || 'UNKNOWN_ERROR') }
         });
-        const statusCode = Number(error?.statusCode) === 400 ? 400 : 500;
+        const requestedStatus = Number(error?.statusCode);
+        const statusCode = requestedStatus === 400 || requestedStatus === 413 ? requestedStatus : 500;
         return json(res, statusCode, {
-          error: statusCode === 400 ? String(error.code || 'BAD_REQUEST') : 'INTERNAL_ERROR',
-          message: error.message
+          error: statusCode === 400
+            ? String(error.code || 'BAD_REQUEST')
+            : statusCode === 413
+              ? 'PAYLOAD_TOO_LARGE'
+              : 'INTERNAL_ERROR',
+          ...(statusCode < 500 ? { message: error.message } : {})
         });
       }
     });

@@ -364,7 +364,7 @@ test('rich table output removes unsupported breaks, duplicate sources, and malfo
   assert.doesNotMatch(markdown, /\[Provider\]\(/);
 });
 
-test('rejected rich tables retry as a vertical rich layout and never expose table source', async () => {
+test('wide rich tables use a vertical layout before Telegram delivery', async () => {
   const calls = [];
   const fakeBot = {
     config: { enableRichMessages: true, richMessageMinChars: 200 },
@@ -376,7 +376,6 @@ test('rejected rich tables retry as a vertical rich layout and never expose tabl
     telegram: {
       async callApi(method, payload) {
         calls.push({ method, payload });
-        if (calls.length === 1) throw new Error('rich table rejected');
         return { message_id: 94 };
       }
     }
@@ -387,10 +386,34 @@ test('rejected rich tables retry as a vertical rich layout and never expose tabl
 
   assert.equal(result.rich, true);
   assert.equal(result.layout, 'vertical');
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].payload.rich_message.markdown, /### Models/);
+  assert.match(calls[0].payload.rich_message.markdown, /\*\*Progress：\*\* Faster；Smarter/);
+  assert.doesNotMatch(calls[0].payload.rich_message.markdown, /^\|/m);
+});
+
+test('a compact rejected table still retries once as a vertical layout', async () => {
+  const calls = [];
+  const fakeBot = {
+    config: { enableRichMessages: true, richMessageMinChars: 20 },
+    logger: logger()
+  };
+  const ctx = {
+    chat: { id: 77, type: 'private' },
+    message: { message_id: 42 },
+    telegram: {
+      async callApi(method, payload) {
+        calls.push({ method, payload });
+        if (calls.length === 1) throw new Error('rich table rejected');
+        return { message_id: 95 };
+      }
+    }
+  };
+  const markdown = '| Item | Value |\n|---|---|\n| A | B |';
+  const result = await TelegramAIBot.prototype.trySendRichAssistantReply.call(fakeBot, ctx, markdown);
+  assert.equal(result.layout, 'vertical');
   assert.equal(calls.length, 2);
-  assert.match(calls[1].payload.rich_message.markdown, /### Models/);
-  assert.match(calls[1].payload.rich_message.markdown, /\*\*Progress：\*\* Faster；Smarter/);
-  assert.doesNotMatch(calls[1].payload.rich_message.markdown, /^\|/m);
+  assert.match(calls[1].payload.rich_message.markdown, /### A/);
 });
 
 test('plain fallback converts markdown tables and HTML breaks into readable vertical text', () => {
@@ -433,7 +456,8 @@ test('news renderer converts only verified inline citations into Rich Message re
   const raw = JSON.stringify({
     results: [
       { title: 'Source A', url: 'https://example.com/a' },
-      { title: 'Source B', url: 'https://example.com/b' }
+      { title: 'Source B', url: 'https://example.com/b' },
+      { title: 'Unused Source', url: 'https://example.com/unused' }
     ]
   });
 
@@ -443,6 +467,20 @@ test('news renderer converts only verified inline citations into Rich Message re
   assert.doesNotMatch(markdown, /\[9\]|虚构/);
   assert.match(markdown, /\[\^src1\]: \[Source A\]\(https:\/\/example\.com\/a\)/);
   assert.match(markdown, /\[\^src2\]: \[Source B\]\(https:\/\/example\.com\/b\)/);
+  assert.doesNotMatch(markdown, /## 参考来源|Unused Source|example\.com\/unused/);
+});
+
+test('multiple verified citations stay adjacent for Telegram grouped source preview', () => {
+  const raw = JSON.stringify({
+    results: [
+      { title: 'Source A', url: 'https://example.com/a' },
+      { title: 'Source B', url: 'https://example.com/b' }
+    ]
+  });
+  const markdown = formatNewsRichMarkdown('同一结论由两个来源支持。[1][2]', raw, 'zh', 'Asia/Shanghai');
+  assert.match(markdown, /同一结论由两个来源支持。\[\^src1\]\[\^src2\]/);
+  assert.equal((markdown.match(/^\[\^src\d+\]:/gm) || []).length, 2);
+  assert.doesNotMatch(markdown, /## 参考来源/);
 });
 
 test('AI fallback retries another model for transient provider failures', async () => {
@@ -735,6 +773,53 @@ test('stopping a Telegram bot that never launched is an idempotent no-op', async
   };
 
   assert.equal(await bot.stop('INITIALIZATION_FAILED'), false);
+});
+
+test('Telegram bot sweeps expired in-memory interaction state without touching active entries', () => {
+  const bot = Object.create(TelegramAIBot.prototype);
+  const now = Date.now();
+  bot.config = { rateLimitWindowMs: 60_000 };
+  bot.pendingMenuActions = new Map([
+    ['expired', { createdAt: now - 6 * 60_000 }],
+    ['active', { createdAt: now - 30_000 }]
+  ]);
+  bot.activeModes = new Map([
+    ['expired', { createdAt: now - 25 * 60 * 60_000 }],
+    ['active', { createdAt: now - 25 * 60 * 60_000, updatedAt: now - 1_000 }]
+  ]);
+  bot.assistantActionStates = new Map([
+    ['expired-token', { chatId: 1, messageId: 2, createdAt: now - 25 * 60 * 60_000 }],
+    ['active-token', { chatId: 1, messageId: 3, createdAt: now - 1_000 }]
+  ]);
+  bot.assistantActionStatesByMessage = new Map([
+    ['1:2', 'expired-token'],
+    ['1:3', 'active-token'],
+    ['1:4', 'dangling-token']
+  ]);
+  bot.aiCooldowns = new Map([
+    ['expired', now - 1],
+    ['active', now + 10_000]
+  ]);
+  bot.rateLimits = new Map([
+    ['expired', [now - 61_000]],
+    ['active', [now - 1_000]]
+  ]);
+
+  const removed = bot.sweepEphemeralState(now);
+
+  assert.deepEqual(removed, {
+    pendingMenuActions: 1,
+    activeModes: 1,
+    assistantActions: 1,
+    aiCooldowns: 1,
+    rateLimits: 1
+  });
+  assert.deepEqual([...bot.pendingMenuActions.keys()], ['active']);
+  assert.deepEqual([...bot.activeModes.keys()], ['active']);
+  assert.deepEqual([...bot.assistantActionStates.keys()], ['active-token']);
+  assert.deepEqual([...bot.assistantActionStatesByMessage.keys()], ['1:3']);
+  assert.deepEqual([...bot.aiCooldowns.keys()], ['active']);
+  assert.deepEqual([...bot.rateLimits.keys()], ['active']);
 });
 
 test('Mini App mode does not duplicate the BotFather Console entry', () => {

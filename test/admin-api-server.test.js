@@ -57,6 +57,20 @@ test('Admin API authenticates token and enforces RBAC', async (t) => {
 
   const unauthorized = await fetch(`http://127.0.0.1:${port}/admin/api/v1/users`);
   assert.equal(unauthorized.status, 401);
+  assert.equal(unauthorized.headers.get('cache-control'), 'no-store');
+  assert.equal(unauthorized.headers.get('x-content-type-options'), 'nosniff');
+
+  const oversized = await fetch(`http://127.0.0.1:${port}/admin/api/v1/quota`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: ['Bearer', 'test-token'].join(' '),
+      'x-admin-user-id': '9001',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ userId: '9002', padding: 'x'.repeat(70 * 1024) })
+  });
+  assert.equal(oversized.status, 413);
+  assert.equal((await oversized.json()).error, 'PAYLOAD_TOO_LARGE');
 
   const forbidden = await fetch(`http://127.0.0.1:${port}/admin/api/v1/users/9002`, {
     method: 'PATCH',

@@ -22,7 +22,8 @@ import {
 // v7: Telegram Stars orders, per-capability balances, usage reservations, and refunds
 // v8: Single-owner leases for Telegram Stars refund attempts
 // v9: Per-user news region, language, and time-zone preferences
-const CURRENT_SCHEMA_VERSION = 9;
+// v10: Admin-console lookup and pagination indexes for larger deployments
+const CURRENT_SCHEMA_VERSION = 10;
 
 export const BILLING_CREDIT_TYPES = Object.freeze([
   'chat',
@@ -463,6 +464,9 @@ export class BotDatabase {
       }
       if (version === 9) {
         this.applySchemaV9();
+      }
+      if (version === 10) {
+        this.applySchemaV10();
       }
       this.setMeta('schemaVersion', String(version));
     }
@@ -1441,6 +1445,23 @@ export class BotDatabase {
     this.db.prepare('DELETE FROM sessions WHERE id = ?').run(String(sessionId));
     this.db.prepare('DELETE FROM conversations WHERE session_id = ?').run(String(sessionId));
     await this.write();
+  }
+
+  applySchemaV10() {
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_users_last_seen
+        ON users(last_seen_at DESC, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_users_blocked_last_seen
+        ON users(is_blocked, last_seen_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_users_admin_last_seen
+        ON users(is_admin, last_seen_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_users_username
+        ON users(username COLLATE NOCASE);
+      CREATE INDEX IF NOT EXISTS idx_sessions_user_last_accessed
+        ON sessions(user_id, last_accessed_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_sessions_chat_last_accessed
+        ON sessions(chat_id, last_accessed_at DESC);
+    `);
   }
 
   async purgeExpiredConversationSessions(retentionDays = 30, referenceTime = Date.now()) {

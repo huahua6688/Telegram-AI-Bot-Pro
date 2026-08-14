@@ -485,6 +485,7 @@ export class ToolRegistry {
     this.config = config;
     this.logger = logger;
     this.policy = new ToolAccessPolicy(config, logger, accessControl);
+    this.activeCalls = 0;
   }
 
   getDefinitions() {
@@ -618,6 +619,21 @@ export class ToolRegistry {
       return toolError(invalidDecision.code, invalidDecision.message);
     }
 
+    const maxConcurrentCalls = Math.max(
+      1,
+      Number(this.config.toolMaxConcurrentCalls) || 8
+    );
+    if (this.activeCalls >= maxConcurrentCalls) {
+      const busyDecision = {
+        allowed: false,
+        code: 'TOOL_CONCURRENCY_LIMIT',
+        message: 'The tool service is busy. Try another approach or retry shortly.'
+      };
+      this.policy.audit(busyDecision, name, context);
+      return toolError(busyDecision.code, busyDecision.message, { retryable: true });
+    }
+
+    this.activeCalls += 1;
     try {
       switch (name) {
         case 'get_time':
@@ -678,6 +694,8 @@ export class ToolRegistry {
         'The tool could not complete the request. Try another available approach or explain the limitation.',
         { retryable: true }
       );
+    } finally {
+      this.activeCalls = Math.max(0, this.activeCalls - 1);
     }
   }
 }

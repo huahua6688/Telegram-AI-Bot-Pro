@@ -718,6 +718,19 @@ const MINI_APP_HTML = String.raw`<!doctype html>
     .pagination > span { flex: 0 0 auto; white-space: nowrap; }
 
     .result-bar { margin: 4px 2px 10px; }
+    .page-size-control {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+    }
+    .page-size-control select {
+      width: auto;
+      min-height: 32px;
+      padding: 0 26px 0 8px;
+      border-radius: 9px;
+      font-size: 12px;
+    }
     .pagination { margin-top: 12px; }
     .pagination button { min-width: 76px; }
 
@@ -1443,7 +1456,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
             <option value="name">用户名</option><option value="oldest">最早注册</option>
           </select>
         </div>
-        <div class="result-bar"><span id="adminUserResult">—</span><span>每页 20 人</span></div>
+        <div class="result-bar"><span id="adminUserResult">—</span><label class="page-size-control">每页<select id="adminUserPageSize" aria-label="每页用户数"><option value="20">20 人</option><option value="50">50 人</option><option value="100">100 人</option></select></label></div>
         <div class="user-list" id="adminUserList"></div>
         <div class="pagination">
           <button class="secondary compact-button" id="adminUserPrev" type="button">上一页</button>
@@ -1465,7 +1478,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
             <option value="recent">最近更新</option><option value="oldest">最早更新</option>
           </select>
         </div>
-        <div class="result-bar"><span id="adminSessionResult">—</span><span>每页 20 个</span></div>
+        <div class="result-bar"><span id="adminSessionResult">—</span><label class="page-size-control">每页<select id="adminSessionPageSize" aria-label="每页会话数"><option value="20">20 个</option><option value="50">50 个</option><option value="100">100 个</option></select></label></div>
         <div class="session-list" id="adminSessionList"></div>
         <div class="pagination">
           <button class="secondary compact-button" id="adminSessionPrev" type="button">上一页</button>
@@ -1542,9 +1555,14 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       adminSelectedUserId: '',
       adminSessionPage: 0,
       adminSessionTotal: 0,
-      adminPageSize: 20,
+      adminUserPageSize: 20,
+      adminSessionPageSize: 20,
+      adminUserRequestId: 0,
+      adminSessionRequestId: 0,
       supportUrl: ''
     };
+    let adminUserSearchTimer = null;
+    let adminSessionSearchTimer = null;
 
     const elements = {
       appContent: document.getElementById('appContent'),
@@ -1610,6 +1628,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       adminSearchButton: document.getElementById('adminSearchButton'),
       adminUserList: document.getElementById('adminUserList'),
       adminUserResult: document.getElementById('adminUserResult'),
+      adminUserPageSize: document.getElementById('adminUserPageSize'),
       adminUserPage: document.getElementById('adminUserPage'),
       adminUserPrev: document.getElementById('adminUserPrev'),
       adminUserNext: document.getElementById('adminUserNext'),
@@ -1623,6 +1642,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       adminSessionSearchButton: document.getElementById('adminSessionSearchButton'),
       adminSessionList: document.getElementById('adminSessionList'),
       adminSessionResult: document.getElementById('adminSessionResult'),
+      adminSessionPageSize: document.getElementById('adminSessionPageSize'),
       adminSessionPage: document.getElementById('adminSessionPage'),
       adminSessionPrev: document.getElementById('adminSessionPrev'),
       adminSessionNext: document.getElementById('adminSessionNext'),
@@ -2419,14 +2439,38 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       container.appendChild(creditEditor);
     }
 
-    function openAdminUser(userId) {
-      const user = state.adminUsers.find(function (item) { return String(item.id) === String(userId); });
-      if (!user) return;
+    function showAdminUser(user) {
+      if (!user) return false;
       state.adminSelectedUserId = String(user.id);
       elements.adminUserSheetTitle.textContent = userDisplayName(user);
       elements.adminUserSheetBody.innerHTML = '';
       appendAdminUserEditor(elements.adminUserSheetBody, user);
       elements.adminUserSheet.classList.remove('hidden');
+      return true;
+    }
+
+    function openAdminUser(userId) {
+      const user = state.adminUsers.find(function (item) { return String(item.id) === String(userId); });
+      return showAdminUser(user);
+    }
+
+    async function openAdminUserById(userId) {
+      if (openAdminUser(userId)) return;
+      state.adminSelectedUserId = String(userId);
+      elements.adminUserSheetTitle.textContent = '正在读取用户…';
+      elements.adminUserSheetBody.innerHTML = '';
+      elements.adminUserSheet.classList.remove('hidden');
+      try {
+        const response = await fetch('/api/miniapp/admin/users/' + encodeURIComponent(userId), {
+          method: 'GET', cache: 'no-store', headers: authHeaders()
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || data.error || '读取用户失败');
+        if (state.adminSelectedUserId === String(userId)) showAdminUser(data.user);
+      } catch (error) {
+        if (state.adminSelectedUserId === String(userId)) closeAdminUser();
+        showAdminNotice(error.message || '读取用户失败。', 'failure');
+      }
     }
 
     function closeAdminUser() {
@@ -2481,31 +2525,38 @@ const MINI_APP_HTML = String.raw`<!doctype html>
     async function fetchAdminUsers(options) {
       const opts = options || {};
       if (opts.resetPage) state.adminUserPage = 0;
+      const requestId = ++state.adminUserRequestId;
+      elements.adminSearchButton.disabled = true;
+      elements.adminUserList.setAttribute('aria-busy', 'true');
       const params = new URLSearchParams({
-        limit: String(state.adminPageSize),
-        offset: String(state.adminUserPage * state.adminPageSize),
+        limit: String(state.adminUserPageSize),
+        offset: String(state.adminUserPage * state.adminUserPageSize),
         status: elements.adminUserStatus.value,
         sort: elements.adminUserSort.value
       });
       const query = elements.adminUserSearch.value.trim();
       if (query) params.set('q', query);
-      const response = await fetch('/api/miniapp/admin/users?' + params.toString(), {
-        method: 'GET', cache: 'no-store', headers: authHeaders()
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.message || data.error || '读取用户失败');
-      state.adminUserTotal = Number(data.total || 0);
-      renderAdminUsers(data.items || []);
-      const pageCount = Math.max(1, Math.ceil(state.adminUserTotal / state.adminPageSize));
-      elements.adminUserResult.textContent = '找到 ' + state.adminUserTotal + ' 人';
-      elements.adminUserPage.textContent = '第 ' + (state.adminUserPage + 1) + ' / ' + pageCount + ' 页';
-      elements.adminUserPrev.disabled = state.adminUserPage <= 0;
-      elements.adminUserNext.disabled = state.adminUserPage + 1 >= pageCount;
-      if (state.adminSelectedUserId) {
-        if (state.adminUsers.some(function (item) { return String(item.id) === state.adminSelectedUserId; })) {
+      try {
+        const response = await fetch('/api/miniapp/admin/users?' + params.toString(), {
+          method: 'GET', cache: 'no-store', headers: authHeaders()
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || data.error || '读取用户失败');
+        if (requestId !== state.adminUserRequestId) return;
+        state.adminUserTotal = Number(data.total || 0);
+        renderAdminUsers(data.items || []);
+        const pageCount = Math.max(1, Math.ceil(state.adminUserTotal / state.adminUserPageSize));
+        elements.adminUserResult.textContent = '找到 ' + state.adminUserTotal + ' 人';
+        elements.adminUserPage.textContent = '第 ' + (state.adminUserPage + 1) + ' / ' + pageCount + ' 页';
+        elements.adminUserPrev.disabled = state.adminUserPage <= 0;
+        elements.adminUserNext.disabled = state.adminUserPage + 1 >= pageCount;
+        if (state.adminSelectedUserId) {
           openAdminUser(state.adminSelectedUserId);
-        } else {
-          closeAdminUser();
+        }
+      } finally {
+        if (requestId === state.adminUserRequestId) {
+          elements.adminSearchButton.disabled = false;
+          elements.adminUserList.removeAttribute('aria-busy');
         }
       }
     }
@@ -2725,6 +2776,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         const meta = document.createElement('div');
         const actions = document.createElement('div');
         const button = document.createElement('button');
+        const userButton = document.createElement('button');
 
         title.className = 'session-title';
         title.textContent = sessionDisplayName(session) + ' · ' + adminSessionUserLabel(session);
@@ -2742,6 +2794,12 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         button.textContent = '查看摘要';
         button.dataset.adminSessionId = session.id;
 
+        userButton.type = 'button';
+        userButton.className = 'secondary compact-button';
+        userButton.textContent = '管理用户';
+        userButton.dataset.adminUserId = session.userId;
+
+        actions.appendChild(userButton);
         actions.appendChild(button);
         item.appendChild(title);
         item.appendChild(meta);
@@ -2760,29 +2818,40 @@ const MINI_APP_HTML = String.raw`<!doctype html>
     async function fetchAdminSessions(options) {
       const opts = options || {};
       if (opts.resetPage) state.adminSessionPage = 0;
+      const requestId = ++state.adminSessionRequestId;
+      elements.adminSessionSearchButton.disabled = true;
+      elements.adminSessionList.setAttribute('aria-busy', 'true');
       const params = new URLSearchParams({
-        limit: String(state.adminPageSize),
-        offset: String(state.adminSessionPage * state.adminPageSize),
+        limit: String(state.adminSessionPageSize),
+        offset: String(state.adminSessionPage * state.adminSessionPageSize),
         status: elements.adminSessionStatus.value,
         sort: elements.adminSessionSort.value
       });
       const query = elements.adminSessionSearch.value.trim();
       if (query) params.set('q', query);
 
-      const response = await fetch('/api/miniapp/admin/sessions?' + params.toString(), {
-        method: 'GET',
-        cache: 'no-store',
-        headers: authHeaders()
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.message || data.error || '读取会话概况失败');
-      state.adminSessionTotal = Number(data.total || 0);
-      renderAdminSessions(data.items || []);
-      const pageCount = Math.max(1, Math.ceil(state.adminSessionTotal / state.adminPageSize));
-      elements.adminSessionResult.textContent = '找到 ' + state.adminSessionTotal + ' 个会话';
-      elements.adminSessionPage.textContent = '第 ' + (state.adminSessionPage + 1) + ' / ' + pageCount + ' 页';
-      elements.adminSessionPrev.disabled = state.adminSessionPage <= 0;
-      elements.adminSessionNext.disabled = state.adminSessionPage + 1 >= pageCount;
+      try {
+        const response = await fetch('/api/miniapp/admin/sessions?' + params.toString(), {
+          method: 'GET',
+          cache: 'no-store',
+          headers: authHeaders()
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || data.error || '读取会话概况失败');
+        if (requestId !== state.adminSessionRequestId) return;
+        state.adminSessionTotal = Number(data.total || 0);
+        renderAdminSessions(data.items || []);
+        const pageCount = Math.max(1, Math.ceil(state.adminSessionTotal / state.adminSessionPageSize));
+        elements.adminSessionResult.textContent = '找到 ' + state.adminSessionTotal + ' 个会话';
+        elements.adminSessionPage.textContent = '第 ' + (state.adminSessionPage + 1) + ' / ' + pageCount + ' 页';
+        elements.adminSessionPrev.disabled = state.adminSessionPage <= 0;
+        elements.adminSessionNext.disabled = state.adminSessionPage + 1 >= pageCount;
+      } finally {
+        if (requestId === state.adminSessionRequestId) {
+          elements.adminSessionSearchButton.disabled = false;
+          elements.adminSessionList.removeAttribute('aria-busy');
+        }
+      }
     }
 
     async function viewAdminSession(sessionId) {
@@ -2905,12 +2974,20 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         elements.adminSearchButton.click();
       }
     });
+    elements.adminUserSearch.addEventListener('input', function () {
+      clearTimeout(adminUserSearchTimer);
+      adminUserSearchTimer = setTimeout(function () {
+        fetchAdminUsers({ resetPage: true }).catch(function (error) {
+          showAdminNotice(error.message || '搜索失败。', 'failure');
+        });
+      }, 350);
+    });
 
     elements.adminUserList.addEventListener('click', function (event) {
       const button = event.target.closest('button[data-user-id]');
       if (!button || button.disabled) return;
       const action = button.dataset.userAction;
-      if (action === 'open') openAdminUser(button.dataset.userId);
+      if (action === 'open') openAdminUserById(button.dataset.userId);
       if (action === 'toggle-block') {
         updateUserBlock(button.dataset.userId, button.dataset.blocked === 'true');
       }
@@ -2942,6 +3019,12 @@ const MINI_APP_HTML = String.raw`<!doctype html>
 
     elements.adminUserStatus.addEventListener('change', function () { elements.adminSearchButton.click(); });
     elements.adminUserSort.addEventListener('change', function () { elements.adminSearchButton.click(); });
+    elements.adminUserPageSize.addEventListener('change', function () {
+      state.adminUserPageSize = Number(elements.adminUserPageSize.value) || 20;
+      fetchAdminUsers({ resetPage: true }).catch(function (error) {
+        showAdminNotice(error.message || '读取用户失败。', 'failure');
+      });
+    });
     elements.adminUserPrev.addEventListener('click', function () {
       if (state.adminUserPage <= 0) return;
       state.adminUserPage -= 1;
@@ -2964,9 +3047,23 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         elements.adminSessionSearchButton.click();
       }
     });
+    elements.adminSessionSearch.addEventListener('input', function () {
+      clearTimeout(adminSessionSearchTimer);
+      adminSessionSearchTimer = setTimeout(function () {
+        fetchAdminSessions({ resetPage: true }).catch(function (error) {
+          showAdminNotice(error.message || '筛选会话失败。', 'failure');
+        });
+      }, 350);
+    });
 
     elements.adminSessionStatus.addEventListener('change', function () { elements.adminSessionSearchButton.click(); });
     elements.adminSessionSort.addEventListener('change', function () { elements.adminSessionSearchButton.click(); });
+    elements.adminSessionPageSize.addEventListener('change', function () {
+      state.adminSessionPageSize = Number(elements.adminSessionPageSize.value) || 20;
+      fetchAdminSessions({ resetPage: true }).catch(function (error) {
+        showAdminNotice(error.message || '读取会话失败。', 'failure');
+      });
+    });
     elements.adminSessionPrev.addEventListener('click', function () {
       if (state.adminSessionPage <= 0) return;
       state.adminSessionPage -= 1;
@@ -2978,6 +3075,11 @@ const MINI_APP_HTML = String.raw`<!doctype html>
     });
 
     elements.adminSessionList.addEventListener('click', function (event) {
+      const userButton = event.target.closest('button[data-admin-user-id]');
+      if (userButton) {
+        openAdminUserById(userButton.dataset.adminUserId);
+        return;
+      }
       const button = event.target.closest('button[data-admin-session-id]');
       if (!button) return;
       viewAdminSession(button.dataset.adminSessionId);
@@ -3962,6 +4064,23 @@ async function handleMiniAppAdminApi(req, res, context, url) {
   }
 
   const userMatch = pathname.match(/^\/api\/miniapp\/admin\/users\/([^/]+)$/);
+  if (userMatch && req.method === 'GET') {
+    const targetUserId = decodeURIComponent(userMatch[1]);
+    const targetUser = context.db.findUser(targetUserId);
+    if (!targetUser) {
+      sendJson(res, 404, {
+        ok: false,
+        error: 'USER_NOT_FOUND',
+        message: '没有找到这个用户。'
+      });
+      return;
+    }
+    sendJson(res, 200, {
+      ok: true,
+      user: serializeAdminUser(context.db, targetUser, context.config)
+    });
+    return;
+  }
   if (userMatch && req.method === 'PATCH') {
     try {
       const targetUserId = decodeURIComponent(userMatch[1]);

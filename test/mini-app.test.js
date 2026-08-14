@@ -105,7 +105,10 @@ test('Mini App securely exposes settings without chat input actions', async (t) 
   assert.match(appHtml, /id="adminSessionSearch"/);
   assert.match(appHtml, /id="adminSessionStatus"/);
   assert.match(appHtml, /id="adminSessionPrev"/);
-  assert.match(appHtml, /每页 20 人/);
+  assert.match(appHtml, /id="adminUserPageSize"/);
+  assert.match(appHtml, /id="adminSessionPageSize"/);
+  assert.match(appHtml, /openAdminUserById/);
+  assert.match(appHtml, /userButton\.dataset\.adminUserId = session\.userId/);
   assert.match(appHtml, /新闻与地区高级设置/);
   assert.match(appHtml, /function switchView\(viewId, options\)/);
   assert.match(appHtml, /disableVerticalSwipes/);
@@ -346,6 +349,15 @@ test('Mini App administrators can manage per-user daily quota and paid credit ba
     live_voice: 0,
     video: 0
   });
+
+  const userDetailResponse = await fetch(
+    `${base}/api/miniapp/admin/users/${targetUser.id}`,
+    { headers: adminHeaders }
+  );
+  assert.equal(userDetailResponse.status, 200);
+  const userDetail = await userDetailResponse.json();
+  assert.equal(userDetail.user.id, String(targetUser.id));
+  assert.equal(userDetail.user.username, targetUser.username);
 
   const filteredUsersResponse = await fetch(
     `${base}/api/miniapp/admin/users?status=active&sort=usage&limit=1&offset=0`,

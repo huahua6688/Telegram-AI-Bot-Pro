@@ -158,7 +158,7 @@ STREAMING_EDIT_INTERVAL_MS=350
 
 News results in private chat and inline mode use Telegram Rich Messages even when the digest is short. Other short replies, group replies, and unsupported/failed rich-message requests automatically use the existing regular message path.
 
-With streaming replies enabled, Gemini and OpenAI-compatible providers request an SSE response. Private chats stream Markdown fragments through Telegram `sendRichMessageDraft` when rich messages are enabled, preserving headings, lists, emphasis, code, formulas, and tables while the answer is generated. If rich drafts are rejected or unavailable, the same reply automatically falls back to `sendMessageDraft`; groups use regular message edits because Telegram's native draft methods target private chats. Draft updates are rate-limited by `STREAMING_EDIT_INTERVAL_MS`. The completed output then selects the persistent format: ordinary prose stays a regular message, while meaningful Markdown structure can use `sendRichMessage`. Before delivery, rich Markdown tables are normalized to remove unsupported HTML breaks, duplicate reference sections, and malformed URL suffixes. A rejected table is retried as a vertical Rich Message, and the final plain-text fallback also converts table source into readable labeled fields. Tables are discouraged unless requested or materially clearer because mobile Telegram clients may render them with horizontal scrolling. Unsupported streaming requests automatically fall back to a regular complete reply.
+With streaming replies enabled, Gemini and OpenAI-compatible providers request an SSE response. Private chats stream Markdown fragments through Telegram `sendRichMessageDraft` when rich messages are enabled, preserving headings, lists, emphasis, code, formulas, and tables while the answer is generated. If rich drafts are rejected or unavailable, the same reply automatically falls back to `sendMessageDraft`; groups use regular message edits because Telegram's native draft methods target private chats. Draft updates are rate-limited by `STREAMING_EDIT_INTERVAL_MS`. The completed output then selects the persistent format: ordinary prose stays a regular message, while meaningful Markdown structure can use `sendRichMessage`. Wide tables are converted to vertical Rich Markdown before delivery; compact rejected tables are retried vertically, and the final plain-text fallback also converts them into readable labeled fields. Verified search-result numbers become native Rich Message reference definitions, so Telegram can show a compact chain marker and a source sheet instead of repeating a long link list. Unmapped results remain a visible fallback list rather than being falsely attached to a sentence. Unsupported streaming requests automatically fall back to a regular complete reply.
 
 请把 AI Hub 控制台提供的完整 API Base URL 填入 `AI_BASE_URL`。固定使用 `openai-compatible` 时，可以保持各 `ROUTER_*_PROVIDER` 为空，只填写该 Hub 实际支持的任务模型 ID；所有这些模型会共用同一个 `AI_API_KEY` 和 `AI_BASE_URL`。如果默认 Provider 为 `auto`，则每组任务配置都应显式写 `ROUTER_*_PROVIDER=openai-compatible`。
 
@@ -175,9 +175,12 @@ TELEGRAM_FILE_DOWNLOAD_TIMEOUT_MS=20000
 ```
 
 - 默认只在 Mini App 历史和管理员会话详情中返回 AI 回复，不返回用户输入；确有支持需要时才显式开启 `MINI_APP_SHOW_USER_MESSAGES`。
+- 结构化运行日志默认移除消息正文、提示词、用户名、IP、User-Agent、异常正文/堆栈和密钥，并用仅在当前进程内稳定的匿名标识替代用户关联 ID；日志仍保留 Provider、错误类型、错误码和计数，便于排障。
+- Admin API 的 JSON 请求体上限为 64 KB，所有 JSON/CSV 响应带 `no-store`；内部错误不会返回原始异常消息，失败审计只记录路由路径和稳定错误码。
 - 对话超过保留天数后自动删除，`0` 表示关闭自动清理。用户资料、Stars 订单、余额和用量账目不会被这项清理误删。
 - Telegram 文件下载会在下载前检查声明大小，并在流式下载过程中再次执行大小和超时限制。
 - `fetch_url` 只允许公开的 HTTP/HTTPS 80/443 地址；本机、内网、链路本地、云元数据、保留地址和不安全重定向都会被拒绝，响应正文上限为 1 MB。
+- `TOOL_MAX_CONCURRENT_CALLS` 默认 `8`，限制单个 Bot 进程同时执行的联网工具数量；高峰时超出的调用会返回可重试的忙碌状态，由 Agent 改用其他方案或稍后重试，避免搜索洪峰拖垮全部对话。
 
 ## Telegram 扩展模式
 

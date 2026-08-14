@@ -106,6 +106,60 @@ test('web search uses a personalized news resolver before generic search', async
   assert.equal(JSON.parse(raw).results[0].title, 'Personalized headline');
 });
 
+test('tool registry bounds process-wide concurrency and releases the slot', async () => {
+  const registry = createRegistry({ toolMaxConcurrentCalls: 1 });
+  let releaseFirst;
+  let resolverCalls = 0;
+  const pending = registry.execute({
+    function: { name: 'web_search', arguments: JSON.stringify({ query: 'first' }) }
+  }, {
+    source: 'test',
+    userId: 'concurrency-a',
+    chatId: 'chat-a',
+    toolUsage: { count: 0 },
+    newsSearch: async () => {
+      resolverCalls += 1;
+      await new Promise((resolve) => { releaseFirst = resolve; });
+      return { handled: true, output: JSON.stringify({ results: [{ title: 'First' }] }) };
+    }
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  const rejected = await registry.execute({
+    function: { name: 'web_search', arguments: JSON.stringify({ query: 'second' }) }
+  }, {
+    source: 'test',
+    userId: 'concurrency-b',
+    chatId: 'chat-b',
+    toolUsage: { count: 0 },
+    newsSearch: async () => {
+      resolverCalls += 1;
+      return { handled: true, output: '{}' };
+    }
+  });
+
+  assert.equal(JSON.parse(rejected).error, 'TOOL_CONCURRENCY_LIMIT');
+  assert.equal(JSON.parse(rejected).retryable, true);
+  assert.equal(resolverCalls, 1);
+  releaseFirst();
+  await pending;
+
+  const recovered = await registry.execute({
+    function: { name: 'web_search', arguments: JSON.stringify({ query: 'third' }) }
+  }, {
+    source: 'test',
+    userId: 'concurrency-c',
+    chatId: 'chat-c',
+    toolUsage: { count: 0 },
+    newsSearch: async () => ({
+      handled: true,
+      output: JSON.stringify({ results: [{ title: 'Recovered' }] })
+    })
+  });
+  assert.equal(JSON.parse(recovered).results[0].title, 'Recovered');
+  assert.equal(registry.activeCalls, 0);
+});
+
 test('web search prefers configured Brave Search and preserves multiple sourced results', async () => {
   let subscriptionToken = '';
   globalThis.fetch = async (url, options = {}) => {

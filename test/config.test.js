@@ -499,6 +499,7 @@ test('loadConfig exposes the current free-credit and support defaults', () => {
     'TELEGRAM_STARTUP_RETRY_MAX_MS',
     'TELEGRAM_FILE_MAX_BYTES',
     'TELEGRAM_FILE_DOWNLOAD_TIMEOUT_MS',
+    'TOOL_MAX_CONCURRENT_CALLS',
     'CONVERSATION_RETENTION_DAYS',
     'PRIVACY_SWEEP_INTERVAL_HOURS',
     'MINI_APP_SHOW_USER_MESSAGES'
@@ -531,9 +532,18 @@ test('loadConfig exposes the current free-credit and support defaults', () => {
   assert.equal(config.telegramStartupRetryMaxMs, 30000);
   assert.equal(config.telegramFileMaxBytes, 10 * 1024 * 1024);
   assert.equal(config.telegramFileDownloadTimeoutMs, 20000);
+  assert.equal(config.toolMaxConcurrentCalls, 8);
   assert.equal(config.conversationRetentionDays, 30);
   assert.equal(config.privacySweepIntervalHours, 24);
   assert.equal(config.miniAppShowUserMessages, false);
+});
+
+test('loadConfig bounds the process-wide tool concurrency limit', () => {
+  resetEnv();
+  process.env.TOOL_MAX_CONCURRENT_CALLS = '0';
+  assert.equal(loadConfig().toolMaxConcurrentCalls, 1);
+  process.env.TOOL_MAX_CONCURRENT_CALLS = '500';
+  assert.equal(loadConfig().toolMaxConcurrentCalls, 64);
 });
 
 test('loadConfig keeps explicit Stars zero finite and parses bounded support settings', () => {

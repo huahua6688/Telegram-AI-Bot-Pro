@@ -181,6 +181,8 @@ AI_FALLBACK_MODELS=
 - `/health` 返回不含密钥的运行状态、版本、Provider、启动时间和部署信息；`HEALTH_CHECK_ENABLED=false` 时关闭公开的 `/health`，`/ready` 仍可供平台探针使用。管理员“版本信息”由 `SHOW_VERSION_INFO` 控制。
 - 客服 Bot 必须使用独立的 BotFather Token。配置 `SUPPORT_CONTACT_URL` 时优先打开该地址，否则使用 `SUPPORT_BOT_USERNAME`；客服管理员通过回复转发消息答复用户，不会暴露管理员账号。
 - 客服正文和管理员回复关系只保存在内存；工单关闭、超时或重启即清除。Mini App 默认不返回用户输入，对话默认保留 30 天后自动删除。
+- 运行日志默认移除正文、提示词、用户名、IP、User-Agent、异常正文/堆栈和密钥，并把用户关联 ID 转换为进程内匿名标识，避免服务器日志成为另一份用户数据副本。
+- Admin API 的 JSON 请求体限制为 64 KB，响应默认禁止缓存；服务器内部异常只返回稳定错误码，审计记录不保存 URL 查询参数或异常正文。
 - 网页读取拒绝内网、云元数据和不安全重定向；Telegram 文件采用超时与流式大小限制，避免一次性载入超大内容。
 - 每日免费额度和三档 Stars 商品由 `STARS_FREE_*` 与 `STARS_PRODUCTS_JSON` 统一提供给主 Bot、Mini App 和管理员页面，不再分别维护旧数值。详细支付说明见 [Telegram Stars 文档](docs/STARS_PAYMENTS.md)。
 
@@ -269,7 +271,7 @@ Zeabur AI Hub 按标准 OpenAI-compatible Provider 使用：设置 `DEFAULT_AI_P
 
 若 AI Hub 是收费平台，建议使用 `DEFAULT_AI_PROVIDER=auto`，并把 `openai-compatible` 放在 `AI_PROVIDER_FALLBACK_ORDER` 最后。系统会优先尝试前面的免费平台；免费额度不足、限流或模型不可用时，才使用 AI Hub 动态发现的聊天模型兜底，这一步可能产生费用。不接受自动付费兜底时，请从回退顺序移除 `openai-compatible` 或关闭 Provider fallback。把 AI Hub 固定为当前 Provider 时，价格未知的模型仍要求在 Mini App 手动选择。模型只有在平台明确返回零价格或 ID 明确标记免费时才显示“免费”。
 
-Telegram Rich Messages 默认开启。模型会自行选择适合答案的表达方式：普通回答使用普通消息；代码块、公式、表格或足够长的标题/列表结构才使用 Rich Message。为改善手机体验，系统会提示模型默认优先使用正文和纵向列表，只有用户要求表格或多字段对比确实更清楚时才使用表格。发送前会清理表格单元格中的 `<br>`、重复来源和异常链接结尾；如果 Telegram 拒绝某个 Rich 表格，会自动重试为纵向 Rich Message，最终普通文本降级也会转换表格而不会泄露 `|`、分隔线或 HTML 标签。新闻搜索仍使用带标题、正文和可点击来源的原生 Rich Message。开启 `ENABLE_STREAMING_REPLIES=true` 后，Gemini 和 OpenAI-compatible 类平台会直接请求 SSE 流；私聊优先通过 `sendRichMessageDraft` 流式显示 Markdown 结构，并在富草稿不可用时自动降级到 `sendMessageDraft`。完成后再根据模型最终采用的结构决定保存为普通消息还是 Rich Message。群组使用消息编辑模拟流式，平台或 Telegram 不支持流式时会自动降级为普通完整回复。`STREAMING_EDIT_INTERVAL_MS` 限制草稿刷新频率，避免触发 Telegram 429。
+Telegram Rich Messages 默认开启。模型会自行选择适合答案的表达方式：普通回答使用普通消息；代码块、公式、表格或足够长的标题/列表结构才使用 Rich Message。为改善手机体验，系统会提示模型默认优先使用正文和纵向列表，只有用户要求表格或多字段对比确实更清楚时才使用表格。发送前会清理表格单元格中的 `<br>`、重复来源和异常链接结尾；宽表会在发送前直接变成纵向字段，紧凑表仅在 Telegram 拒绝后重试纵向布局，最终普通文本降级也不会泄露 `|`、分隔线或 HTML 标签。新闻和联网答案会把检索结果编号转换成 Telegram 原生引用标记；点击正文旁的小链条会打开“来源”弹层，相邻多个来源会合并显示数量。只有无法可靠对应到具体句子时，才显示普通来源列表，避免制造错误引用。开启 `ENABLE_STREAMING_REPLIES=true` 后，Gemini 和 OpenAI-compatible 类平台会直接请求 SSE 流；私聊优先通过 `sendRichMessageDraft` 流式显示 Markdown 结构，并在富草稿不可用时自动降级到 `sendMessageDraft`。完成后再根据模型最终采用的结构决定保存为普通消息还是 Rich Message。群组使用消息编辑模拟流式，平台或 Telegram 不支持流式时会自动降级为普通完整回复。`STREAMING_EDIT_INTERVAL_MS` 限制草稿刷新频率，避免触发 Telegram 429。
 
 Gemini Live 只支持 Google 官方 Gemini Live API，必须使用独立的 `GEMINI_LIVE_API_KEY` 和兼容 Live 模型；不要把第三方 OpenAI-compatible / AI Hub 地址当作 `gemini-live`。
 
@@ -469,6 +471,7 @@ ENABLE_TOOL_CALLS=true
 ENABLE_WEB_SEARCH=true
 ENABLE_GEMINI_GOOGLE_SEARCH=true
 ENABLE_URL_FETCH=true
+TOOL_MAX_CONCURRENT_CALLS=8
 ENABLE_STREAMING_REPLIES=true
 # Recommended for stable search; keyless fallback is best-effort only
 BRAVE_SEARCH_API_KEY=

@@ -705,6 +705,26 @@ function convertMarkdownTables(text = '', { rich = false } = {}) {
   return output.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
+function shouldUseVerticalRichTables(text = '') {
+  const lines = String(text || '').split(/\r?\n/);
+  for (let index = 0; index + 1 < lines.length; index += 1) {
+    const headers = splitMarkdownTableRow(lines[index]);
+    if (headers.length < 2 || !isMarkdownTableSeparator(lines[index + 1])) continue;
+    if (headers.length >= 3 || headers.some((cell) => cleanTableCell(cell).length > 28)) return true;
+
+    index += 2;
+    while (index < lines.length) {
+      const cells = splitMarkdownTableRow(lines[index]);
+      if (cells.length < 2) break;
+      const cleaned = cells.map(cleanTableCell);
+      if (cleaned.length >= 3 || cleaned.some((cell) => cell.length > 44)) return true;
+      if (cleaned.reduce((total, cell) => total + cell.length, 0) > 72) return true;
+      index += 1;
+    }
+  }
+  return false;
+}
+
 function normalizeRichMarkdownUrl(url = '') {
   let value = String(url || '').trim();
   value = value.replace(/(?:%22|%27|["',，])+$/gi, '');
@@ -977,17 +997,22 @@ export function formatNewsRichMarkdown(
   });
   const limit = Math.max(500, Number(maxChars) || 12000);
   const sourceHeading = english ? '## Sources' : '## 参考来源';
-  const sourceBudget = Math.max(0, Math.floor(limit * 0.62) - sourceHeading.length - 2);
+  const candidates = hasInlineCitations
+    ? sourceEntries.filter((entry) => entry.cited)
+    : sourceEntries;
+  const visibleHeading = hasInlineCitations ? '' : sourceHeading;
+  const sourceBudget = Math.max(0, Math.floor(limit * 0.62) - visibleHeading.length - 2);
   const retained = [];
-  const prioritized = [...sourceEntries].sort((left, right) => Number(right.cited) - Number(left.cited) || left.number - right.number);
+  const prioritized = [...candidates].sort((left, right) => Number(right.cited) - Number(left.cited) || left.number - right.number);
   for (const entry of prioritized) {
     const candidate = [...retained, entry].sort((a, b) => a.number - b.number).map((item) => item.line).join('\n');
     if (candidate.length <= sourceBudget) retained.push(entry);
   }
   const retainedNumbers = new Set(retained.map((entry) => entry.number));
   const safeBody = body.replace(/\[\^src(\d+)\]/g, (marker, value) => retainedNumbers.has(Number(value)) ? marker : '');
+  const sourceLines = retained.sort((a, b) => a.number - b.number).map((entry) => entry.line).join('\n');
   const sourceBlock = retained.length
-    ? `${sourceHeading}\n${retained.sort((a, b) => a.number - b.number).map((entry) => entry.line).join('\n')}`
+    ? [visibleHeading, sourceLines].filter(Boolean).join('\n')
     : '';
   const bodyBudget = Math.max(0, limit - title.length - sourceBlock.length - (sourceBlock ? 4 : 2));
   const fittedBody = fitRichMarkdownBlocks(safeBody, bodyBudget);
@@ -1257,18 +1282,80 @@ export class TelegramAIBot {
   }
 
   setActiveMode(ctx, mode) {
+    const timestamp = Date.now();
     this.activeModes.set(this.getActiveModeKey(ctx), {
       ...mode,
-      createdAt: Date.now()
+      createdAt: timestamp,
+      updatedAt: timestamp
     });
   }
 
   getActiveMode(ctx) {
-    return this.activeModes?.get(this.getActiveModeKey(ctx)) || null;
+    const mode = this.activeModes?.get(this.getActiveModeKey(ctx)) || null;
+    if (mode) mode.updatedAt = Date.now();
+    return mode;
   }
 
   clearActiveMode(ctx) {
     this.activeModes.delete(this.getActiveModeKey(ctx));
+  }
+
+  sweepEphemeralState(referenceTime = Date.now()) {
+    const now = Number.isFinite(Number(referenceTime)) ? Number(referenceTime) : Date.now();
+    const removed = {
+      pendingMenuActions: 0,
+      activeModes: 0,
+      assistantActions: 0,
+      aiCooldowns: 0,
+      rateLimits: 0
+    };
+
+    for (const [key, state] of this.pendingMenuActions || []) {
+      if (now - Number(state?.createdAt || 0) <= 5 * 60 * 1000) continue;
+      this.pendingMenuActions.delete(key);
+      removed.pendingMenuActions += 1;
+    }
+
+    for (const [key, mode] of this.activeModes || []) {
+      const lastTouched = Number(mode?.updatedAt || mode?.createdAt || 0);
+      if (now - lastTouched <= 24 * 60 * 60 * 1000) continue;
+      this.activeModes.delete(key);
+      removed.activeModes += 1;
+    }
+
+    for (const [token, state] of this.assistantActionStates || []) {
+      const lastTouched = Number(state?.updatedAt || state?.createdAt || 0);
+      if (now - lastTouched <= 24 * 60 * 60 * 1000) continue;
+      this.assistantActionStates.delete(token);
+      if (state?.chatId && state?.messageId) {
+        this.assistantActionStatesByMessage?.delete(`${state.chatId}:${state.messageId}`);
+      }
+      removed.assistantActions += 1;
+    }
+    for (const [messageKey, token] of this.assistantActionStatesByMessage || []) {
+      if (!this.assistantActionStates?.has(token)) this.assistantActionStatesByMessage.delete(messageKey);
+    }
+
+    for (const [key, expiresAt] of this.aiCooldowns || []) {
+      if (Number(expiresAt || 0) > now) continue;
+      this.aiCooldowns.delete(key);
+      removed.aiCooldowns += 1;
+    }
+
+    const rateWindowMs = Math.max(1, Number(this.config?.rateLimitWindowMs) || 60_000);
+    for (const [key, timestamps] of this.rateLimits || []) {
+      const active = Array.isArray(timestamps)
+        ? timestamps.filter((timestamp) => now - Number(timestamp || 0) < rateWindowMs)
+        : [];
+      if (active.length) {
+        if (active.length !== timestamps.length) this.rateLimits.set(key, active);
+        continue;
+      }
+      this.rateLimits.delete(key);
+      removed.rateLimits += 1;
+    }
+
+    return removed;
   }
 
   createModeKeyboard(locale = 'zh') {
@@ -4393,7 +4480,9 @@ export class TelegramAIBot {
   }
 
   getAssistantActionStateByToken(token = '') {
-    return this.assistantActionStates.get(token) || null;
+    const state = this.assistantActionStates.get(token) || null;
+    if (state) state.updatedAt = Date.now();
+    return state;
   }
 
   getAssistantActionStateFromContext(ctx) {
@@ -4625,11 +4714,15 @@ export class TelegramAIBot {
     this.registerCommands();
     this.bot.on('message', (ctx) => this.handleIncomingMessage(ctx));
 
+    this.sweepEphemeralState();
     await this.sweepStaleUsageReservations();
     this.usageReservationSweepTimer = setInterval(
-      () => this.sweepStaleUsageReservations().catch((error) => {
-        this.logger?.warn?.('Failed to recover stale usage reservations', { error: this.formatLogError(error) });
-      }),
+      () => {
+        this.sweepEphemeralState();
+        this.sweepStaleUsageReservations().catch((error) => {
+          this.logger?.warn?.('Failed to recover stale usage reservations', { error: this.formatLogError(error) });
+        });
+      },
       60_000
     );
     this.usageReservationSweepTimer.unref?.();
@@ -8595,21 +8688,30 @@ export class TelegramAIBot {
     );
     if (!options.force && !modelChoseRichStructure) return null;
 
+    const useVerticalTableLayout = shouldUseVerticalRichTables(markdown);
+    const deliveryMarkdown = useVerticalTableLayout
+      ? convertMarkdownTables(markdown, { rich: true })
+      : markdown;
+
     try {
       const sent = await ctx.telegram.callApi('sendRichMessage', {
         chat_id: ctx.chat.id,
-        rich_message: { markdown },
+        rich_message: { markdown: deliveryMarkdown },
         reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined,
         reply_markup: extra?.reply_markup
       });
-      return { lastMessageId: sent?.message_id || null, rich: true };
+      return {
+        lastMessageId: sent?.message_id || null,
+        rich: true,
+        ...(useVerticalTableLayout ? { layout: 'vertical' } : {})
+      };
     } catch (error) {
       this.logger.warn('Rich message rendering failed; using regular Telegram message', {
         chatId: ctx.chat?.id,
         kind: options.kind || 'assistant',
         error: error.message
       });
-      if (hasSpecialRichBlock && /(?:^|\n)\|[^\n]+\|\s*\n\|(?:\s*:?-+:?\s*\|)+/m.test(markdown)) {
+      if (!useVerticalTableLayout && hasSpecialRichBlock && /(?:^|\n)\|[^\n]+\|\s*\n\|(?:\s*:?-+:?\s*\|)+/m.test(markdown)) {
         const verticalMarkdown = convertMarkdownTables(markdown, { rich: true });
         try {
           const sent = await ctx.telegram.callApi('sendRichMessage', {

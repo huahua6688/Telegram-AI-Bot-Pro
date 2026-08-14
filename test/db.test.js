@@ -71,7 +71,7 @@ test('BotDatabase imports legacy JSON data into SQLite', async (t) => {
   assert.equal(db.findChat('200')?.triggerMode, 'mention');
   assert.deepEqual(db.getConversation('200:100:main'), [{ role: 'user', content: 'hello' }]);
   assert.equal(db.getStats().aiCalls, 4);
-  assert.equal(db.getMeta('schemaVersion'), '9');
+  assert.equal(db.getMeta('schemaVersion'), '10');
 });
 
 test('BotDatabase removes expired conversation content without deleting user accounts', async (t) => {
@@ -309,7 +309,7 @@ test('BotDatabase upgrades a v5 database through quota and Stars billing storage
 
   upgraded = new BotDatabase(databaseFile);
   await upgraded.init();
-  assert.equal(upgraded.getMeta('schemaVersion'), '9');
+  assert.equal(upgraded.getMeta('schemaVersion'), '10');
   assert.equal(upgraded.setUserDailyQuota(12, 9, 3)?.dailyQuota, 9);
   assert.equal(upgraded.findUser(12)?.dailyQuotaOverride, 9);
 });
@@ -408,8 +408,33 @@ test('BotDatabase upgrades a v8 database with per-user news settings storage', a
 
   upgraded = new BotDatabase(databaseFile);
   await upgraded.init();
-  assert.equal(upgraded.getMeta('schemaVersion'), '9');
+  assert.equal(upgraded.getMeta('schemaVersion'), '10');
   assert.equal(upgraded.setUserNewsSettings(33, { region: 'CN' })?.region, 'CN');
+});
+
+test('BotDatabase installs admin lookup indexes for large user and session lists', async (t) => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-admin-indexes-'));
+  const db = new BotDatabase(path.join(tempDir, 'bot-data.db'));
+  t.after(() => {
+    db.close();
+    return fs.rm(tempDir, { recursive: true, force: true });
+  });
+  await db.init();
+
+  const indexes = new Set(
+    db.db.prepare("SELECT name FROM sqlite_master WHERE type = 'index'").all().map((row) => row.name)
+  );
+  for (const name of [
+    'idx_users_last_seen',
+    'idx_users_blocked_last_seen',
+    'idx_users_admin_last_seen',
+    'idx_users_username',
+    'idx_sessions_user_last_accessed',
+    'idx_sessions_chat_last_accessed'
+  ]) {
+    assert.equal(indexes.has(name), true, `missing index ${name}`);
+  }
+  assert.equal(db.getMeta('schemaVersion'), '10');
 });
 
 test('BotDatabase tracks assistant regenerate message versions', async (t) => {
