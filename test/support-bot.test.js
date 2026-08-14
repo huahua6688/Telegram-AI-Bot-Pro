@@ -127,6 +127,7 @@ test('init validates configuration and preserves launch readiness callback', asy
 
   const fixture = createFixture();
   await fixture.bot.init();
+  assert.equal(fixture.fake.botInfo?.username, 'SupportTestBot');
   let ready = 0;
   await fixture.bot.launch(() => { ready += 1; });
   assert.equal(ready, 1);

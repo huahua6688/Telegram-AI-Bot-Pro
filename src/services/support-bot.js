@@ -232,6 +232,7 @@ export class SupportTelegramBot {
         label: 'support_bot_get_me'
       }
     );
+    this.bot.botInfo = this.botInfo;
     this.initialized = true;
     this.logger?.info?.('Support bot initialized', {
       botId: String(this.botInfo?.id || ''),
@@ -242,6 +243,7 @@ export class SupportTelegramBot {
 
   async launch(onLaunch) {
     if (!this.initialized) await this.init();
+    if (this.botInfo && !this.bot.botInfo) this.bot.botInfo = this.botInfo;
 
     if (this.launched) {
       onLaunch?.();

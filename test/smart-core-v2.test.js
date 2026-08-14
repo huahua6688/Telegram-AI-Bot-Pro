@@ -814,6 +814,27 @@ test('stopping a Telegram bot that never launched is an idempotent no-op', async
   assert.equal(await bot.stop('INITIALIZATION_FAILED'), false);
 });
 
+test('Telegram launch reuses the getMe result already verified during init', async () => {
+  const bot = Object.create(TelegramAIBot.prototype);
+  const verifiedBotInfo = { id: 123, username: 'MainTestBot', is_bot: true };
+  let ready = 0;
+  let botInfoAtLaunch = null;
+  bot.botInfo = verifiedBotInfo;
+  bot.logger = logger();
+  bot.bot = {
+    botInfo: null,
+    async launch(onLaunch) {
+      botInfoAtLaunch = this.botInfo;
+      onLaunch?.();
+    }
+  };
+
+  await bot.launch(() => { ready += 1; });
+
+  assert.equal(botInfoAtLaunch, verifiedBotInfo);
+  assert.equal(ready, 1);
+});
+
 test('Telegram bot sweeps expired in-memory interaction state without touching active entries', () => {
   const bot = Object.create(TelegramAIBot.prototype);
   const now = Date.now();

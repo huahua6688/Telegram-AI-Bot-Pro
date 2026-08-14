@@ -4786,6 +4786,10 @@ export class TelegramAIBot {
       }
     );
     this.botInfo = me;
+    // Telegraf keeps its own botInfo cache. Reuse the already verified getMe
+    // response so launch() does not make a second unbounded getMe request that
+    // can leave the service stuck in the "launching" readiness phase.
+    this.bot.botInfo = me;
     this.botUsername = me.username || '';
     this.botUserId = String(me.id || '');
     await this.setLocalizedBotCommands();
@@ -8558,6 +8562,7 @@ export class TelegramAIBot {
   }
 
   async launch(onLaunch) {
+    if (this.botInfo && !this.bot.botInfo) this.bot.botInfo = this.botInfo;
     let announced = false;
 
     const markLaunched = () => {
