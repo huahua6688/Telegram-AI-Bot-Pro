@@ -994,7 +994,7 @@ export function formatNewsRichMarkdown(
       number: index + 1,
       cited: body.includes(`[^src${index + 1}]`),
       line: `${index + 1}. ${reference}`,
-      popup: `<a href="${escapeTelegramHtml(safeUrl)}">${escapeTelegramHtml(item.title || item.sourceName || '来源')}</a>${timestamp ? ` · ${escapeTelegramHtml(timestamp)}` : ''}`
+      url: safeUrl
     };
   });
   const limit = Math.max(500, Number(maxChars) || 12000);
@@ -1014,193 +1014,28 @@ export function formatNewsRichMarkdown(
   const safeBody = body.replace(/\[\^src(\d+)\]/g, (marker, value) => retainedNumbers.has(Number(value)) ? marker : '');
   const retainedByNumber = new Map(retained.map((entry) => [entry.number, entry]));
 
-  const buildReferencePopups = (input = '') => {
-    const definitions = [];
-    const renderedBody = String(input || '').replace(/(?:\[\^src\d+\])+/g, (sequence) => {
+  const renderInlineSourceLinks = (input = '') =>
+    String(input || '').replace(/(?:\[\^src\d+\])+/g, (sequence) => {
       const numbers = Array.from(sequence.matchAll(/\[\^src(\d+)\]/g), (match) => Number(match[1]))
         .filter((number, index, items) => retainedByNumber.has(number) && items.indexOf(number) === index);
       if (!numbers.length) return '';
-      const name = `source-group-${definitions.length + 1}`;
-      const lines = numbers.map((number) => retainedByNumber.get(number).popup);
-      definitions.push(`<tg-reference name="${name}">${lines.join(' · ')}</tg-reference>`);
-      const additional = numbers.length > 1 ? ` +${numbers.length - 1}` : '';
-      return ` <a href="#${name}">🔗${additional}</a>`;
+      const links = numbers.map((number, index) => {
+        const label = index === 0 ? '🔗' : `+${index}`;
+        return `[${label}](${retainedByNumber.get(number).url})`;
+      });
+      return ` ${links.join('')}`;
     });
-    return { renderedBody, sourceBlock: definitions.join('\n') };
-  };
 
   const sortedRetained = retained.sort((a, b) => a.number - b.number);
   const visibleSourceLines = sortedRetained.map((entry) => entry.line).join('\n');
   const preliminarySources = hasInlineCitations
-    ? buildReferencePopups(safeBody).sourceBlock
+    ? ''
     : (sortedRetained.length ? [visibleHeading, visibleSourceLines].filter(Boolean).join('\n') : '');
   const bodyBudget = Math.max(0, limit - title.length - preliminarySources.length - (preliminarySources ? 4 : 2));
   const fittedBody = fitRichMarkdownBlocks(safeBody, bodyBudget);
-  const popupResult = hasInlineCitations ? buildReferencePopups(fittedBody) : null;
-  const renderedBody = popupResult?.renderedBody || fittedBody;
-  const sourceBlock = popupResult?.sourceBlock || preliminarySources;
+  const renderedBody = hasInlineCitations ? renderInlineSourceLinks(fittedBody) : fittedBody;
+  const sourceBlock = preliminarySources;
   return sanitizeRichMarkdown([title, renderedBody, sourceBlock].filter(Boolean).join('\n\n'));
-}
-
-function decodeRichHtmlText(value = '') {
-  return String(value || '')
-    .replaceAll('&lt;', '<')
-    .replaceAll('&gt;', '>')
-    .replaceAll('&quot;', '"')
-    .replaceAll('&#39;', "'")
-    .replaceAll('&apos;', "'")
-    .replaceAll('&amp;', '&');
-}
-
-function appendBasicRichText(parts, value = '') {
-  const source = String(value || '');
-  const token = /(\*\*|__)(.+?)\1|`([^`]+)`|\[([^\]]+)]\((https?:\/\/[^)]+)\)/g;
-  let cursor = 0;
-  for (const match of source.matchAll(token)) {
-    if (match.index > cursor) parts.push(decodeRichHtmlText(source.slice(cursor, match.index)));
-    if (match[2] !== undefined) {
-      parts.push({ type: 'bold', text: decodeRichHtmlText(match[2]) });
-    } else if (match[3] !== undefined) {
-      parts.push({ type: 'code', text: decodeRichHtmlText(match[3]) });
-    } else {
-      parts.push({
-        type: 'url',
-        text: decodeRichHtmlText(match[4]),
-        url: decodeRichHtmlText(match[5])
-      });
-    }
-    cursor = match.index + match[0].length;
-  }
-  if (cursor < source.length) parts.push(decodeRichHtmlText(source.slice(cursor)));
-}
-
-function parseReferenceDefinitionText(content = '') {
-  const parts = [];
-  const link = /<a href="(https?:\/\/[^"<>]+)">([\s\S]*?)<\/a>/g;
-  let cursor = 0;
-  for (const match of String(content || '').matchAll(link)) {
-    if (match.index > cursor) appendBasicRichText(parts, content.slice(cursor, match.index));
-    parts.push({
-      type: 'url',
-      text: decodeRichHtmlText(match[2].replace(/<[^>]+>/g, '')),
-      url: decodeRichHtmlText(match[1])
-    });
-    cursor = match.index + match[0].length;
-  }
-  if (cursor < String(content || '').length) appendBasicRichText(parts, content.slice(cursor));
-  return parts.filter((part) => typeof part !== 'string' || part.length > 0);
-}
-
-function parseReferenceLineText(line = '', definitions = new Map()) {
-  const parts = [];
-  const referenceLink = /<a href="#([A-Za-z0-9_-]{1,64})">([\s\S]*?)<\/a>/g;
-  let cursor = 0;
-  let linked = false;
-  for (const match of String(line || '').matchAll(referenceLink)) {
-    if (match.index > cursor) appendBasicRichText(parts, line.slice(cursor, match.index));
-    const definition = definitions.get(match[1]);
-    if (definition) {
-      parts.push({
-        type: 'reference_link',
-        text: decodeRichHtmlText(match[2].replace(/<[^>]+>/g, '')),
-        reference_name: match[1]
-      });
-      // Keep the referenced content in the same RichText tree. Telegram treats
-      // this node as reference metadata instead of another visible paragraph.
-      parts.push({ type: 'reference', text: definition, name: match[1] });
-      linked = true;
-    } else {
-      appendBasicRichText(parts, match[2]);
-    }
-    cursor = match.index + match[0].length;
-  }
-  if (cursor < String(line || '').length) appendBasicRichText(parts, line.slice(cursor));
-  return { text: parts.filter((part) => typeof part !== 'string' || part.length > 0), linked };
-}
-
-export function buildNewsReferenceRichBlocks(markdown = '') {
-  const definitions = new Map();
-  const source = String(markdown || '');
-  const visible = source.replace(
-    /<tg-reference name="([A-Za-z0-9_-]{1,64})">([\s\S]*?)<\/tg-reference>/g,
-    (_match, name, content) => {
-      const text = parseReferenceDefinitionText(content);
-      if (text.length) definitions.set(name, text);
-      return '';
-    }
-  ).replace(/\n{3,}/g, '\n\n').trim();
-  if (!definitions.size) return [];
-
-  const blocks = [];
-  const lines = visible.split(/\r?\n/);
-  let linked = false;
-  let index = 0;
-
-  const paragraph = (line) => {
-    const parsed = parseReferenceLineText(line, definitions);
-    linked ||= parsed.linked;
-    return { type: 'paragraph', text: parsed.text.length ? parsed.text : ' ' };
-  };
-
-  while (index < lines.length) {
-    const line = lines[index];
-    if (!line.trim()) {
-      index += 1;
-      continue;
-    }
-
-    const heading = line.match(/^(#{1,6})\s+(.+)$/);
-    if (heading) {
-      const parsed = parseReferenceLineText(heading[2], definitions);
-      linked ||= parsed.linked;
-      blocks.push({
-        type: 'heading',
-        size: Math.min(6, heading[1].length),
-        text: parsed.text.length ? parsed.text : heading[2]
-      });
-      index += 1;
-      continue;
-    }
-
-    if (/^\s*[-*]\s+/.test(line)) {
-      const items = [];
-      while (index < lines.length && /^\s*[-*]\s+/.test(lines[index])) {
-        const content = lines[index].replace(/^\s*[-*]\s+/, '');
-        items.push({ blocks: [paragraph(content)] });
-        index += 1;
-      }
-      blocks.push({ type: 'list', items });
-      continue;
-    }
-
-    if (/^\s*\d+[.)]\s+/.test(line)) {
-      const items = [];
-      while (index < lines.length && /^\s*\d+[.)]\s+/.test(lines[index])) {
-        const item = lines[index].match(/^\s*(\d+)[.)]\s+(.+)$/);
-        items.push({
-          blocks: [paragraph(item[2])],
-          value: Number(item[1]),
-          type: '1'
-        });
-        index += 1;
-      }
-      blocks.push({ type: 'list', items });
-      continue;
-    }
-
-    const paragraphLines = [];
-    while (
-      index < lines.length &&
-      lines[index].trim() &&
-      !/^(?:#{1,6}\s+|\s*[-*]\s+|\s*\d+[.)]\s+)/.test(lines[index])
-    ) {
-      paragraphLines.push(lines[index]);
-      index += 1;
-    }
-    blocks.push(paragraph(paragraphLines.join('\n')));
-  }
-
-  return linked ? blocks.slice(0, 500) : [];
 }
 
 async function sendSearchReply(ctx, text, maxLength, locale = 'zh') {
@@ -8945,15 +8780,11 @@ export class TelegramAIBot {
     const deliveryMarkdown = useVerticalTableLayout
       ? convertMarkdownTables(markdown, { rich: true })
       : markdown;
-    const referenceBlocks = buildNewsReferenceRichBlocks(deliveryMarkdown);
-    const richMessage = referenceBlocks.length
-      ? { blocks: referenceBlocks }
-      : { markdown: deliveryMarkdown };
 
     try {
       const sent = await ctx.telegram.callApi('sendRichMessage', {
         chat_id: ctx.chat.id,
-        rich_message: richMessage,
+        rich_message: { markdown: deliveryMarkdown },
         reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined,
         reply_markup: extra?.reply_markup
       });
@@ -8969,24 +8800,6 @@ export class TelegramAIBot {
         kind: options.kind || 'assistant',
         error: error.message
       });
-      if (referenceBlocks.length) {
-        try {
-          const sent = await ctx.telegram.callApi('sendRichMessage', {
-            chat_id: ctx.chat.id,
-            rich_message: { markdown: deliveryMarkdown },
-            reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined,
-            reply_markup: extra?.reply_markup
-          });
-          this.rememberRichReplyContext?.(ctx, sent?.message_id, deliveryMarkdown);
-          return { lastMessageId: sent?.message_id || null, rich: true, referenceFallback: true };
-        } catch (fallbackError) {
-          this.logger.warn('Structured source popup fallback failed; using regular Telegram message', {
-            chatId: ctx.chat?.id,
-            kind: options.kind || 'assistant',
-            error: fallbackError.message
-          });
-        }
-      }
       if (!useVerticalTableLayout && hasSpecialRichBlock && /(?:^|\n)\|[^\n]+\|\s*\n\|(?:\s*:?-+:?\s*\|)+/m.test(markdown)) {
         const verticalMarkdown = convertMarkdownTables(markdown, { rich: true });
         try {

@@ -9,7 +9,6 @@ import {
 import { ToolRegistry } from '../src/services/tool-registry.js';
 import {
   TelegramAIBot,
-  buildNewsReferenceRichBlocks,
   cleanBotOutput,
   formatNewsRichMarkdown,
   sanitizeRichMarkdown
@@ -485,7 +484,7 @@ test('news renderer removes model-written references and keeps only verified sou
   assert.doesNotMatch(markdown, /国药现代大宗交易分析|白宫发言人离职消息/);
 });
 
-test('news renderer converts only verified inline citations into Rich Message source popups', () => {
+test('news renderer converts only verified inline citations into compact direct source links', () => {
   const answer = [
     '第一条事实。[1]',
     '第二条事实【2】；无效编号不应保留。[9]',
@@ -502,15 +501,13 @@ test('news renderer converts only verified inline citations into Rich Message so
   });
 
   const markdown = formatNewsRichMarkdown(answer, raw, 'zh', 'Asia/Shanghai');
-  assert.match(markdown, /第一条事实。 <a href="#source-group-1">🔗<\/a>/);
-  assert.match(markdown, /第二条事实 <a href="#source-group-2">🔗<\/a>/);
+  assert.match(markdown, /第一条事实。 \[🔗\]\(https:\/\/example\.com\/a\)/);
+  assert.match(markdown, /第二条事实 \[🔗\]\(https:\/\/example\.com\/b\)/);
   assert.doesNotMatch(markdown, /\[9\]|虚构/);
-  assert.match(markdown, /<tg-reference name="source-group-1"><a href="https:\/\/example\.com\/a">Source A<\/a><\/tg-reference>/);
-  assert.match(markdown, /<tg-reference name="source-group-2"><a href="https:\/\/example\.com\/b">Source B<\/a><\/tg-reference>/);
-  assert.doesNotMatch(markdown, /## 参考来源|Unused Source|example\.com\/unused/);
+  assert.doesNotMatch(markdown, /tg-reference|source-group|## 参考来源|Unused Source|example\.com\/unused/);
 });
 
-test('multiple verified citations become one Telegram grouped source popup', () => {
+test('multiple verified citations become adjacent compact source links', () => {
   const raw = JSON.stringify({
     results: [
       { title: 'Source A', url: 'https://example.com/a' },
@@ -518,57 +515,8 @@ test('multiple verified citations become one Telegram grouped source popup', () 
     ]
   });
   const markdown = formatNewsRichMarkdown('同一结论由两个来源支持。[1][2]', raw, 'zh', 'Asia/Shanghai');
-  assert.match(markdown, /同一结论由两个来源支持。 <a href="#source-group-1">🔗 \+1<\/a>/);
-  assert.match(markdown, /<tg-reference name="source-group-1">.*example\.com\/a.*example\.com\/b.*<\/tg-reference>/);
-  assert.equal((markdown.match(/<tg-reference /g) || []).length, 1);
-  assert.doesNotMatch(markdown, /## 参考来源/);
-});
-
-test('news source popups use typed RichText references without visible source paragraphs', async () => {
-  const raw = JSON.stringify({
-    results: [
-      { title: 'Source A', url: 'https://example.com/a' },
-      { title: 'Source B', url: 'https://example.com/b' }
-    ]
-  });
-  const markdown = formatNewsRichMarkdown('同一结论由两个来源支持。[1][2]', raw, 'zh', 'Asia/Shanghai');
-  const blocks = buildNewsReferenceRichBlocks(markdown);
-  const serialized = JSON.stringify(blocks);
-
-  assert.equal(blocks.length, 2);
-  assert.equal(blocks[0].type, 'heading');
-  assert.equal(blocks[1].type, 'paragraph');
-  assert.match(serialized, /"type":"reference_link"/);
-  assert.match(serialized, /"reference_name":"source-group-1"/);
-  assert.match(serialized, /"type":"reference"/);
-  assert.match(serialized, /"type":"url"/);
-  assert.equal(blocks.some((block) => block.type === 'paragraph' && JSON.stringify(block.text) === JSON.stringify('Source A')), false);
-
-  const calls = [];
-  const fakeBot = {
-    config: { enableRichMessages: true, richMessageMinChars: 200 },
-    logger: logger()
-  };
-  const ctx = {
-    chat: { id: 77, type: 'private' },
-    message: { message_id: 42 },
-    telegram: {
-      async callApi(method, payload) {
-        calls.push({ method, payload });
-        return { message_id: 92 };
-      }
-    }
-  };
-  const sent = await TelegramAIBot.prototype.trySendRichAssistantReply.call(
-    fakeBot,
-    ctx,
-    markdown,
-    {},
-    { force: true, kind: 'news' }
-  );
-  assert.equal(sent.rich, true);
-  assert.deepEqual(calls[0].payload.rich_message.blocks, blocks);
-  assert.equal('markdown' in calls[0].payload.rich_message, false);
+  assert.match(markdown, /同一结论由两个来源支持。 \[🔗\]\(https:\/\/example\.com\/a\)\[\+1\]\(https:\/\/example\.com\/b\)/);
+  assert.doesNotMatch(markdown, /tg-reference|source-group|## 参考来源/);
 });
 
 test('AI fallback retries another model for transient provider failures', async () => {
