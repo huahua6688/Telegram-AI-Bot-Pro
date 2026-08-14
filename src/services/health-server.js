@@ -1519,7 +1519,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       { id: 'vision', label: '识图' },
       { id: 'image_generation', label: '画图' },
       { id: 'tts', label: 'TTS' },
-      { id: 'live_voice', label: '实时语音' },
+      { id: 'live_voice', label: '语音转写' },
       { id: 'video', label: '视频' }
     ];
     const maxAdminCreditBalance = 1000000000;
@@ -1527,6 +1527,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
     const state = {
       catalog: [],
       settings: null,
+      routing: null,
       profile: null,
       activeView: 'home',
       historyLoaded: false,
@@ -1795,11 +1796,31 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       const details = provider && Array.isArray(provider.modelDetails) ? provider.modelDetails : [];
       const selected = details.find(function (item) { return item.id === elements.modelSelect.value; });
       if (!selected) {
-        elements.modelDescription.textContent = '';
-        elements.modelDescription.classList.add('hidden');
+        const providerId = String(elements.providerSelect.value || 'auto');
+        const discovery = provider && provider.discovery || {};
+        const needsSelection = providerId !== 'auto' && details.length > 0;
+        if (providerId === 'auto') {
+          const routing = state.routing || {};
+          elements.modelDescription.textContent = [
+            routing.defaultProvider ? '当前首选平台：' + routing.defaultProvider : '',
+            routing.defaultModel ? '当前首选模型：' + routing.defaultModel : '尚未选定默认模型',
+            routing.fallbackOrder && routing.fallbackOrder.length
+              ? '失败时自动切换：' + routing.fallbackOrder.join(' → ')
+              : '',
+            routing.smartRoutingEnabled ? '智能任务路由：已开启' : '智能任务路由：未开启'
+          ].filter(Boolean).join('\n');
+          elements.modelDescription.classList.toggle('hidden', !elements.modelDescription.textContent);
+          return;
+        }
+        elements.modelDescription.textContent = needsSelection
+          ? '请选择一个模型。标记为“价格未知”的模型不会被系统自动设为默认，以免意外使用收费模型。'
+          : discovery.error
+            ? '模型列表获取失败：' + String(discovery.error)
+            : '';
+        elements.modelDescription.classList.toggle('hidden', !elements.modelDescription.textContent);
         return;
       }
-      const sourceLabels = { provider: '平台官方资料', catalog: '内置模型资料', inferred: '名称推测' };
+      const sourceLabels = { provider: '平台官方资料', catalog: '内置推测（非平台说明）', inferred: '名称推测（非平台说明）' };
       const priceLabels = { free: '免费', paid: '收费', unknown: '价格未知' };
       const capabilities = Array.isArray(selected.capabilities) ? selected.capabilities.join('、') : '';
       elements.modelDescription.textContent = [
@@ -1815,6 +1836,7 @@ const MINI_APP_HTML = String.raw`<!doctype html>
     function renderSettings(data) {
       state.catalog = data.providers || [];
       state.settings = data.settings || {};
+      state.routing = data.routing || {};
       state.profile = data.profile || {};
       state.supportUrl = String(data.support && data.support.url || '');
       elements.supportButton.classList.toggle('hidden', !state.supportUrl);
@@ -3317,6 +3339,13 @@ function serializeSettingsResponse({ db, config, providerManager = null, userId,
       fallbackEnabled: settings.fallbackEnabled !== false,
       updatedAt: settings.updatedAt || ''
     },
+    routing: {
+      defaultProvider: String(config.defaultAIProvider || config.aiProvider || 'auto'),
+      defaultModel: String(config.defaultModel || ''),
+      fallbackOrder: Array.isArray(config.aiProviderFallbackOrder) ? config.aiProviderFallbackOrder : [],
+      smartRoutingEnabled: config.smartRoutingEnabled === true,
+      modelSelectionRequired: config.modelSelectionRequired === true
+    },
     news: {
       region: news.region || '',
       language: news.language || '',
@@ -3521,14 +3550,23 @@ function serializeSession(session, user = null) {
   };
 }
 
-function serializeSessionMessages(db, sessionId, limit = 100, maxContentChars = 8000) {
+function serializeSessionMessages(
+  db,
+  sessionId,
+  limit = 100,
+  maxContentChars = 8000,
+  includeUserMessages = false
+) {
   const safeLimit = Math.max(1, Math.min(200, Number(limit) || 100));
   const entries = db.getConversationEntries(sessionId, {
     limit: safeLimit,
     order: 'desc'
   });
 
-  return entries.reverse().map((entry) => {
+  return entries
+    .reverse()
+    .filter((entry) => includeUserMessages || String(entry.role || '').toLowerCase() === 'assistant')
+    .map((entry) => {
     let content;
     if (typeof entry.content === 'string') {
       content = entry.content;
@@ -3546,7 +3584,7 @@ function serializeSessionMessages(db, sessionId, limit = 100, maxContentChars = 
       model: String(entry.model || ''),
       createdAt: entry.createdAt || ''
     };
-  });
+    });
 }
 
 function logMiniAppSessionAction(context, { actorId, action, targetId = '', details = {}, req }) {
@@ -3649,7 +3687,9 @@ async function handleMiniAppSessionsApi(req, res, context, url) {
         messages: serializeSessionMessages(
           context.db,
           sessionId,
-          url.searchParams.get('limit') || 100
+          url.searchParams.get('limit') || 100,
+          8000,
+          context.config.miniAppShowUserMessages === true
         )
       });
       return;
@@ -3826,7 +3866,8 @@ async function handleMiniAppAdminApi(req, res, context, url) {
         context.db,
         sessionId,
         url.searchParams.get('limit') || 50,
-        800
+        800,
+        context.config.miniAppShowUserMessages === true
       )
     });
     return;
@@ -4164,8 +4205,9 @@ async function handleMiniAppModelSync(req, res, context) {
   }
 }
 
-export function startHealthServer({ port, db, config, logger, providerManager = null }) {
-  const context = { db, config, logger, providerManager };
+export function startHealthServer({ port, db, config, logger, providerManager = null, readiness = null }) {
+  const effectiveReadiness = readiness || { ready: true, phase: 'ready' };
+  const context = { db, config, logger, providerManager, readiness: effectiveReadiness };
 
   const server = http.createServer((req, res) => {
     void (async () => {
@@ -4240,6 +4282,15 @@ export function startHealthServer({ port, db, config, logger, providerManager = 
 
         try {
           db.getStats();
+          if (!effectiveReadiness.ready) {
+            sendJson(res, 503, {
+              ok: false,
+              ready: false,
+              phase: effectiveReadiness.phase || 'initializing',
+              error: 'NOT_READY'
+            });
+            return;
+          }
           sendJson(res, 200, {
             ok: true,
             ready: true,

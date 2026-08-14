@@ -19,7 +19,7 @@ function closeHttpServer(server) {
 }
 
 export async function stopApplicationResources(
-  { bot, supportBot, healthServer, adminServer, db, logger },
+  { bot, supportBot, healthServer, adminServer, db, logger, timers = [] },
   signal
 ) {
   const failures = [];
@@ -38,6 +38,8 @@ export async function stopApplicationResources(
       });
     });
   };
+
+  for (const timer of timers || []) clearInterval(timer);
 
   await runPhase([
     ['telegram-bot', () => bot?.stop?.(signal)],

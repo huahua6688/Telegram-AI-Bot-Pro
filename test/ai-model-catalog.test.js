@@ -16,9 +16,14 @@ test('model catalog preserves provider descriptions and filters non-chat models'
   assert.equal(inferModelProfile({ id: 'vendor/chat:free' }).pricingTier, 'free');
   assert.equal(inferModelProfile({ id: 'paid-chat', pricing: { prompt: '0.1', completion: '0.2' } }).pricingTier, 'paid');
   assert.equal(inferModelProfile({ id: 'claude-example' }).descriptionSource, 'catalog');
+  assert.equal(
+    inferModelProfile({ id: 'general-chat', description: 'Chat model that can discuss embeddings' }).chatCompatible,
+    true,
+    'provider prose must not reclassify a chat model as an embedding endpoint'
+  );
 });
 
-test('provider manager discovers OpenAI-compatible models without configured model names', async () => {
+test('provider manager discovers models but requires selection when platform pricing is unknown', async () => {
   const config = {
     aiProvider: 'openai-compatible', aiApiKey: 'test-key', aiBaseUrl: 'https://example.test/v1',
     defaultModel: '', availableModels: [], providerModels: { 'openai-compatible': [] }, providerDefaultModels: {},
@@ -46,6 +51,52 @@ test('provider manager discovers OpenAI-compatible models without configured mod
   assert.equal(config.imageModel, 'hub-image-generation');
   assert.equal(config.ttsModel, 'hub-tts');
   assert.equal(config.transcriptionModel, 'hub-whisper');
-  assert.equal(config.defaultModel, 'hub-chat');
+  assert.equal(config.defaultModel, '');
+  assert.equal(config.modelSelectionRequired, true);
+  assert.deepEqual(manager.getCandidateModels('openai-compatible', 'hub-chat'), ['hub-chat']);
   assert.equal((await manager.refreshModels('openai-compatible')).cached, true);
+});
+
+test('provider manager automatically chooses a model only when the platform identifies it as free', async () => {
+  const config = {
+    aiProvider: 'openai-compatible', aiApiKey: 'test-key', defaultModel: '', defaultModelExplicit: false,
+    availableModels: [], providerModels: { 'openai-compatible': [] }, providerDefaultModels: {},
+    modelListCacheTtlMs: 0, requestTimeoutMs: 1000
+  };
+  const manager = new AIProviderManager({
+    config,
+    logger: { info() {}, warn() {} },
+    clientFactory: () => ({
+      listModels: async () => ({ data: [
+        { id: 'paid-chat', pricing: { prompt: 0.1 } },
+        { id: 'free-chat', pricing: { prompt: 0, completion: 0 } }
+      ] })
+    })
+  });
+  await manager.refreshModels('openai-compatible', { force: true });
+  assert.equal(config.defaultModel, 'free-chat');
+  assert.equal(config.modelSelectionRequired, false);
+  assert.deepEqual(manager.getCandidateModels('openai-compatible'), ['free-chat', 'paid-chat']);
+});
+
+test('automatic cross-provider mode can use discovered paid fallback models without promoting one to default', async () => {
+  const config = {
+    aiProvider: 'auto', aiApiKey: 'paid-fallback-key', defaultModel: '', defaultModelExplicit: false,
+    availableModels: [], providerModels: { 'openai-compatible': [] }, providerDefaultModels: {},
+    modelListCacheTtlMs: 0, requestTimeoutMs: 1000
+  };
+  const manager = new AIProviderManager({
+    config,
+    logger: { info() {}, warn() {} },
+    clientFactory: () => ({
+      listModels: async () => ({ data: [
+        { id: 'hub-paid-chat', description: 'Paid fallback chat model' }
+      ] })
+    })
+  });
+
+  await manager.refreshModels('openai-compatible', { force: true });
+  assert.equal(config.defaultModel, '');
+  assert.equal(config.modelSelectionRequired, undefined);
+  assert.deepEqual(manager.getCandidateModels('openai-compatible'), ['hub-paid-chat']);
 });

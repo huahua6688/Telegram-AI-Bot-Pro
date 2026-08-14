@@ -11,6 +11,14 @@ function normalizeCredits(credits = {}) {
   );
 }
 
+function normalizeSellableCredits(config = {}, credits = {}) {
+  const normalized = normalizeCredits(credits);
+  // Telegram video input is not connected to a model pipeline yet. Never sell
+  // a balance that the bot cannot consume, even if ENABLE_VIDEO was toggled.
+  normalized.video = 0;
+  return normalized;
+}
+
 export function buildConfiguredFreeQuota(config = {}) {
   const freeQuota = normalizeCredits(config?.starsFreeQuota);
   if (config?.starsFreeQuota?.chat === undefined) {
@@ -26,17 +34,23 @@ export function getDefaultChatFreeQuota(config = {}) {
 export function buildBillingCatalog(config = {}) {
   return {
     enabled: config.starsPaymentsEnabled !== false,
-    videoEnabled: Boolean(config.enableVideo),
+    videoEnabled: false,
     freeQuota: buildConfiguredFreeQuota(config),
-    products: (Array.isArray(config.starsProducts) ? config.starsProducts : []).map((product) => ({
-      id: String(product?.id || ''),
-      title: String(product?.title || ''),
-      titleEn: String(product?.titleEn || product?.title || ''),
-      description: String(product?.description || ''),
-      descriptionEn: String(product?.descriptionEn || product?.description || ''),
-      price: nonNegativeInteger(product?.price, 0),
-      credits: normalizeCredits(product?.credits)
-    }))
+    products: (Array.isArray(config.starsProducts) ? config.starsProducts : [])
+      .map((product) => ({
+        id: String(product?.id || ''),
+        title: String(product?.title || ''),
+        titleEn: String(product?.titleEn || product?.title || ''),
+        description: String(product?.description || ''),
+        descriptionEn: String(product?.descriptionEn || product?.description || ''),
+        price: nonNegativeInteger(product?.price, 0),
+        credits: normalizeSellableCredits(config, product?.credits)
+      }))
+      .filter((product) => (
+        product.id &&
+        product.price > 0 &&
+        BILLING_CREDIT_TYPES.some((type) => product.credits[type] > 0)
+      ))
   };
 }
 

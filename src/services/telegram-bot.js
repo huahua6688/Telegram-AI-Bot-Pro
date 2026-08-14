@@ -12,6 +12,7 @@ import {
   shouldRespondToMessage,
   stripTelegramBotMentionsFromMessage
 } from '../utils/telegram.js';
+import { retryTelegramStartupCall } from '../utils/telegram-startup.js';
 import { extractUrls, splitMessage, toDataUri, truncateText } from '../utils/text.js';
 import { resolveEffectiveNewsSettings } from '../utils/news-settings.js';
 import { personaPresets } from '../config.js';
@@ -26,6 +27,7 @@ import { formatModelProfile } from './ai-model-catalog.js';
 import { getBuildInfo } from '../app/build-info.js';
 import {
   BILLING_CREDIT_TYPES,
+  buildBillingCatalog,
   buildUserBillingSnapshot,
   getDefaultChatFreeQuota,
   resolveUserFreeQuota
@@ -922,6 +924,23 @@ function escapeRichMarkdownLinkText(value = '') {
     .replaceAll(')', '\\)');
 }
 
+function fitRichMarkdownBlocks(text = '', maxChars = 2000) {
+  const source = String(text || '').trim();
+  const limit = Math.max(0, Number(maxChars) || 0);
+  if (source.length <= limit) return source;
+  if (limit <= 1) return '';
+  const blocks = source.split(/\n{2,}/);
+  const kept = [];
+  for (const block of blocks) {
+    const candidate = [...kept, block].join('\n\n');
+    if (candidate.length + 2 > limit) break;
+    kept.push(block);
+  }
+  if (kept.length) return `${kept.join('\n\n')}\n\n…`.slice(0, limit);
+  const line = source.slice(0, Math.max(0, limit - 1));
+  return `${line.replace(/[\s|]+$/g, '')}…`;
+}
+
 export function formatNewsRichMarkdown(
   answer = '',
   raw = '',
@@ -934,9 +953,14 @@ export function formatNewsRichMarkdown(
   const references = naturalAgentInternals.extractReferenceLinks(raw);
   // Model-written citation lists are not authoritative and their numbering can
   // differ from the retrieved results. Keep only verified tool URLs and titles.
-  const sourceAnswer = naturalAgentInternals.stripGeneratedReferences(String(answer || ''));
-  const body = naturalAgentInternals.stripBareUrls(sourceAnswer).trim();
-  const sourceLines = references.map((item, index) => {
+  const sourceAnswer = naturalAgentInternals.stripGeneratedReferenceSection(String(answer || ''));
+  const body = naturalAgentInternals.normalizeVerifiedCitations(
+    naturalAgentInternals.stripBareUrls(sourceAnswer),
+    references.length,
+    'rich'
+  ).trim();
+  const hasInlineCitations = /\[\^src\d+\]/.test(body);
+  const sourceEntries = references.map((item, index) => {
     const timestamp = naturalAgentInternals.formatSourceTimestamp(
       item.publishedAt,
       locale,
@@ -944,16 +968,30 @@ export function formatNewsRichMarkdown(
     );
     const label = escapeRichMarkdownLinkText(item.title || item.sourceName || '来源');
     const safeUrl = String(item.url || '').replaceAll('(', '%28').replaceAll(')', '%29');
-    return `${index + 1}. [${label}](${safeUrl})${timestamp ? ` · ${timestamp}` : ''}`;
+    const reference = `[${label}](${safeUrl})${timestamp ? ` · ${timestamp}` : ''}`;
+    return {
+      number: index + 1,
+      cited: body.includes(`[^src${index + 1}]`),
+      line: hasInlineCitations ? `[^src${index + 1}]: ${reference}` : `${index + 1}. ${reference}`
+    };
   });
-  const sections = [title, body];
-  if (sourceLines.length) {
-    sections.push(english ? '## Sources' : '## 参考来源', sourceLines.join('\n'));
+  const limit = Math.max(500, Number(maxChars) || 12000);
+  const sourceHeading = english ? '## Sources' : '## 参考来源';
+  const sourceBudget = Math.max(0, Math.floor(limit * 0.62) - sourceHeading.length - 2);
+  const retained = [];
+  const prioritized = [...sourceEntries].sort((left, right) => Number(right.cited) - Number(left.cited) || left.number - right.number);
+  for (const entry of prioritized) {
+    const candidate = [...retained, entry].sort((a, b) => a.number - b.number).map((item) => item.line).join('\n');
+    if (candidate.length <= sourceBudget) retained.push(entry);
   }
-  return truncateText(
-    sanitizeRichMarkdown(sections.filter(Boolean).join('\n\n')),
-    Math.max(500, Number(maxChars) || 12000)
-  );
+  const retainedNumbers = new Set(retained.map((entry) => entry.number));
+  const safeBody = body.replace(/\[\^src(\d+)\]/g, (marker, value) => retainedNumbers.has(Number(value)) ? marker : '');
+  const sourceBlock = retained.length
+    ? `${sourceHeading}\n${retained.sort((a, b) => a.number - b.number).map((entry) => entry.line).join('\n')}`
+    : '';
+  const bodyBudget = Math.max(0, limit - title.length - sourceBlock.length - (sourceBlock ? 4 : 2));
+  const fittedBody = fitRichMarkdownBlocks(safeBody, bodyBudget);
+  return sanitizeRichMarkdown([title, fittedBody, sourceBlock].filter(Boolean).join('\n\n'));
 }
 
 async function sendSearchReply(ctx, text, maxLength, locale = 'zh') {
@@ -982,13 +1020,51 @@ async function sendHtmlReply(ctx, text, maxLength, extra = {}) {
   }
 }
 
-async function readTelegramFile(ctx, fileId, fallbackName, mimeType) {
+async function readTelegramFile(
+  ctx,
+  fileId,
+  fallbackName,
+  mimeType,
+  { declaredSize = 0, maxBytes = 10 * 1024 * 1024, timeoutMs = 20000 } = {}
+) {
+  const safeMaxBytes = Math.max(1, Number(maxBytes) || 10 * 1024 * 1024);
+  if (Number(declaredSize) > safeMaxBytes) {
+    const error = new Error(`Telegram file exceeds the ${safeMaxBytes}-byte download limit.`);
+    error.code = 'TELEGRAM_FILE_TOO_LARGE';
+    throw error;
+  }
   const url = await ctx.telegram.getFileLink(fileId);
-  const response = await fetch(url.toString());
+  const response = await fetch(url.toString(), {
+    signal: AbortSignal.timeout(Math.max(1000, Number(timeoutMs) || 20000))
+  });
   if (!response.ok) {
     throw new Error(`Failed to download Telegram file (${response.status})`);
   }
-  const buffer = Buffer.from(await response.arrayBuffer());
+  const contentLength = Number(response.headers.get('content-length') || 0);
+  if (contentLength > safeMaxBytes) {
+    await response.body?.cancel?.();
+    const error = new Error(`Telegram file exceeds the ${safeMaxBytes}-byte download limit.`);
+    error.code = 'TELEGRAM_FILE_TOO_LARGE';
+    throw error;
+  }
+
+  const chunks = [];
+  let totalBytes = 0;
+  const reader = response.body?.getReader?.();
+  if (!reader) throw new Error('Telegram file response did not include a readable body.');
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    totalBytes += value.byteLength;
+    if (totalBytes > safeMaxBytes) {
+      await reader.cancel();
+      const error = new Error(`Telegram file exceeds the ${safeMaxBytes}-byte download limit.`);
+      error.code = 'TELEGRAM_FILE_TOO_LARGE';
+      throw error;
+    }
+    chunks.push(Buffer.from(value));
+  }
+  const buffer = Buffer.concat(chunks, totalBytes);
   return {
     buffer,
     filename: fallbackName,
@@ -2143,7 +2219,7 @@ export class TelegramAIBot {
           vision: 'Image understanding',
           image_generation: 'Image generation/editing',
           tts: 'Text to speech',
-          live_voice: 'Live voice/audio',
+          live_voice: 'Audio transcription',
           video: 'Video'
         }
       : {
@@ -2151,7 +2227,7 @@ export class TelegramAIBot {
           vision: '识图',
           image_generation: '画图/改图',
           tts: '文字转语音',
-          live_voice: '实时语音/音频',
+          live_voice: '语音转写',
           video: '视频'
         };
     return labels[this.normalizeBillingCreditType(creditType)] || String(creditType || '');
@@ -2195,7 +2271,7 @@ export class TelegramAIBot {
   }
 
   createStarsStoreKeyboard(locale = 'zh') {
-    const rows = (this.config.starsProducts || []).map((product) => [
+    const rows = buildBillingCatalog(this.config).products.map((product) => [
       Markup.button.callback(
         `${isEnglishLocale(locale) ? product.titleEn : product.title} · ${product.price} ⭐`,
         `stars_pkg:${product.id}`
@@ -2237,7 +2313,8 @@ export class TelegramAIBot {
       return;
     }
 
-    if (!this.config.starsPaymentsEnabled || !(this.config.starsProducts || []).length) {
+    const products = buildBillingCatalog(this.config).products;
+    if (!this.config.starsPaymentsEnabled || !products.length) {
       await this.replyWithSupport(ctx, localText(
         locale,
         '购买功能暂未开放。管理员需要先配置 STARS_PRODUCTS_JSON。每日免费额度仍可正常使用。',
@@ -2251,7 +2328,7 @@ export class TelegramAIBot {
       '',
       localText(locale, '请选择额度包。数字服务只通过 Telegram Stars 结算；支付到账后会自动加入余额。', 'Choose a credit pack. Digital services are paid only with Telegram Stars and credits are added after payment confirmation.')
     ];
-    for (const product of this.config.starsProducts) {
+    for (const product of products) {
       lines.push('', `${isEnglishLocale(locale) ? product.titleEn : product.title} · ${product.price} ⭐`);
       lines.push(...this.formatStarsProductCredits(product, locale));
     }
@@ -2381,7 +2458,7 @@ export class TelegramAIBot {
 
   getStarsProduct(productId = '') {
     const normalized = String(productId || '').trim().toLowerCase();
-    return (this.config.starsProducts || []).find((item) => item.id === normalized) || null;
+    return buildBillingCatalog(this.config).products.find((item) => item.id === normalized) || null;
   }
 
   async sendStarsInvoice(ctx, productId = '') {
@@ -2983,25 +3060,25 @@ export class TelegramAIBot {
         ? {
             transcribe: '🎙 Voice to text',
             tts: '🔊 Text to speech',
-            live: '🎧 Gemini Live',
             cancel: 'Cancel'
           }
         : {
             transcribe: '🎙 语音转文字',
             tts: '🔊 文字转语音',
-            live: '🎧 Gemini Live',
             cancel: '取消'
           };
 
-    return Markup.inlineKeyboard([
+    const rows = [
       [
         Markup.button.callback(labels.transcribe, 'voice_pick:transcribe'),
         Markup.button.callback(labels.tts, 'voice_pick:tts')
       ],
-      [Markup.button.callback(labels.live, 'voice_pick:live')],
       [Markup.button.callback(labels.cancel, 'voice_pick:cancel')],
       [Markup.button.callback(localText(locale, '⬅️ 返回主菜单', '⬅️ Main menu'), 'menu:back')]
-    ]);
+    ];
+    // Keep the callback handler for old messages, but do not advertise an
+    // unfinished bidirectional Live session as an available product.
+    return Markup.inlineKeyboard(rows);
   }
 
 
@@ -4130,6 +4207,8 @@ export class TelegramAIBot {
         auth: 'AI 服务认证失败。可能是 API Key 无效、额度权限不足，或环境变量配置错误。',
         timeout: 'AI 服务响应超时。可能是网络不稳定或模型响应太慢，请稍后再试。',
         model: '当前模型不可用。可能是模型名称写错、API Key 不支持这个模型，或模型已经下线。',
+        selectModel: '平台没有提供可靠的免费价格信息。请在控制台手动选择一个模型，避免意外使用收费模型。',
+        fileTooLarge: '文件太大，已在下载前停止处理。请压缩文件或发送较小版本。',
         safety: '这条请求可能触发了安全限制，暂时无法处理。',
         network: '网络请求失败。请稍后再试。',
         generic: '处理失败，请稍后再试。'
@@ -4143,6 +4222,8 @@ export class TelegramAIBot {
         auth: 'AI service authentication failed. The API key may be invalid, unauthorized, or misconfigured.',
         timeout: 'The AI service timed out. The network may be unstable or the model may be responding too slowly.',
         model: 'The current model is unavailable. The model name may be wrong, unsupported, or deprecated.',
+        selectModel: 'The platform did not provide reliable free-pricing data. Select a model manually in Console to avoid accidental paid usage.',
+        fileTooLarge: 'The file is too large and was stopped before processing. Compress it or send a smaller file.',
         safety: 'This request may have triggered a safety restriction and cannot be processed.',
         network: 'The network request failed. Please try again later.',
         generic: 'Something went wrong. Please try again later.'
@@ -4151,11 +4232,15 @@ export class TelegramAIBot {
 
     const lang = uiTextLocale(locale);
     const t = messages[lang];
-    const setupOnlyStatuses = ['unconfigured', 'disabled', 'model_missing', 'cooldown'];
+    if (error?.code === 'TELEGRAM_FILE_TOO_LARGE' || combinedLower.includes('telegram file exceeds')) {
+      return t.fileTooLarge;
+    }
+    if (statusList.includes('model_selection_required')) return t.selectModel;
+    const setupOnlyStatuses = ['unconfigured', 'disabled', 'model_missing', 'model_selection_required', 'model_cooldown', 'cooldown'];
     const cooldownOnly =
       attemptedProviders.length > 0 &&
       statusList.length > 0 &&
-      statusList.every((status) => status === 'cooldown');
+      statusList.every((status) => status === 'cooldown' || status === 'model_cooldown');
     if (cooldownOnly) {
       return t.cooldown;
     }
@@ -4549,7 +4634,16 @@ export class TelegramAIBot {
     );
     this.usageReservationSweepTimer.unref?.();
 
-    const me = await this.bot.telegram.getMe();
+    const me = await retryTelegramStartupCall(
+      () => this.bot.telegram.getMe(),
+      {
+        maxRetries: this.config.telegramStartupMaxRetries,
+        baseDelayMs: this.config.telegramStartupRetryBaseMs,
+        maxDelayMs: this.config.telegramStartupRetryMaxMs,
+        logger: this.logger,
+        label: 'main_bot_get_me'
+      }
+    );
     this.botInfo = me;
     this.botUsername = me.username || '';
     this.botUserId = String(me.id || '');
@@ -4658,6 +4752,14 @@ export class TelegramAIBot {
     }
     hits.push(now);
     this.rateLimits.set(key, hits);
+    if (this.rateLimits.size > 10000) {
+      for (const [candidate, timestamps] of this.rateLimits) {
+        if (!timestamps.some((timestamp) => now - timestamp < this.config.rateLimitWindowMs)) {
+          this.rateLimits.delete(candidate);
+        }
+        if (this.rateLimits.size <= 8000) break;
+      }
+    }
     return true;
   }
 
@@ -5172,7 +5274,12 @@ export class TelegramAIBot {
         ctx,
         document.file_id,
         document.file_name || 'document.txt',
-        document.mime_type || 'application/octet-stream'
+        document.mime_type || 'application/octet-stream',
+        {
+          declaredSize: document.file_size,
+          maxBytes: Math.min(this.config.documentMaxBytes, this.config.telegramFileMaxBytes),
+          timeoutMs: this.config.telegramFileDownloadTimeoutMs
+        }
       );
 
       const parsed = await this.documentParser.parse({
@@ -5791,7 +5898,11 @@ export class TelegramAIBot {
     if (!(await this.consumeQuotaForContext(ctx, 'image_generation'))) return;
 
     try {
-      const file = await readTelegramFile(ctx, photo.file_id, 'image.jpg', 'image/jpeg');
+      const file = await readTelegramFile(ctx, photo.file_id, 'image.jpg', 'image/jpeg', {
+        declaredSize: photo.file_size,
+        maxBytes: this.config.telegramFileMaxBytes,
+        timeoutMs: this.config.telegramFileDownloadTimeoutMs
+      });
       await ctx.sendChatAction('upload_photo');
       const result = await this.withProviderForCapability(
         'imageEditing',
@@ -5857,7 +5968,12 @@ export class TelegramAIBot {
         ctx,
         voice.file_id,
         voice.file_name || 'audio.ogg',
-        voice.mime_type || 'audio/ogg'
+        voice.mime_type || 'audio/ogg',
+        {
+          declaredSize: voice.file_size,
+          maxBytes: this.config.telegramFileMaxBytes,
+          timeoutMs: this.config.telegramFileDownloadTimeoutMs
+        }
       );
 
       const result = await this.withProviderForCapability(
@@ -8161,7 +8277,11 @@ export class TelegramAIBot {
 
     if (ctx.message.photo?.length) {
       const photo = ctx.message.photo[ctx.message.photo.length - 1];
-      const file = await readTelegramFile(ctx, photo.file_id, 'image.jpg', 'image/jpeg');
+      const file = await readTelegramFile(ctx, photo.file_id, 'image.jpg', 'image/jpeg', {
+        declaredSize: photo.file_size,
+        maxBytes: this.config.telegramFileMaxBytes,
+        timeoutMs: this.config.telegramFileDownloadTimeoutMs
+      });
       const supportsVision = this.providerManager
         ? this.providerManager.hasAvailableProvider('vision', this.config.visionProvider)
         : this.getProviderCapabilities().vision;
@@ -8195,7 +8315,12 @@ export class TelegramAIBot {
         ctx,
         voice.file_id,
         voice.file_name || 'audio.ogg',
-        voice.mime_type || 'audio/ogg'
+        voice.mime_type || 'audio/ogg',
+        {
+          declaredSize: voice.file_size,
+          maxBytes: this.config.telegramFileMaxBytes,
+          timeoutMs: this.config.telegramFileDownloadTimeoutMs
+        }
       );
       const audioResult = await this.withProviderForCapability('speechTranscription', this.config.transcriptionProvider, (selected) => {
         return this.audioOrchestrator.transcribeIncomingAudio({
@@ -8230,7 +8355,12 @@ export class TelegramAIBot {
         ctx,
         document.file_id,
         document.file_name || 'document.txt',
-        document.mime_type || 'application/octet-stream'
+        document.mime_type || 'application/octet-stream',
+        {
+          declaredSize: document.file_size,
+          maxBytes: Math.min(this.config.documentMaxBytes, this.config.telegramFileMaxBytes),
+          timeoutMs: this.config.telegramFileDownloadTimeoutMs
+        }
       );
       const parsed = await this.documentParser.parse({
         buffer: file.buffer,

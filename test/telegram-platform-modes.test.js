@@ -854,6 +854,25 @@ test('inline search payload compaction preserves valid JSON and source metadata'
   assert.equal(parsed.results[0].publishedAt, '2026-07-16T03:00:00.000Z');
 });
 
+test('plain Telegram search keeps only citation numbers backed by verified tool results', () => {
+  const raw = JSON.stringify({
+    results: [
+      { title: 'Verified A', url: 'https://example.com/a' },
+      { title: 'Verified B', url: 'https://example.com/b' }
+    ]
+  });
+  const formatted = naturalAgentInternals.appendClickableReferences(
+    '事实 A【1】，事实 B [2]，伪造来源 [7]。\n\nSources:\n7. fake',
+    raw,
+    'zh',
+    3900
+  );
+  assert.match(formatted, /事实 A\[1\]/);
+  assert.match(formatted, /事实 B \[2\]/);
+  assert.doesNotMatch(formatted, /\[7\]|fake/);
+  assert.equal((formatted.match(/<a /g) || []).length, 2);
+});
+
 test('search composition keeps every valid provider result up to the eight-result search limit', () => {
   const results = Array.from({ length: 10 }, (_, index) => ({
     title: `Result ${index + 1}`,

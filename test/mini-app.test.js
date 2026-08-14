@@ -41,6 +41,10 @@ test('Mini App securely exposes settings without chat input actions', async (t) 
     language_code: 'zh-CN'
   };
   const initData = signInitData(botToken, telegramUser);
+  await db.setConversation(`${telegramUser.id}:${telegramUser.id}:main`, [
+    { role: 'user', content: 'private user prompt' },
+    { role: 'assistant', content: 'visible assistant reply' }
+  ]);
   const config = {
     botToken,
     adminUserIds: new Set(),
@@ -51,7 +55,8 @@ test('Mini App securely exposes settings without chat input actions', async (t) 
     maxInputChars: 12000,
     newsRegion: 'MY',
     newsLanguage: 'auto',
-    newsTimeZone: 'Asia/Kuala_Lumpur'
+    newsTimeZone: 'Asia/Kuala_Lumpur',
+    miniAppShowUserMessages: false
   };
   const server = startHealthServer({ port: 0, db, config, logger: logger() });
 
@@ -228,6 +233,20 @@ test('Mini App securely exposes settings without chat input actions', async (t) 
   assert.equal(resetNews.news.language, '');
   assert.equal(resetNews.news.timeZone, '');
   assert.equal(db.getUserNewsSettings(telegramUser.id).region, '');
+
+  const sessionListResponse = await fetch(`${base}/api/miniapp/sessions`, { headers });
+  const sessionList = await sessionListResponse.json();
+  assert.equal(sessionListResponse.status, 200);
+  assert.ok(sessionList.items.length > 0);
+  const sessionDetailResponse = await fetch(
+    `${base}/api/miniapp/sessions/${encodeURIComponent(sessionList.items[0].id)}`,
+    { headers }
+  );
+  const sessionDetail = await sessionDetailResponse.json();
+  assert.equal(sessionDetailResponse.status, 200);
+  assert.deepEqual(sessionDetail.messages.map((message) => message.role), ['assistant']);
+  assert.equal(JSON.stringify(sessionDetail).includes('private user prompt'), false);
+  assert.equal(JSON.stringify(sessionDetail).includes('visible assistant reply'), true);
 
   const removedAction = await fetch(`${base}/api/miniapp/action`, {
     method: 'POST',

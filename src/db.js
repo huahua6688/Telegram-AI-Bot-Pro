@@ -409,6 +409,8 @@ export class BotDatabase {
   async init() {
     await fs.mkdir(path.dirname(this.filePath), { recursive: true });
     this.db = new DatabaseSync(this.filePath);
+    this.db.exec('PRAGMA foreign_keys = ON;');
+    this.db.exec('PRAGMA secure_delete = ON;');
     this.db.exec('PRAGMA journal_mode = WAL;');
 
     this.db.exec(`
@@ -1439,6 +1441,38 @@ export class BotDatabase {
     this.db.prepare('DELETE FROM sessions WHERE id = ?').run(String(sessionId));
     this.db.prepare('DELETE FROM conversations WHERE session_id = ?').run(String(sessionId));
     await this.write();
+  }
+
+  async purgeExpiredConversationSessions(retentionDays = 30, referenceTime = Date.now()) {
+    const days = Math.max(0, Number(retentionDays) || 0);
+    if (days <= 0) return { sessions: 0, legacyConversations: 0 };
+    const cutoff = new Date(Number(referenceTime) - days * 24 * 60 * 60 * 1000).toISOString();
+    this.db.exec('BEGIN');
+    try {
+      const sessionIds = this.db
+        .prepare('SELECT id FROM sessions WHERE last_accessed_at < ?')
+        .all(cutoff)
+        .map((row) => String(row.id));
+      const sessionResult = this.db
+        .prepare('DELETE FROM sessions WHERE last_accessed_at < ?')
+        .run(cutoff);
+      const deleteLegacyById = this.db.prepare('DELETE FROM conversations WHERE session_id = ?');
+      for (const sessionId of sessionIds) deleteLegacyById.run(sessionId);
+      const legacyResult = this.db
+        .prepare('DELETE FROM conversations WHERE updated_at < ?')
+        .run(cutoff);
+      const result = {
+        sessions: Number(sessionResult.changes || 0),
+        legacyConversations: Number(legacyResult.changes || 0)
+      };
+      this.db.exec('COMMIT');
+      this.db.exec('PRAGMA wal_checkpoint(TRUNCATE);');
+      await this.write();
+      return result;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   getConversationEntries(sessionId, { limit = 0, offset = 0, order = 'asc' } = {}) {

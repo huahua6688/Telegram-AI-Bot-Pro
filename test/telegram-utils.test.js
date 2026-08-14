@@ -4,6 +4,7 @@ import { splitMessage } from '../src/utils/text.js';
 import {
   createTelegramSessionId,
   decorateTelegramReplyText,
+  extractTelegramRichMessageText,
   getTelegramReplyContext,
   messageMentionsTelegramBot,
   normalizeLanguageCode,
@@ -135,6 +136,32 @@ test('ordinary quoted replies stay in the main session while real topics stay is
   assert.equal(resolveTelegramThreadId(topicReply), '99');
   assert.equal(createTelegramSessionId({ chat: { id: 1 }, from: { id: 2 }, message: ordinaryReply }), '1:2:main');
   assert.equal(createTelegramSessionId({ chat: { id: 1 }, from: { id: 2 }, message: topicReply }), '1:2:99');
+});
+
+test('Telegram reply context extracts Rich Message markdown and structured blocks', () => {
+  assert.equal(
+    extractTelegramRichMessageText({ markdown: '# 标题\n\n正文' }),
+    '# 标题\n\n正文'
+  );
+  const context = getTelegramReplyContext({
+    reply_to_message: {
+      message_id: 91,
+      from: { is_bot: true },
+      rich_message: {
+        blocks: [
+          { type: 'heading', text: '今日新闻' },
+          { type: 'paragraph', children: [{ text: '第一条内容' }] },
+          { type: 'link', url: 'https://example.com', text: '来源标题' }
+        ]
+      }
+    }
+  });
+  assert.deepEqual(context, {
+    text: '今日新闻\n第一条内容\n来源标题',
+    selected: false,
+    messageId: 91,
+    fromBot: true
+  });
 });
 
 test('selected Telegram quote is preserved as continuation context', () => {

@@ -274,8 +274,7 @@ export function buildCapabilityDetails({ config, providerManager }) {
       provider: 'gemini-live',
       reason: 'telegram_live_translate_not_implemented'
     }),
-    // Credits can be sold independently, but Telegram video bytes are not
-    // currently passed to any model pipeline.
+    // Telegram video bytes are not currently passed to any model pipeline.
     video: capabilityDetail(CAPABILITY_STATUS.UNSUPPORTED, {
       available: false,
       enabled: Boolean(config?.enableVideo),
@@ -511,7 +510,7 @@ const STATUS_HTML = String.raw`<!doctype html>
 </body>
 </html>`;
 
-export function installEnhancedStatusRoutes({ server, db, config, bot, providerManager, logger }) {
+export function installEnhancedStatusRoutes({ server, db, config, bot, providerManager, logger, readiness = null }) {
   if (!server || typeof server.listeners !== 'function') {
     throw new Error('STATUS_SERVER_REQUIRED');
   }
@@ -562,6 +561,15 @@ export function installEnhancedStatusRoutes({ server, db, config, bot, providerM
       }
       try {
         db.getStats();
+        if (readiness && !readiness.ready) {
+          sendJson(res, 503, {
+            ok: false,
+            ready: false,
+            phase: readiness.phase || 'initializing',
+            error: 'NOT_READY'
+          });
+          return;
+        }
         const build = getBuildInfo();
         sendJson(res, 200, {
           ok: true,

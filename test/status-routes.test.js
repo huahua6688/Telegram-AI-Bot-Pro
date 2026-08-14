@@ -318,6 +318,35 @@ test('base health route exposes safe build metadata and rejects non-GET methods'
   }
 });
 
+test('readiness stays false during initialization and becomes ready after launch', async () => {
+  const readiness = { ready: false, phase: 'initializing' };
+  const server = startHealthServer({
+    port: 0,
+    config: baseConfig({ healthCheckEnabled: true }),
+    db: { getStats: () => ({ messagesHandled: 0 }) },
+    logger: { info() {}, error() {} },
+    readiness
+  });
+  try {
+    const url = await getServerUrl(server);
+    const pending = await fetch(`${url}/ready`);
+    assert.equal(pending.status, 503);
+    assert.deepEqual(await pending.json(), {
+      ok: false,
+      ready: false,
+      phase: 'initializing',
+      error: 'NOT_READY'
+    });
+    readiness.ready = true;
+    readiness.phase = 'ready';
+    const ready = await fetch(`${url}/ready`);
+    assert.equal(ready.status, 200);
+    assert.equal((await ready.json()).ready, true);
+  } finally {
+    await closeServer(server);
+  }
+});
+
 test('disabled enhanced health route stays disabled without taking down readiness or Mini App', async () => {
   const config = baseConfig({ healthCheckEnabled: false });
   const db = {

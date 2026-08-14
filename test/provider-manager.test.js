@@ -187,6 +187,8 @@ test('AIProviderManager still switches Gemini models for model-scoped quota fail
   ]);
   assert.equal(result.switched, true, 'using a backup model must be reported as a switch');
   assert.equal(manager.getCooldown('gemini', 'chat'), null, 'a model-scoped quota error must not cool every Gemini model');
+  assert.ok(manager.getModelCooldown('gemini', 'chat', 'gemini-model'));
+  assert.equal(manager.getModelCooldown('gemini', 'chat', 'gemini-second-model'), null);
 });
 
 test('AIProviderManager treats AI_PROVIDER_MAX_RETRIES as retries after the first attempt', async () => {
@@ -642,5 +644,10 @@ test('provider error classifier detects OpenRouter model and credit failures', (
   assert.equal(
     classifyProviderError(new Error('AI request failed (402): insufficient credits')),
     'quota'
+  );
+  assert.equal(
+    classifyProviderError(new Error('AI request failed (400): invalid tool schema')),
+    'unknown',
+    'an invalid request must not disable every model on the provider'
   );
 });

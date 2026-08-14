@@ -269,6 +269,10 @@ export function loadConfig() {
     process.env.AI_MODEL ||
     providerDefaultModels[aiProvider] ||
     'gpt-4.1-mini';
+  const defaultModelExplicit = Boolean(
+    String(process.env.DEFAULT_AI_MODEL || process.env.AI_MODEL || '').trim() ||
+    String(providerModels[aiProvider]?.[0] || '').trim()
+  );
   providerModels[aiProvider] = compactList(defaultModel, providerModels[aiProvider] || [], fallbackModels);
   for (const [routeKey, envSuffix] of Object.entries(SMART_ROUTING_ROUTES)) {
     const model = smartRoutingModels[routeKey];
@@ -292,6 +296,9 @@ export function loadConfig() {
 
   return {
     botToken: process.env.BOT_TOKEN || '',
+    telegramStartupMaxRetries: Math.max(0, Math.min(20, parseInteger(process.env.TELEGRAM_STARTUP_MAX_RETRIES, 6))),
+    telegramStartupRetryBaseMs: Math.max(100, parseInteger(process.env.TELEGRAM_STARTUP_RETRY_BASE_MS, 1000)),
+    telegramStartupRetryMaxMs: Math.max(1000, parseInteger(process.env.TELEGRAM_STARTUP_RETRY_MAX_MS, 30000)),
     enableStartupDiagnostics: parseBoolean(process.env.ENABLE_STARTUP_DIAGNOSTICS, true),
     showVersionInfo: parseBoolean(process.env.SHOW_VERSION_INFO, true),
     healthCheckEnabled: parseBoolean(process.env.HEALTH_CHECK_ENABLED, true),
@@ -343,6 +350,15 @@ export function loadConfig() {
     doubaoBaseUrl: (process.env.DOUBAO_BASE_URL || 'https://ark.cn-beijing.volces.com/api/v3').replace(/\/$/, ''),
     doubaoApiVersion: process.env.DOUBAO_API_VERSION || '',
     defaultModel,
+    defaultModelExplicit,
+    explicitCapabilityModels: Object.freeze({
+      vision: Boolean(String(process.env.VISION_MODEL || '').trim()),
+      imageGeneration: Boolean(String(process.env.IMAGE_MODEL || '').trim()),
+      imageEditing: Boolean(String(process.env.IMAGE_MODEL || '').trim()),
+      speechTranscription: Boolean(String(process.env.TRANSCRIPTION_MODEL || '').trim()),
+      speechSynthesis: Boolean(String(process.env.TTS_MODEL || '').trim()),
+      liveAudio: Boolean(String(process.env.GEMINI_LIVE_MODEL || '').trim())
+    }),
     providerModels,
     providerDefaultModels,
     availableModels: compactList(defaultModel, providerModels[aiProvider] || [], fallbackModels),
@@ -387,6 +403,14 @@ export function loadConfig() {
     documentMaxBytes: parseInteger(process.env.DOCUMENT_MAX_BYTES, 6 * 1024 * 1024),
     documentChunkChars: parseInteger(process.env.DOCUMENT_CHUNK_CHARS, 1800),
     documentMaxChars: parseInteger(process.env.DOCUMENT_MAX_CHARS, 12000),
+    telegramFileMaxBytes: Math.max(
+      1024 * 1024,
+      parseInteger(process.env.TELEGRAM_FILE_MAX_BYTES, 10 * 1024 * 1024)
+    ),
+    telegramFileDownloadTimeoutMs: Math.max(
+      1000,
+      Math.min(60000, parseInteger(process.env.TELEGRAM_FILE_DOWNLOAD_TIMEOUT_MS, 20000))
+    ),
     enableToolCalls: parseBoolean(process.env.ENABLE_TOOL_CALLS, true),
     enableWebSearch: parseBoolean(process.env.ENABLE_WEB_SEARCH, true),
     enableGeminiGoogleSearch: parseBoolean(process.env.ENABLE_GEMINI_GOOGLE_SEARCH, true),
@@ -409,6 +433,15 @@ export function loadConfig() {
     maxContextChars: parseInteger(process.env.MAX_CONTEXT_CHARS, 48000),
     maxInputChars: parseInteger(process.env.MAX_INPUT_CHARS, 12000),
     maxOutputChars: parseInteger(process.env.MAX_OUTPUT_CHARS, 3500),
+    conversationRetentionDays: Math.max(
+      0,
+      Math.min(3650, parseInteger(process.env.CONVERSATION_RETENTION_DAYS, 30))
+    ),
+    privacySweepIntervalHours: Math.max(
+      1,
+      Math.min(168, parseInteger(process.env.PRIVACY_SWEEP_INTERVAL_HOURS, 24))
+    ),
+    miniAppShowUserMessages: parseBoolean(process.env.MINI_APP_SHOW_USER_MESSAGES, false),
     requestTimeoutMs: parseInteger(process.env.REQUEST_TIMEOUT_MS, 120000),
     rateLimitWindowMs: parseInteger(process.env.RATE_LIMIT_WINDOW_MS, 60000),
     rateLimitMaxRequests: parseInteger(process.env.RATE_LIMIT_MAX_REQUESTS, 12),

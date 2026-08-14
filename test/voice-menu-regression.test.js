@@ -4,11 +4,15 @@ import fs from 'node:fs';
 
 const source = fs.readFileSync('src/services/telegram-bot.js', 'utf8');
 
-test('voice menu exposes transcribe tts and live callbacks', () => {
+test('voice menu exposes implemented transcribe and tts actions', () => {
   assert.match(source, /createVoiceActionKeyboard\(locale = 'zh'\)/);
   assert.match(source, /voice_pick:transcribe/);
   assert.match(source, /voice_pick:tts/);
-  assert.match(source, /voice_pick:live/);
+  const menuSource = source.slice(
+    source.indexOf("createVoiceActionKeyboard(locale = 'zh')"),
+    source.indexOf("createFileActionKeyboard(locale = 'zh')")
+  );
+  assert.doesNotMatch(menuSource, /voice_pick:live/);
 });
 
 test('voice menu callback is registered and handled', () => {

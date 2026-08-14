@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { Telegraf } from 'telegraf';
+import { retryTelegramStartupCall } from '../utils/telegram-startup.js';
 
 const SUPPORT_TICKET_PATTERN = /^\[support-ticket:user=(\d{1,20})\]/m;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
@@ -221,7 +222,16 @@ export class SupportTelegramBot {
       });
     });
 
-    this.botInfo = await this.bot.telegram.getMe();
+    this.botInfo = await retryTelegramStartupCall(
+      () => this.bot.telegram.getMe(),
+      {
+        maxRetries: this.config.telegramStartupMaxRetries,
+        baseDelayMs: this.config.telegramStartupRetryBaseMs,
+        maxDelayMs: this.config.telegramStartupRetryMaxMs,
+        logger: this.logger,
+        label: 'support_bot_get_me'
+      }
+    );
     this.initialized = true;
     this.logger?.info?.('Support bot initialized', {
       botId: String(this.botInfo?.id || ''),
@@ -287,6 +297,17 @@ export class SupportTelegramBot {
     if (ticket) {
       ticket.autoCloseAt = null;
     }
+  }
+
+  disposeTicket(ticketId) {
+    const normalizedTicketId = String(ticketId || '');
+    const ticket = this.tickets.get(normalizedTicketId);
+    this.clearTicketAutoClose(normalizedTicketId);
+    if (ticket) this.activeTicketByUser.delete(String(ticket.userId || ''));
+    for (const [key, indexedTicketId] of this.adminMessageIndex.entries()) {
+      if (indexedTicketId === normalizedTicketId) this.adminMessageIndex.delete(key);
+    }
+    this.tickets.delete(normalizedTicketId);
   }
 
   scheduleTicketAutoClose(telegram, ticket) {
@@ -386,6 +407,8 @@ export class SupportTelegramBot {
         replyCount: ticket.replyCount
       }
     );
+
+    this.disposeTicket(ticket.ticketId);
 
     return true;
   }
@@ -787,8 +810,7 @@ export class SupportTelegramBot {
         failedAdminCount: deliveries.length - delivered
       });
       if (delivered === 0) {
-        this.tickets.delete(ticket.ticketId);
-        this.activeTicketByUser.delete(userId);
+        this.disposeTicket(ticket.ticketId);
         await ctx.reply(english
           ? 'Support is temporarily unavailable. Please try again later.'
           : '客服暂时无法接收消息，请稍后再试。');
@@ -968,6 +990,7 @@ export class SupportTelegramBot {
     await this.answerAction(ctx, '工单已关闭。');
     await this.updateAllSummaries(ctx.telegram, ticket);
     this.logger?.info?.('Support ticket closed', { ticketId: ticket.ticketId, adminId, replyCount: ticket.replyCount });
+    this.disposeTicket(ticket.ticketId);
   }
 
   async handleAdminReply(ctx) {

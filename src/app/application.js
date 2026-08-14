@@ -45,6 +45,8 @@ export async function createApplication() {
   let supportBot;
   let healthServer;
   let adminServer;
+  let privacySweepTimer;
+  const readiness = { ready: false, phase: 'initializing' };
 
   try {
     const rawConfig = loadEnvConfig();
@@ -68,9 +70,32 @@ export async function createApplication() {
     }
 
     db = await createDatabase(runtimeConfig);
+    const sweepPrivateConversationData = async () => {
+      if (runtimeConfig.conversationRetentionDays <= 0) return;
+      const purged = await db.purgeExpiredConversationSessions(runtimeConfig.conversationRetentionDays);
+      if (purged.sessions || purged.legacyConversations) {
+        logger.info('Expired conversation data removed', purged);
+      }
+    };
+    await sweepPrivateConversationData();
+    privacySweepTimer = setInterval(
+      () => sweepPrivateConversationData().catch((error) => {
+        logger.warn('Conversation privacy sweep failed', { error: error.message });
+      }),
+      runtimeConfig.privacySweepIntervalHours * 60 * 60 * 1000
+    );
+    privacySweepTimer.unref?.();
     const accessControl = new AccessControlService({ config: runtimeConfig, db, logger });
     const aiClient = createAIProviderClient(runtimeConfig, logger);
     const providerManager = createAIProviderManager(runtimeConfig, logger, db);
+    healthServer = startHealthServer({
+      port: runtimeConfig.healthPort,
+      db,
+      config: runtimeConfig,
+      logger,
+      providerManager,
+      readiness
+    });
     if (runtimeConfig.modelDiscoveryEnabled !== false && providerManager.isConfigured('openai-compatible')) {
       try {
         await providerManager.refreshModels('openai-compatible');
@@ -114,21 +139,14 @@ export async function createApplication() {
       memorySummaryInterval: runtimeConfig.memorySummaryInterval
     });
 
-    healthServer = startHealthServer({
-      port: runtimeConfig.healthPort,
-      db,
-      config: runtimeConfig,
-      logger,
-      providerManager
-    });
-
     installEnhancedStatusRoutes({
       server: healthServer,
       db,
       config: runtimeConfig,
       bot,
       providerManager,
-      logger
+      logger,
+      readiness
     });
 
     adminServer = startAdminApiServer({
@@ -145,7 +163,8 @@ export async function createApplication() {
       healthServer,
       adminServer,
       db,
-      logger
+      logger,
+      timers: [privacySweepTimer]
     });
 
     return {
@@ -157,7 +176,10 @@ export async function createApplication() {
       healthServer,
       adminServer,
       async start() {
+        readiness.phase = 'launching';
         await lifecycle.start();
+        readiness.ready = true;
+        readiness.phase = 'ready';
         logger.info('Telegram bot launched', {
           provider: runtimeConfig.aiProvider,
           defaultModel: runtimeConfig.defaultModel,
@@ -167,13 +189,15 @@ export async function createApplication() {
         });
       },
       async stop(signal) {
+        readiness.ready = false;
+        readiness.phase = 'stopping';
         await lifecycle.stop(signal);
       }
     };
   } catch (error) {
     try {
       await stopApplicationResources(
-        { bot, supportBot, healthServer, adminServer, db, logger },
+        { bot, supportBot, healthServer, adminServer, db, logger, timers: [privacySweepTimer] },
         'INITIALIZATION_FAILED'
       );
     } catch (cleanupError) {

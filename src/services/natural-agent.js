@@ -135,6 +135,30 @@ function stripGeneratedReferences(answer = '') {
     .trim();
 }
 
+function stripGeneratedReferenceSection(answer = '') {
+  const source = String(answer || '');
+  const heading = /(?:^|\n)[ \t]*(?:#{1,6}[ \t]+)?(?:\*{1,3}|_{1,3})?[ \t]*(?:参考链接|参考来源|来源|References?|Sources?)(?:[ \t]*[（(][^\n）)]*[）)])?[ \t]*(?:\*{1,3}|_{1,3})?[ \t]*[:：]?[ \t]*(?=\r?$)/im;
+  const match = heading.exec(source);
+  return (match ? source.slice(0, match.index) : source).trim();
+}
+
+function normalizeVerifiedCitations(answer = '', sourceCount = 0, style = 'plain') {
+  const maximum = Math.max(0, Number(sourceCount) || 0);
+  const render = (rawNumbers = '') => {
+    const numbers = String(rawNumbers)
+      .split(/[,，]/)
+      .map((value) => Number(value.trim()))
+      .filter((value, index, items) => value >= 1 && value <= maximum && items.indexOf(value) === index);
+    if (!numbers.length) return '';
+    return numbers.map((number) => style === 'rich' ? `[^src${number}]` : `[${number}]`).join('');
+  };
+  return String(answer || '')
+    .replace(/【\s*(\d{1,3}(?:\s*[,，]\s*\d{1,3})*)\s*】/g, (_match, numbers) => render(numbers))
+    .replace(/\[\s*(\d{1,3}(?:\s*[,，]\s*\d{1,3})*)\s*\](?!\s*\()/g, (_match, numbers) => render(numbers))
+    .replace(/[ \t]+([,，。；;:：])/g, '$1')
+    .trim();
+}
+
 function stripBareUrls(text = '') {
   return String(text || '')
     .replace(/https?:\/\/[^\s<>)）]+/g, '')
@@ -399,8 +423,8 @@ function appendClickableReferences(
     Number.isFinite(parsedMaxChars) ? Math.floor(parsedMaxChars) : 3600
   );
   const links = extractReferenceLinks(raw);
-  const cleanedAnswer = stripBareUrls(stripGeneratedReferences(cleanPlainText(answer)));
-  const plainBody = cleanPlainText(cleanedAnswer);
+  const cleanedAnswer = stripBareUrls(stripGeneratedReferenceSection(cleanPlainText(answer)));
+  const plainBody = normalizeVerifiedCitations(cleanPlainText(cleanedAnswer), links.length, 'plain');
 
   if (!links.length) return escapeHtmlWithinLimit(plainBody, safeMaxChars);
 
@@ -828,9 +852,12 @@ async function composeHumanAnswer(bot, ctx, { userText, toolName, raw, title }) 
               'For news/search: summarize the key points, explain what matters, and avoid copying original titles verbatim.',
               'For news/search: use only facts present in the supplied results. Do not add events, figures, people, or claims from memory.',
               'Every factual news/search item in the answer must be supported by at least one supplied result.',
+              'Search results are numbered by their order in the supplied results array, starting at 1.',
+              'For news/search, end each factual sentence or bullet with citations such as [1] or [1][2]. Use only valid supplied result numbers.',
+              'Do not invent citation numbers and do not add a separate Sources or References section.',
               'For URL pages: explain what the page is about and what the user should know.',
               'For weather: answer directly with practical advice.',
-              'Do not include raw URLs in the answer body. References will be appended separately as clickable links.',
+              'Do not include raw URLs in the answer body. Verified clickable references are rendered separately.',
               'Keep the reply concise but complete.'
             ].join('\n')
           },
@@ -1342,6 +1369,8 @@ export const naturalAgentInternals = {
   continueFromContext,
   stripBareUrls,
   stripGeneratedReferences,
+  stripGeneratedReferenceSection,
+  normalizeVerifiedCitations,
   rememberHandledInteraction,
   isFollowUpOnly,
   extractWeatherLocation,

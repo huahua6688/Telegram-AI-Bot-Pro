@@ -32,11 +32,15 @@
 ENABLE_STARTUP_DIAGNOSTICS=true
 SHOW_VERSION_INFO=true
 HEALTH_CHECK_ENABLED=true
+TELEGRAM_STARTUP_MAX_RETRIES=6
+TELEGRAM_STARTUP_RETRY_BASE_MS=1000
+TELEGRAM_STARTUP_RETRY_MAX_MS=30000
 ```
 
 - `ENABLE_STARTUP_DIAGNOSTICS`：启动前检查 Node.js、应用版本、Git commit（可读取时）、部署环境、主 Bot Token、AI Provider、数据库路径和端口。缺少关键配置时会使用稳定错误码停止启动。
 - `SHOW_VERSION_INFO`：控制管理员菜单中的版本信息入口；版本页只显示安全的构建和运行信息。
 - `HEALTH_CHECK_ENABLED`：控制公开 `/health` 接口。关闭后 `/health` 返回 404，但 `/ready` 继续供 Zeabur / Docker 就绪探针使用。
+- `TELEGRAM_STARTUP_*`：Telegram 临时超时、网络错误或 429 时按退避策略重试；无效 Token 等永久错误不会反复重试。
 
 日志不会输出完整 Token、API Key 或密码；诊断展示敏感值时只保留前 4 位和后 4 位。
 
@@ -56,11 +60,11 @@ SUPPORT_RATE_LIMIT_MAX_MESSAGES=6
 - `SUPPORT_ADMIN_IDS` 是可处理客服消息的 Telegram 数字 ID，多个 ID 使用英文逗号分隔。
 - `SUPPORT_CONTACT_URL` 有值时优先作为“联系客服”按钮目标；否则由 `SUPPORT_BOT_USERNAME` 生成 `https://t.me/<username>?start=support`。
 - 只配置外部客服链接而不启动第二个 Bot 时，`SUPPORT_BOT_TOKEN` 可以留空。
-- 客服 Bot 支持文字、图片、语音和文件，并带窗口限流；管理员必须回复带工单标记的转发消息才能答复对应用户。
+- 客服 Bot 支持文字、图片、语音和文件，并带窗口限流；管理员必须回复带工单标记的转发消息才能答复对应用户。客服正文和管理员回复关系不写入 SQLite，工单关闭、超时或服务重启后从内存清除。
 
 ## 免费额度与 Stars 商品
 
-每日免费额度由六个 `STARS_FREE_*_DAILY` 变量统一管理，默认分别为聊天 20、识图 3、画图 1、TTS 2、实时语音 2、视频 0。`DAILY_QUOTA=20` 只保留为旧聊天配置的兼容回退。
+每日免费额度由六个 `STARS_FREE_*_DAILY` 变量统一管理。内部键 `live_voice` 当前对应“语音转写”，不是双向实时语音；视频处理链尚未实现，因此视频额度不会出售。`DAILY_QUOTA=20` 只保留为旧聊天配置的兼容回退。
 
 商品包只从 `STARS_PRODUCTS_JSON` 读取。主 Bot、Mini App 和管理员页面都会使用同一份配置，避免出现不同页面显示旧额度。完整三档示例见 [Telegram Stars 支付与用量计费](STARS_PAYMENTS.md)。
 
@@ -141,7 +145,7 @@ MODEL_DISCOVERY_ENABLED=true
 MODEL_LIST_CACHE_TTL_MS=3600000
 ```
 
-When the AI Hub supports OpenAI-compatible `GET /models`, model-name variables may stay empty. The bot synchronizes the catalog at startup and administrators can refresh it from the Telegram admin panel. Provider metadata is displayed when available; otherwise inferred uses are explicitly labeled. Non-chat embedding, rerank, TTS, image, and video models are excluded from the chat selector. Explicit model variables remain a fallback when discovery is unavailable.
+When the AI Hub supports OpenAI-compatible `GET /models`, model-name variables may stay empty for discovery. The bot synchronizes the catalog at startup and administrators can refresh it from the Mini App. In fixed-provider mode, an unknown-price model still requires manual selection. In automatic cross-provider mode, an explicitly configured AI Hub at the end of `AI_PROVIDER_FALLBACK_ORDER` may use a discovered chat model only after earlier providers are unavailable; this can incur charges, so remove `openai-compatible` from the fallback order if automatic paid fallback is not desired. Free models are tried before paid or unknown-price models. Provider metadata is displayed when available; otherwise inferred uses are explicitly labeled. Non-chat embedding, rerank, TTS, image, and video models are routed to their matching capabilities instead of the chat selector.
 
 Enable Telegram-native rich rendering for long structured private-chat replies with:
 
@@ -154,11 +158,26 @@ STREAMING_EDIT_INTERVAL_MS=350
 
 News results in private chat and inline mode use Telegram Rich Messages even when the digest is short. Other short replies, group replies, and unsupported/failed rich-message requests automatically use the existing regular message path.
 
-With streaming replies enabled, Gemini and OpenAI-compatible providers request an SSE response and forward generated fragments to Telegram `sendMessageDraft`. The draft is rate-limited by `STREAMING_EDIT_INTERVAL_MS`. The model's completed output then selects the persistent format: ordinary prose stays a regular message, while meaningful Markdown structure can use `sendRichMessage`. Before delivery, rich Markdown tables are normalized to remove unsupported HTML breaks, duplicate reference sections, and malformed URL suffixes. A rejected table is retried as a vertical Rich Message, and the final plain-text fallback also converts table source into readable labeled fields. Tables are discouraged unless requested or materially clearer because mobile Telegram clients may render them with horizontal scrolling. Unsupported streaming requests automatically fall back to a regular complete reply.
+With streaming replies enabled, Gemini and OpenAI-compatible providers request an SSE response. Private chats stream Markdown fragments through Telegram `sendRichMessageDraft` when rich messages are enabled, preserving headings, lists, emphasis, code, formulas, and tables while the answer is generated. If rich drafts are rejected or unavailable, the same reply automatically falls back to `sendMessageDraft`; groups use regular message edits because Telegram's native draft methods target private chats. Draft updates are rate-limited by `STREAMING_EDIT_INTERVAL_MS`. The completed output then selects the persistent format: ordinary prose stays a regular message, while meaningful Markdown structure can use `sendRichMessage`. Before delivery, rich Markdown tables are normalized to remove unsupported HTML breaks, duplicate reference sections, and malformed URL suffixes. A rejected table is retried as a vertical Rich Message, and the final plain-text fallback also converts table source into readable labeled fields. Tables are discouraged unless requested or materially clearer because mobile Telegram clients may render them with horizontal scrolling. Unsupported streaming requests automatically fall back to a regular complete reply.
 
 请把 AI Hub 控制台提供的完整 API Base URL 填入 `AI_BASE_URL`。固定使用 `openai-compatible` 时，可以保持各 `ROUTER_*_PROVIDER` 为空，只填写该 Hub 实际支持的任务模型 ID；所有这些模型会共用同一个 `AI_API_KEY` 和 `AI_BASE_URL`。如果默认 Provider 为 `auto`，则每组任务配置都应显式写 `ROUTER_*_PROVIDER=openai-compatible`。
 
 Gemini Live 仍只走 Google 官方 Gemini Live API，并使用独立的 `GEMINI_LIVE_API_KEY` 与兼容 Live 模型。第三方 OpenAI-compatible Hub 不能冒充 `gemini-live`；实时语音等专用模式需要时会绕过 Smart 路由。
+
+## 隐私与下载安全
+
+```env
+CONVERSATION_RETENTION_DAYS=30
+PRIVACY_SWEEP_INTERVAL_HOURS=24
+MINI_APP_SHOW_USER_MESSAGES=false
+TELEGRAM_FILE_MAX_BYTES=10485760
+TELEGRAM_FILE_DOWNLOAD_TIMEOUT_MS=20000
+```
+
+- 默认只在 Mini App 历史和管理员会话详情中返回 AI 回复，不返回用户输入；确有支持需要时才显式开启 `MINI_APP_SHOW_USER_MESSAGES`。
+- 对话超过保留天数后自动删除，`0` 表示关闭自动清理。用户资料、Stars 订单、余额和用量账目不会被这项清理误删。
+- Telegram 文件下载会在下载前检查声明大小，并在流式下载过程中再次执行大小和超时限制。
+- `fetch_url` 只允许公开的 HTTP/HTTPS 80/443 地址；本机、内网、链路本地、云元数据、保留地址和不安全重定向都会被拒绝，响应正文上限为 1 MB。
 
 ## Telegram 扩展模式
 

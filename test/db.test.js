@@ -74,6 +74,34 @@ test('BotDatabase imports legacy JSON data into SQLite', async (t) => {
   assert.equal(db.getMeta('schemaVersion'), '9');
 });
 
+test('BotDatabase removes expired conversation content without deleting user accounts', async (t) => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-ai-bot-pro-retention-'));
+  const db = new BotDatabase(path.join(tempDir, 'bot-data.db'));
+  t.after(() => {
+    db.close();
+    return fs.rm(tempDir, { recursive: true, force: true });
+  });
+  await db.init();
+  assert.equal(db.db.prepare('PRAGMA foreign_keys').get().foreign_keys, 1);
+  assert.equal(db.db.prepare('PRAGMA secure_delete').get().secure_delete, 1);
+  await db.upsertUser({ id: 1, first_name: 'Privacy' });
+  await db.setConversation('2:1:main', [
+    { role: 'user', content: 'private question' },
+    { role: 'assistant', content: 'private answer' }
+  ]);
+  db.db.prepare('UPDATE sessions SET last_accessed_at = ?, updated_at = ? WHERE id = ?')
+    .run('2025-01-01T00:00:00.000Z', '2025-01-01T00:00:00.000Z', '2:1:main');
+  db.db.prepare('UPDATE conversations SET updated_at = ? WHERE session_id = ?')
+    .run('2025-01-01T00:00:00.000Z', '2:1:main');
+
+  const purged = await db.purgeExpiredConversationSessions(30, Date.parse('2026-08-14T00:00:00.000Z'));
+  assert.equal(purged.sessions, 1);
+  assert.equal(db.findUser('1')?.id, '1');
+  assert.equal(db.findSession('2:1:main'), null);
+  assert.equal(db.db.prepare('SELECT COUNT(*) AS count FROM messages WHERE session_id = ?').get('2:1:main').count, 0);
+  assert.equal(db.db.prepare('SELECT COUNT(*) AS count FROM conversations WHERE session_id = ?').get('2:1:main').count, 0);
+});
+
 test('BotDatabase provides RBAC, feature flags, policy rules and audit logs', async (t) => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-ai-bot-pro-db-'));
 

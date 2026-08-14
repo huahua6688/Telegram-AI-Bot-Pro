@@ -54,10 +54,50 @@ export function createTelegramSessionId(ctx = {}) {
   return `${chatId}:${userId}:${resolveTelegramThreadId(ctx.message)}`;
 }
 
+export function extractTelegramRichMessageText(richMessage = {}, maxChars = 2400) {
+  if (!richMessage || typeof richMessage !== 'object') return '';
+  const directMarkdown = String(richMessage.markdown || '').trim();
+  if (directMarkdown) return directMarkdown.slice(0, Math.max(1, Number(maxChars) || 2400));
+
+  const values = [];
+  const visited = new WeakSet();
+  const textualKeys = new Set([
+    'text',
+    'caption',
+    'title',
+    'subtitle',
+    'description',
+    'code',
+    'formula',
+    'alt_text',
+    'altText'
+  ]);
+  const walk = (value, key = '', depth = 0) => {
+    if (depth > 12 || values.join('\n').length >= maxChars) return;
+    if (typeof value === 'string') {
+      if (textualKeys.has(key) && value.trim()) values.push(value.trim());
+      return;
+    }
+    if (!value || typeof value !== 'object') return;
+    if (visited.has(value)) return;
+    visited.add(value);
+    if (Array.isArray(value)) {
+      for (const item of value) walk(item, key, depth + 1);
+      return;
+    }
+    for (const [childKey, childValue] of Object.entries(value)) {
+      walk(childValue, childKey, depth + 1);
+    }
+  };
+  walk(richMessage);
+  return values.join('\n').replace(/\n{3,}/g, '\n\n').slice(0, Math.max(1, Number(maxChars) || 2400));
+}
+
 export function getTelegramReplyContext(message = {}, maxChars = 2400) {
   const repliedMessage = message?.reply_to_message;
   const selectedQuote = String(message?.quote?.text || '').trim();
-  const repliedText = String(repliedMessage?.text || repliedMessage?.caption || '').trim();
+  const richText = extractTelegramRichMessageText(repliedMessage?.rich_message, maxChars);
+  const repliedText = String(repliedMessage?.text || repliedMessage?.caption || richText || '').trim();
   const text = (selectedQuote || repliedText).slice(0, Math.max(1, Number(maxChars) || 2400));
   if (!text) return null;
 

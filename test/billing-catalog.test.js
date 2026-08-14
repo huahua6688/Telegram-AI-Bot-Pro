@@ -76,6 +76,27 @@ test('the billing catalog preserves configured products and respects payment and
   });
 });
 
+test('the billing catalog never sells unfinished video credits', () => {
+  const catalog = buildBillingCatalog({
+    starsPaymentsEnabled: true,
+    enableVideo: true,
+    starsProducts: [{
+      id: 'mixed',
+      title: 'Mixed',
+      price: 10,
+      credits: { chat: 1, video: 99 }
+    }, {
+      id: 'video-only',
+      title: 'Video only',
+      price: 10,
+      credits: { video: 99 }
+    }]
+  });
+  assert.equal(catalog.videoEnabled, false);
+  assert.equal(catalog.products[0].credits.video, 0);
+  assert.equal(catalog.products.some((product) => product.id === 'video-only'), false);
+});
+
 test('per-user chat overrides and global zero-unlimited semantics resolve consistently', () => {
   const override = resolveUserFreeQuota({
     config: { starsFreeQuota: FREE_QUOTA },

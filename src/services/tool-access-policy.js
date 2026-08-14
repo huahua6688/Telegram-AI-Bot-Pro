@@ -20,6 +20,14 @@ export class ToolAccessPolicy {
     }
     hits.push(now);
     this.userHits.set(userId, hits);
+    if (this.userHits.size > 5000) {
+      for (const [candidate, timestamps] of this.userHits) {
+        if (!timestamps.some((timestamp) => now - timestamp < this.config.toolUserWindowMs)) {
+          this.userHits.delete(candidate);
+        }
+        if (this.userHits.size <= 4000) break;
+      }
+    }
     return true;
   }
 

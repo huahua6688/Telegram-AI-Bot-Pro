@@ -493,7 +493,15 @@ test('loadConfig exposes the current free-credit and support defaults', () => {
     'SUPPORT_RATE_LIMIT_MAX_MESSAGES',
     'ENABLE_STARTUP_DIAGNOSTICS',
     'SHOW_VERSION_INFO',
-    'HEALTH_CHECK_ENABLED'
+    'HEALTH_CHECK_ENABLED',
+    'TELEGRAM_STARTUP_MAX_RETRIES',
+    'TELEGRAM_STARTUP_RETRY_BASE_MS',
+    'TELEGRAM_STARTUP_RETRY_MAX_MS',
+    'TELEGRAM_FILE_MAX_BYTES',
+    'TELEGRAM_FILE_DOWNLOAD_TIMEOUT_MS',
+    'CONVERSATION_RETENTION_DAYS',
+    'PRIVACY_SWEEP_INTERVAL_HOURS',
+    'MINI_APP_SHOW_USER_MESSAGES'
   ]) delete process.env[key];
 
   const config = loadConfig();
@@ -518,6 +526,14 @@ test('loadConfig exposes the current free-credit and support defaults', () => {
   assert.equal(config.enableStartupDiagnostics, true);
   assert.equal(config.showVersionInfo, true);
   assert.equal(config.healthCheckEnabled, true);
+  assert.equal(config.telegramStartupMaxRetries, 6);
+  assert.equal(config.telegramStartupRetryBaseMs, 1000);
+  assert.equal(config.telegramStartupRetryMaxMs, 30000);
+  assert.equal(config.telegramFileMaxBytes, 10 * 1024 * 1024);
+  assert.equal(config.telegramFileDownloadTimeoutMs, 20000);
+  assert.equal(config.conversationRetentionDays, 30);
+  assert.equal(config.privacySweepIntervalHours, 24);
+  assert.equal(config.miniAppShowUserMessages, false);
 });
 
 test('loadConfig keeps explicit Stars zero finite and parses bounded support settings', () => {

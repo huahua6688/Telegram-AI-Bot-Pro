@@ -422,6 +422,29 @@ test('news renderer removes model-written references and keeps only verified sou
   assert.doesNotMatch(markdown, /国药现代大宗交易分析|白宫发言人离职消息/);
 });
 
+test('news renderer converts only verified inline citations into Rich Message references', () => {
+  const answer = [
+    '第一条事实。[1]',
+    '第二条事实【2】；无效编号不应保留。[9]',
+    '',
+    'Sources:',
+    '1. 模型虚构的来源列表'
+  ].join('\n');
+  const raw = JSON.stringify({
+    results: [
+      { title: 'Source A', url: 'https://example.com/a' },
+      { title: 'Source B', url: 'https://example.com/b' }
+    ]
+  });
+
+  const markdown = formatNewsRichMarkdown(answer, raw, 'zh', 'Asia/Shanghai');
+  assert.match(markdown, /第一条事实。\[\^src1\]/);
+  assert.match(markdown, /第二条事实\[\^src2\]/);
+  assert.doesNotMatch(markdown, /\[9\]|虚构/);
+  assert.match(markdown, /\[\^src1\]: \[Source A\]\(https:\/\/example\.com\/a\)/);
+  assert.match(markdown, /\[\^src2\]: \[Source B\]\(https:\/\/example\.com\/b\)/);
+});
+
 test('AI fallback retries another model for transient provider failures', async () => {
   const bot = Object.create(TelegramAIBot.prototype);
   const attempts = [];

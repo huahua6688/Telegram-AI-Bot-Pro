@@ -77,6 +77,13 @@ function normalizeProviderId(providerId = '') {
   return String(providerId || '').trim().toLowerCase();
 }
 
+function sortFreeModelsFirst(catalog = []) {
+  const rank = { free: 0, unknown: 1, paid: 2 };
+  return [...catalog].sort((left, right) =>
+    (rank[left?.pricingTier] ?? 1) - (rank[right?.pricingTier] ?? 1)
+  );
+}
+
 export function classifyProviderError(error) {
   const raw = String(error?.message || error || '');
   const lower = raw.toLowerCase();
@@ -85,7 +92,11 @@ export function classifyProviderError(error) {
   if (/\b403\b/.test(raw) || lower.includes('permission') || lower.includes('forbidden')) return 'permission';
   if (
     /\b404\b/.test(raw) ||
-    (/\b400\b/.test(raw) && (lower.includes('model') || lower.includes('no endpoints') || lower.includes('invalid'))) ||
+    (/\b400\b/.test(raw) && (
+      lower.includes('no endpoints') ||
+      /(?:invalid|unknown|unsupported)\s+(?:model|model id|model name)/i.test(lower) ||
+      /(?:model|model id|model name)\s+(?:is\s+)?(?:invalid|unknown|unsupported)/i.test(lower)
+    )) ||
     lower.includes('model') && (lower.includes('not found') || lower.includes('not available') || lower.includes('unavailable')) ||
     lower.includes('no endpoints')
   ) return 'model';
@@ -156,6 +167,7 @@ export class AIProviderManager {
     this.clientFactory = clientFactory;
     this.clients = new Map();
     this.health = new Map();
+    this.modelHealth = new Map();
     this.discoveredModels = new Map();
     this.modelDiscovery = new Map();
     ensureBuiltInAIProvidersRegistered();
@@ -171,7 +183,7 @@ export class AIProviderManager {
 
   getProviderModels(providerId = '') {
     const id = normalizeProviderId(providerId);
-    const discovered = (this.discoveredModels.get(id) || [])
+    const discovered = sortFreeModelsFirst(this.discoveredModels.get(id) || [])
       .filter((item) => item.chatCompatible)
       .map((item) => item.id);
     if (discovered.length) return compactList(discovered);
@@ -190,7 +202,7 @@ export class AIProviderManager {
     const normalized = this.normalizeCapability(capability);
     const catalog = this.getModelCatalog(providerId);
     if (!catalog.length) return normalized === 'chat' ? this.getProviderModels(providerId) : [];
-    return catalog
+    return sortFreeModelsFirst(catalog)
       .filter((item) => normalized === 'chat' ? item.chatCompatible : item.capabilities.includes(normalized))
       .map((item) => item.id);
   }
@@ -220,11 +232,19 @@ export class AIProviderManager {
       if (id === normalizeProviderId(this.config.aiProvider)) {
         const previousDefault = this.config.defaultModel;
         const preferredChatModels = [...chatModels].sort((a, b) => Number(b.pricingTier === 'free') - Number(a.pricingTier === 'free'));
+        const freeDefault = preferredChatModels.find((item) => item.pricingTier === 'free')?.id || '';
+        const explicitDefault = this.config.defaultModelExplicit && chatModels.some((item) => item.id === previousDefault)
+          ? previousDefault
+          : '';
+        const selectedDefault = freeDefault || explicitDefault;
         this.config.availableModels = compactList(preferredChatModels.map((item) => item.id));
-        this.config.defaultModel = preferredChatModels[0].id;
-        for (const key of ['translationModel', 'routerModel', 'memoryModel', 'visionModel']) {
-          if (!this.config[key] || this.config[key] === previousDefault) this.config[key] = preferredChatModels[0].id;
+        if (selectedDefault) {
+          this.config.defaultModel = selectedDefault;
+          for (const key of ['translationModel', 'routerModel', 'memoryModel']) {
+            if (!this.config[key] || this.config[key] === previousDefault) this.config[key] = selectedDefault;
+          }
         }
+        this.config.modelSelectionRequired = !selectedDefault;
       }
       const assignments = [
         ['vision', 'visionModel', 'visionProvider'],
@@ -296,6 +316,42 @@ export class AIProviderManager {
     });
   }
 
+  getModelCooldown(providerId = '', capability = 'chat', model = '') {
+    const key = `${normalizeProviderId(providerId)}:${this.normalizeCapability(capability)}:${String(model || '').trim()}`;
+    const state = this.modelHealth.get(key);
+    if (!state?.cooldownUntil) return null;
+    if (Date.now() >= state.cooldownUntil) {
+      this.modelHealth.delete(key);
+      return null;
+    }
+    return state;
+  }
+
+  setModelCooldown(providerId, capability, model, error, cooldownMs = this.config.aiProviderCooldownMs) {
+    const id = normalizeProviderId(providerId);
+    const normalizedCapability = this.normalizeCapability(capability);
+    const normalizedModel = String(model || '').trim();
+    const key = `${id}:${normalizedCapability}:${normalizedModel}`;
+    const existing = this.modelHealth.get(key) || {};
+    const next = {
+      providerId: id,
+      capability: normalizedCapability,
+      model: normalizedModel,
+      status: 'cooldown',
+      cooldownUntil: Date.now() + Math.max(1000, Number(cooldownMs) || 60000),
+      lastFailureAt: new Date().toISOString(),
+      lastErrorType: classifyProviderError(error),
+      consecutiveFailures: Number(existing.consecutiveFailures || 0) + 1
+    };
+    this.modelHealth.set(key, next);
+    return next;
+  }
+
+  markModelSuccess(providerId, capability, model) {
+    const key = `${normalizeProviderId(providerId)}:${this.normalizeCapability(capability)}:${String(model || '').trim()}`;
+    this.modelHealth.delete(key);
+  }
+
   markSuccess(providerId, capability) {
     return this.setHealth(providerId, capability, {
       status: 'healthy',
@@ -313,6 +369,11 @@ export class AIProviderManager {
 
   providerSupports(providerId = '', capability = 'chat') {
     const normalizedCapability = this.normalizeCapability(capability);
+    const catalog = this.getModelCatalog(providerId);
+    if (catalog.length) {
+      if (this.getModelsForCapability(providerId, normalizedCapability).length > 0) return true;
+      return Boolean(this.config.explicitCapabilityModels?.[normalizedCapability]);
+    }
     const capabilities = this.getProviderCapabilities(providerId);
     return Boolean(capabilities[normalizedCapability]);
   }
@@ -418,7 +479,7 @@ export class AIProviderManager {
       if (!this.isEnabled(providerId) || !this.isConfigured(providerId)) continue;
       if (this.getCooldown(providerId, capability)) continue;
       try {
-        const model = this.getCandidateModels(providerId)[0];
+        const model = this.getCandidateModels(providerId, '', capability)[0];
         if (!model) continue;
         const client = this.getClientForProvider(providerId, model);
         return {
@@ -439,13 +500,52 @@ export class AIProviderManager {
     return null;
   }
 
-  getCandidateModels(providerId = '', preferredModel = '') {
+  getDedicatedModelForCapability(capability = 'chat') {
+    const normalized = this.normalizeCapability(capability);
+    const map = {
+      chat: this.config.defaultModel,
+      vision: this.config.visionModel,
+      imageGeneration: this.config.imageModel,
+      imageEditing: this.config.imageModel,
+      speechTranscription: this.config.transcriptionModel,
+      speechSynthesis: this.config.ttsModel,
+      liveAudio: this.config.geminiLiveModel
+    };
+    return map[capability] || map[normalized] || this.config.defaultModel;
+  }
+
+  getCandidateModels(providerId = '', preferredModel = '', capability = 'chat') {
     const id = normalizeProviderId(providerId);
-    return compactList(
-      preferredModel,
-      this.getProviderModels(id),
-      id === normalizeProviderId(this.config.aiProvider) ? this.config.defaultModel : ''
-    );
+    const normalizedCapability = this.normalizeCapability(capability);
+    const catalog = this.getModelCatalog(id);
+    const discovered = catalog.length
+      ? this.getModelsForCapability(id, normalizedCapability)
+      : this.getProviderModels(id);
+    const dedicatedProvider = normalizeProviderId(this.getDedicatedProviderForCapability(capability));
+    const configuredDedicatedModel = dedicatedProvider === id ? this.getDedicatedModelForCapability(capability) : '';
+    const dedicatedModel = !catalog.length ||
+      this.config.explicitCapabilityModels?.[normalizedCapability] ||
+      discovered.includes(configuredDedicatedModel)
+      ? configuredDedicatedModel
+      : '';
+    if (
+      normalizedCapability === 'chat' &&
+      catalog.length &&
+      !preferredModel &&
+      !this.config.defaultModelExplicit &&
+      !catalog.some((item) => item.pricingTier === 'free') &&
+      normalizeProviderId(this.config.aiProvider) !== 'auto'
+    ) {
+      return [];
+    }
+    return normalizedCapability === 'chat'
+      ? compactList(
+          preferredModel,
+          discovered,
+          dedicatedModel,
+          id === normalizeProviderId(this.config.aiProvider) ? this.config.defaultModel : ''
+        )
+      : compactList(preferredModel, dedicatedModel, discovered);
   }
 
   async execute({
@@ -473,7 +573,8 @@ export class AIProviderManager {
     const originalModel = originalProvider
       ? this.getCandidateModels(
           originalProvider,
-          originalProvider === normalizedPreferredProvider ? preferredModel : ''
+          originalProvider === normalizedPreferredProvider ? preferredModel : '',
+          capability
         )[0] || ''
       : '';
     const attempted = [];
@@ -495,10 +596,14 @@ export class AIProviderManager {
 
       const modelCandidates = this.getCandidateModels(
         providerId,
-        providerId === normalizeProviderId(preferredProvider) ? preferredModel : ''
+        providerId === normalizeProviderId(preferredProvider) ? preferredModel : '',
+        capability
       );
       if (modelCandidates.length === 0) {
-        attempted.push({ providerId, status: 'model_missing' });
+        attempted.push({
+          providerId,
+          status: this.config.modelSelectionRequired ? 'model_selection_required' : 'model_missing'
+        });
         continue;
       }
       const requestRetries = Number(maxRetries);
@@ -512,6 +617,10 @@ export class AIProviderManager {
 
       modelLoop:
       for (const model of modelCandidates) {
+        if (!ignoreCooldown && this.getModelCooldown(providerId, capability, model)) {
+          attempted.push({ providerId, model, status: 'model_cooldown' });
+          continue;
+        }
         for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
           try {
             const client = this.getClientForProvider(providerId, model);
@@ -525,6 +634,7 @@ export class AIProviderManager {
               throw new Error('AI provider returned an empty response.');
             }
             this.markSuccess(providerId, capability);
+            this.markModelSuccess(providerId, capability, model);
             return {
               result,
               providerId,
@@ -547,7 +657,6 @@ export class AIProviderManager {
             attempted.push({ providerId, model, attempt, status: errorType, message: error.message });
             const deadlineTimeout = errorType === 'timeout' && request.suppressTimeoutCooldown;
             const providerWideFailure = isProviderWideFailure(errorType, error);
-            const modelScopedQuotaFailure = isModelScopedQuotaFailure(errorType, error);
             const retryable = !providerWideFailure && !deadlineTimeout &&
               ['timeout', 'transient', 'empty', 'unknown'].includes(errorType);
 
@@ -559,10 +668,10 @@ export class AIProviderManager {
             const cooldownMs = errorType === 'model' || errorType === 'auth' || errorType === 'permission'
               ? Math.max(300000, Number(this.config.aiProviderCooldownMs) || 60000)
               : this.config.aiProviderCooldownMs;
-            // A Gemini model-level 429 must not cool down every configured
-            // Gemini model. The loop below can immediately try the next one.
-            if (!deadlineTimeout && !modelScopedQuotaFailure) {
+            if (!deadlineTimeout && providerWideFailure) {
               this.setCooldown(providerId, capability, error, cooldownMs);
+            } else if (!deadlineTimeout) {
+              this.setModelCooldown(providerId, capability, model, error, cooldownMs);
             }
             this.logger.warn?.('AI provider failed, trying next candidate', {
               userId: String(userId || ''),
@@ -585,7 +694,7 @@ export class AIProviderManager {
     }
 
     const onlySetupProblems = attempted.length > 0 && attempted.every((item) =>
-      ['unconfigured', 'disabled', 'model_missing', 'cooldown'].includes(String(item.status || ''))
+      ['unconfigured', 'disabled', 'model_missing', 'model_selection_required', 'model_cooldown', 'cooldown'].includes(String(item.status || ''))
     );
     const message = attempted.length
       ? onlySetupProblems

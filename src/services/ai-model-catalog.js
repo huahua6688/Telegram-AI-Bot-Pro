@@ -40,7 +40,9 @@ function readPricing(raw = {}) {
 export function inferModelProfile(raw = {}) {
   const id = first(raw.id, raw.model, raw.name);
   const haystack = `${id} ${raw.description || ''}`.toLowerCase();
-  const specializedType = Object.entries(TYPE_PATTERNS).find(([, pattern]) => pattern.test(haystack))?.[0] || '';
+  const explicitType = first(raw.type, raw.endpoint_type, raw.endpointType, raw.task, raw.pipeline_tag);
+  const typeHaystack = `${id} ${explicitType}`.toLowerCase();
+  const specializedType = Object.entries(TYPE_PATTERNS).find(([, pattern]) => pattern.test(typeHaystack))?.[0] || '';
   const capabilities = new Set(specializedType ? [] : ['chat']);
   const uses = [];
 
@@ -100,7 +102,7 @@ export function normalizeDiscoveredModels(payload) {
 }
 
 export function formatModelProfile(profile, locale = 'zh') {
-  const inferred = profile.descriptionSource === 'inferred';
+  const inferred = profile.descriptionSource !== 'provider';
   const capabilityText = profile.capabilities.join(', ') || profile.endpointType;
   if (String(locale).toLowerCase().startsWith('en')) {
     return `${profile.id}\n  Type: ${capabilityText}\n  ${profile.description}${inferred ? ' (inferred from model name)' : ''}${profile.contextWindow ? `\n  Context: ${profile.contextWindow.toLocaleString()} tokens` : ''}`;

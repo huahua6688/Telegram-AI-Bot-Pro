@@ -464,6 +464,11 @@ test('return to queue, close, and create a new ticket', async () => {
   await fixture.bot.handleClose(actionContext(telegram, '200').ctx, first.ticketId);
   assert.equal(first.status, 'closed');
   assert.equal(fixture.bot.getActiveTicket('42'), null);
+  assert.equal(fixture.bot.tickets.has(first.ticketId), false);
+  assert.equal(
+    [...fixture.bot.adminMessageIndex.values()].includes(first.ticketId),
+    false
+  );
 
   await fixture.bot.handleUserRequest(userContext(telegram, { message_id: 9, text: 'new problem' }).ctx);
   const second = fixture.bot.getActiveTicket('42');
@@ -574,6 +579,11 @@ test('ticket auto closes when user stays silent after an admin reply', async () 
   assert.equal(
     fixture.bot.getActiveTicket('42'),
     null
+  );
+  assert.equal(fixture.bot.tickets.has(ticket.ticketId), false);
+  assert.equal(
+    [...fixture.bot.adminMessageIndex.values()].includes(ticket.ticketId),
+    false
   );
 });
 

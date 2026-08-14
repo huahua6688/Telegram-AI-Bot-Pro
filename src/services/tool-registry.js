@@ -1,4 +1,5 @@
 import { stripHtml, truncateText } from '../utils/text.js';
+import { safeFetchText } from '../utils/safe-http.js';
 import { ToolAccessPolicy } from './tool-access-policy.js';
 
 const USER_AGENT = 'Mozilla/5.0 (compatible; Telegram-AI-Bot-Pro/1.0; +https://github.com/huahua6688/Telegram-AI-Bot-Pro)';
@@ -26,6 +27,40 @@ async function fetchWithTimeout(url, options = {}, { signal, timeoutMs } = {}) {
   });
 }
 
+async function readBoundedResponseText(response, maxBytes = 2 * 1024 * 1024) {
+  const limit = Math.max(1024, Number(maxBytes) || 2 * 1024 * 1024);
+  const declaredLength = Number(response.headers?.get?.('content-length') || 0);
+  if (declaredLength > limit) {
+    await response.body?.cancel?.();
+    throw new Error(`Search response exceeds the ${limit}-byte limit.`);
+  }
+  const reader = response.body?.getReader?.();
+  if (!reader) {
+    const text = typeof response.text === 'function' ? await response.text() : '';
+    if (Buffer.byteLength(text, 'utf8') > limit) {
+      throw new Error(`Search response exceeds the ${limit}-byte limit.`);
+    }
+    return text;
+  }
+  const chunks = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      await reader.cancel();
+      throw new Error(`Search response exceeds the ${limit}-byte limit.`);
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks, total).toString('utf8');
+}
+
+async function readBoundedResponseJson(response, maxBytes) {
+  return JSON.parse(await readBoundedResponseText(response, maxBytes));
+}
+
 function toolError(code, message, { retryable = false } = {}) {
   return JSON.stringify({
     ok: false,
@@ -35,24 +70,30 @@ function toolError(code, message, { retryable = false } = {}) {
   });
 }
 
-async function fetchUrlText(url) {
-  const response = await fetch(url, {
+async function fetchUrlText(url, options = {}) {
+  const response = await safeFetchText(url, {
     headers: {
       'User-Agent': USER_AGENT
-    }
+    },
+    signal: options.signal,
+    timeoutMs: boundedTimeoutMs(options.timeoutMs),
+    maxBytes: 1024 * 1024,
+    maxRedirects: 3
   });
-  if (!response.ok) {
-    throw new Error(`Failed to fetch URL (${response.status})`);
+  if (response.statusCode < 200 || response.statusCode >= 300) {
+    throw new Error(`Failed to fetch URL (${response.statusCode})`);
   }
 
-  const contentType = response.headers.get('content-type') || '';
+  const contentType = String(response.headers['content-type'] || '');
   if (contentType.includes('application/json')) {
-    const json = await response.json();
-    return truncateText(JSON.stringify(json, null, 2), 6000);
+    try {
+      return truncateText(JSON.stringify(JSON.parse(response.body), null, 2), 6000);
+    } catch {
+      return truncateText(response.body, 6000);
+    }
   }
 
-  const html = await response.text();
-  return truncateText(stripHtml(html), 6000);
+  return truncateText(stripHtml(response.body), 6000);
 }
 
 function decodeSearchText(value = '') {
@@ -95,7 +136,7 @@ async function searchDuckDuckGoHtml(query, options = {}) {
     throw new Error(`HTML search request failed (${response.status})`);
   }
 
-  const html = await response.text();
+  const html = await readBoundedResponseText(response);
   const results = [];
   const anchorPattern = /<a\b([^>]*)>([\s\S]*?)<\/a>/gi;
 
@@ -139,7 +180,7 @@ async function searchDuckDuckGoInstant(query, options = {}) {
     throw new Error(`Search request failed (${response.status})`);
   }
 
-  const data = await response.json();
+  const data = await readBoundedResponseJson(response);
   const topics = (data.RelatedTopics || [])
     .flatMap((item) => (item.Topics ? item.Topics : [item]))
     .slice(0, 5)
@@ -175,7 +216,7 @@ async function searchBrave(query, apiKey, options = {}) {
     throw new Error(`Brave Search request failed (${response.status})`);
   }
 
-  const data = await response.json();
+  const data = await readBoundedResponseJson(response);
   return (data.web?.results || [])
     .map((item) => ({
       title: String(item.title || '').trim(),
@@ -213,7 +254,7 @@ async function searchTavily(query, apiKey, options = {}) {
     throw new Error(`Tavily Search request failed (${response.status})`);
   }
 
-  const data = await response.json();
+  const data = await readBoundedResponseJson(response);
 
   return (data.results || [])
     .map((item) => ({
@@ -584,7 +625,10 @@ export class ToolRegistry {
           return JSON.stringify({ utc: new Date().toISOString() });
         case 'fetch_url':
           usage.count += 1;
-          return await fetchUrlText(args.url);
+          return await fetchUrlText(args.url, {
+            signal: context.signal,
+            timeoutMs: boundedTimeoutMs(context.requestTimeoutMs ?? this.config.requestTimeoutMs)
+          });
         case 'web_search':
           usage.count += 1;
           if (typeof context.newsSearch === 'function') {
