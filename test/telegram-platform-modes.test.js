@@ -776,7 +776,7 @@ test('inline articles use the same plain-text cleanup as private chat', () => {
 
 test('inline news can use Telegram InputRichMessageContent', () => {
   const results = platformModesInternals.buildInlineResponseResults({
-    answer: '今天的重要新闻摘要。',
+    answer: '以下是搜索到的最新新闻：',
     query: '今日新闻',
     kind: 'news',
     context: JSON.stringify({
@@ -792,9 +792,31 @@ test('inline news can use Telegram InputRichMessageContent', () => {
   });
 
   const content = results[0].input_message_content;
-  assert.match(content.rich_message.markdown, /^# 新闻速览/m);
-  assert.match(content.rich_message.markdown, /\[Verified update\]\(https:\/\/example\.com\/news\)/);
+  assert.match(content.rich_message.markdown, /^# 今日新闻/m);
+  assert.match(content.rich_message.markdown, /Verified update.*\[🔗\]\(https:\/\/example\.com\/news\)/s);
+  assert.doesNotMatch(content.rich_message.markdown, /## 参考来源|以下是搜索到的最新新闻/);
   assert.equal('message_text' in content, false);
+});
+
+test('inline rich news keeps verified multi-source citations compact and inline', () => {
+  const results = platformModesInternals.buildInlineResponseResults({
+    answer: '同一条新闻由两个独立来源交叉验证。[1][2]',
+    query: '今日新闻',
+    kind: 'news',
+    context: JSON.stringify({
+      results: [
+        { title: 'First source', url: 'https://example.com/first' },
+        { title: 'Second source', url: 'https://example.com/second' }
+      ]
+    }),
+    locale: 'zh',
+    timeZone: 'Asia/Shanghai',
+    richMessages: true
+  });
+
+  const markdown = results[0].input_message_content.rich_message.markdown;
+  assert.match(markdown, /同一条新闻由两个独立来源交叉验证。 \[🔗\]\(https:\/\/example\.com\/first\)\[\+1\]\(https:\/\/example\.com\/second\)/);
+  assert.doesNotMatch(markdown, /## 参考来源|First source|Second source/);
 });
 
 test('inline source HTML stays bounded and complete even when a result URL is oversized', () => {
@@ -1624,13 +1646,12 @@ test('inline current-information query prefetches web results and forces provide
   assert.equal(answers[0][1].title, '今日新闻 1');
   assert.equal(answers[0][4].title, '今日新闻 4');
   const message = answers[0][0].input_message_content;
-  assert.match(message.message_text, /这是联网后的新闻摘要/);
-  assert.match(message.message_text, /参考来源/);
   assert.match(message.message_text, /今日新闻 1/);
   assert.match(message.message_text, /今日新闻 4/);
   assert.match(message.message_text, /Example News/);
   assert.match(message.message_text, /2026.*07.*16/);
-  assert.match(message.message_text, /https:\/\/example\.com\/news-1/);
+  assert.match(message.message_text, /<a href="https:\/\/example\.com\/news-1">🔗<\/a>/);
+  assert.doesNotMatch(message.message_text, /参考来源|这是联网后的新闻摘要/);
   assert.doesNotMatch(message.message_text, /fake\.example|\*\*\*/);
   assert.equal(message.parse_mode, 'HTML');
   assert.deepEqual(answerExtras[0], { cache_time: 0, is_personal: true });
