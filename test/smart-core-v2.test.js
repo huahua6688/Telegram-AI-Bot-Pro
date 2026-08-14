@@ -228,6 +228,45 @@ test('structured private replies use Telegram rich messages with safe regular fa
   assert.equal(await TelegramAIBot.prototype.trySendRichAssistantReply.call(fakeBot, ctx, markdown), null);
 });
 
+test('recent Rich Message text is restored from private in-memory context when Telegram omits it in a reply', async () => {
+  const bot = Object.create(TelegramAIBot.prototype);
+  bot.config = {
+    enableRichMessages: true,
+    richMessageMinChars: 20,
+    maxInputChars: 4000
+  };
+  bot.logger = logger();
+  bot.richReplyContexts = new Map();
+  const markdown = '# 今日新闻\n\n- 第一条有来源的新闻内容';
+  const sendContext = {
+    chat: { id: 77, type: 'private' },
+    message: { message_id: 42 },
+    telegram: {
+      async callApi() {
+        return { message_id: 91 };
+      }
+    }
+  };
+
+  await bot.trySendRichAssistantReply(sendContext, markdown, {}, { force: true, kind: 'news' });
+  const replyContext = {
+    chat: { id: 77, type: 'private' },
+    message: {
+      message_id: 43,
+      text: '第一条是什么意思？',
+      reply_to_message: {
+        message_id: 91,
+        from: { is_bot: true },
+        rich_message: { blocks: [] }
+      }
+    }
+  };
+
+  assert.equal(bot.hydrateRichReplyContext(replyContext), true);
+  assert.equal(replyContext.message.reply_to_message.text, markdown);
+  assert.equal(bot.richReplyContexts.size, 1);
+});
+
 test('provider fragments use one throttled rich draft and let final model structure choose persistence', async () => {
   const calls = [];
   const plainReplies = [];
@@ -796,6 +835,10 @@ test('Telegram bot sweeps expired in-memory interaction state without touching a
     ['1:3', 'active-token'],
     ['1:4', 'dangling-token']
   ]);
+  bot.richReplyContexts = new Map([
+    ['1:5', { text: 'expired rich reply', createdAt: now - 25 * 60 * 60_000 }],
+    ['1:6', { text: 'active rich reply', createdAt: now - 1_000 }]
+  ]);
   bot.aiCooldowns = new Map([
     ['expired', now - 1],
     ['active', now + 10_000]
@@ -811,6 +854,7 @@ test('Telegram bot sweeps expired in-memory interaction state without touching a
     pendingMenuActions: 1,
     activeModes: 1,
     assistantActions: 1,
+    richReplyContexts: 1,
     aiCooldowns: 1,
     rateLimits: 1
   });
@@ -818,6 +862,7 @@ test('Telegram bot sweeps expired in-memory interaction state without touching a
   assert.deepEqual([...bot.activeModes.keys()], ['active']);
   assert.deepEqual([...bot.assistantActionStates.keys()], ['active-token']);
   assert.deepEqual([...bot.assistantActionStatesByMessage.keys()], ['1:3']);
+  assert.deepEqual([...bot.richReplyContexts.keys()], ['1:6']);
   assert.deepEqual([...bot.aiCooldowns.keys()], ['active']);
   assert.deepEqual([...bot.rateLimits.keys()], ['active']);
 });
@@ -1500,7 +1545,8 @@ test('direct today-news search never leaks internal tool errors when dated news 
       requestTimeoutMs: 120000,
       newsRegion: 'CN',
       newsLanguage: 'zh-CN',
-      newsTimeZone: 'Asia/Shanghai'
+      newsTimeZone: 'Asia/Shanghai',
+      adminUserIds: new Set()
     };
     bot.logger = logger();
     bot.db = {
@@ -1547,7 +1593,7 @@ test('direct today-news search never leaks internal tool errors when dated news 
     naturalAgentInternals.fetchNewsFallback = originalNewsFallback;
   }
 
-  assert.equal(genericSearchCalls, 0);
+  assert.equal(genericSearchCalls, 1);
   assert.equal(refunds, 1);
   assert.equal(replies.length, 1);
   assert.match(replies[0].message, /暂未找到可验证为今天发布的新闻/);

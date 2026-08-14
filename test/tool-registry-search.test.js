@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { ToolRegistry, toolRegistryInternals } from '../src/services/tool-registry.js';
 import { naturalAgentInternals } from '../src/services/natural-agent.js';
 import { productAgentInternals } from '../src/services/product-agent.js';
+import { filterSearchResultsToToday } from '../src/utils/news-results.js';
 
 const originalFetch = globalThis.fetch;
 
@@ -104,6 +105,24 @@ test('web search uses a personalized news resolver before generic search', async
   assert.equal(receivedQuery, 'today news');
   assert.equal(genericFetches, 0);
   assert.equal(JSON.parse(raw).results[0].title, 'Personalized headline');
+});
+
+test('strict today filtering keeps dated results and rejects undated or stale search results', () => {
+  const now = Date.parse('2026-08-14T06:00:00.000Z');
+  const filtered = JSON.parse(filterSearchResultsToToday(JSON.stringify({
+    provider: 'tavily',
+    results: [
+      { title: 'Today', url: 'https://example.com/today', publishedAt: '2026-08-14T02:00:00.000Z' },
+      { title: 'Stale', url: 'https://example.com/stale', publishedAt: '2026-08-13T02:00:00.000Z' },
+      { title: 'Undated', url: 'https://example.com/undated' }
+    ]
+  }), { now, timeZone: 'UTC' }));
+
+  assert.deepEqual(filtered.results.map((item) => item.title), ['Today']);
+  assert.equal(filtered.strictToday, true);
+  assert.equal(filterSearchResultsToToday(JSON.stringify({
+    results: [{ title: 'Undated', url: 'https://example.com/undated' }]
+  }), { now, timeZone: 'UTC' }), '');
 });
 
 test('tool registry bounds process-wide concurrency and releases the slot', async () => {
@@ -352,6 +371,41 @@ test('Google News RSS fallback stops at its own timeout', async () => {
   assert.ok(Date.now() - startedAt < 500, 'news fallback should be bounded');
 });
 
+test('dated news falls back to Bing RSS when Google News is unavailable', async () => {
+  const requestedUrls = [];
+  globalThis.fetch = async (url) => {
+    requestedUrls.push(String(url));
+    if (requestedUrls.length === 1) return new Response('', { status: 503 });
+    return new Response(`
+      <rss xmlns:News="https://www.bing.com/news/search"><channel>
+        <item>
+          <title>Verified Bing headline</title>
+          <link>https://example.com/bing-today</link>
+          <description>Current report</description>
+          <pubDate>Fri, 14 Aug 2026 02:30:00 GMT</pubDate>
+          <News:Source>Example Wire</News:Source>
+        </item>
+      </channel></rss>
+    `, { status: 200, headers: { 'content-type': 'application/rss+xml' } });
+  };
+
+  const result = JSON.parse(await naturalAgentInternals.fetchNewsFallback('今日新闻', {
+    now: Date.parse('2026-08-14T06:00:00.000Z'),
+    timeZone: 'Asia/Shanghai',
+    region: 'CN',
+    language: 'zh-CN',
+    todayOnly: true,
+    timeoutMs: 1000
+  }));
+
+  assert.equal(requestedUrls.length, 2);
+  assert.match(requestedUrls[0], /news\.google\.com/);
+  assert.match(requestedUrls[1], /bing\.com\/news\/search/);
+  assert.equal(result.provider, 'bing-news-rss');
+  assert.equal(result.results[0].title, 'Verified Bing headline');
+  assert.equal(result.results[0].sourceName, 'Example Wire');
+});
+
 test('Google News RSS fallback keeps only local-today stories, sorts them, and preserves sources', async () => {
   const requestedUrls = [];
   globalThis.fetch = async (url) => {
@@ -388,7 +442,8 @@ test('Google News RSS fallback keeps only local-today stories, sorts them, and p
   }));
   const productResult = await productAgentInternals.fetchNewsFallback('today news');
 
-  assert.match(new URL(requestedUrls[0]).searchParams.get('q'), /when:1d/);
+  assert.equal(new URL(requestedUrls[0]).pathname, '/rss');
+  assert.equal(new URL(requestedUrls[0]).searchParams.get('q'), null);
   assert.equal(naturalResult.results.length, 2);
   assert.equal(naturalResult.results[0].title, 'Fresh & verified headline');
   assert.equal(naturalResult.results[0].sourceName, 'Reuters');

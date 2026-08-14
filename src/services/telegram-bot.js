@@ -15,6 +15,7 @@ import {
 import { retryTelegramStartupCall } from '../utils/telegram-startup.js';
 import { extractUrls, splitMessage, toDataUri, truncateText } from '../utils/text.js';
 import { resolveEffectiveNewsSettings } from '../utils/news-settings.js';
+import { filterSearchResultsToToday } from '../utils/news-results.js';
 import { personaPresets } from '../config.js';
 import { DocumentParser } from './document-parser.js';
 import { MultimodalActionService } from './multimodal-action-service.js';
@@ -1152,6 +1153,7 @@ export class TelegramAIBot {
     this.rateLimits = new Map();
     this.assistantActionStates = new Map();
     this.assistantActionStatesByMessage = new Map();
+    this.richReplyContexts = new Map();
     this.pendingMenuActions = new Map();
     this.aiCooldowns = new Map();
     this.activeModes = new Map();
@@ -1306,6 +1308,7 @@ export class TelegramAIBot {
       pendingMenuActions: 0,
       activeModes: 0,
       assistantActions: 0,
+      richReplyContexts: 0,
       aiCooldowns: 0,
       rateLimits: 0
     };
@@ -1334,6 +1337,13 @@ export class TelegramAIBot {
     }
     for (const [messageKey, token] of this.assistantActionStatesByMessage || []) {
       if (!this.assistantActionStates?.has(token)) this.assistantActionStatesByMessage.delete(messageKey);
+    }
+
+    for (const [messageKey, state] of this.richReplyContexts || []) {
+      const lastTouched = Number(state?.updatedAt || state?.createdAt || 0);
+      if (now - lastTouched <= 24 * 60 * 60 * 1000) continue;
+      this.richReplyContexts.delete(messageKey);
+      removed.richReplyContexts += 1;
     }
 
     for (const [key, expiresAt] of this.aiCooldowns || []) {
@@ -2060,18 +2070,11 @@ export class TelegramAIBot {
       });
     }
 
-    if (!strictToday) return { handled: false, output: '' };
     return {
-      handled: true,
-      output: JSON.stringify({
-        ok: false,
-        error: 'NEWS_RESULTS_EMPTY',
-        message: localText(
-          locale,
-          '没有找到可核验为今天发布的新闻，请稍后再试。',
-          'No news verified as published today was found. Please try again later.'
-        )
-      })
+      handled: false,
+      output: '',
+      strictToday,
+      timeZone: newsSettings.timeZone
     };
   }
 
@@ -4479,6 +4482,51 @@ export class TelegramAIBot {
     return state;
   }
 
+  rememberRichReplyContext(ctx, messageId, text = '') {
+    const chatId = ctx?.chat?.id;
+    const normalizedMessageId = Number(messageId);
+    if (chatId == null || !Number.isFinite(normalizedMessageId)) return false;
+    const maxChars = Math.max(1, Math.min(6000, Number(this.config?.maxInputChars) || 2400));
+    const contextText = sanitizeRichMarkdown(text).slice(0, maxChars).trim();
+    if (!contextText) return false;
+
+    if (!(this.richReplyContexts instanceof Map)) this.richReplyContexts = new Map();
+    while (this.richReplyContexts.size >= 200) {
+      const oldest = this.richReplyContexts.keys().next().value;
+      this.richReplyContexts.delete(oldest);
+    }
+    const now = Date.now();
+    this.richReplyContexts.set(`${chatId}:${normalizedMessageId}`, {
+      chatId: String(chatId),
+      messageId: normalizedMessageId,
+      text: contextText,
+      createdAt: now,
+      updatedAt: now
+    });
+    return true;
+  }
+
+  hydrateRichReplyContext(ctx) {
+    const message = ctx?.message;
+    const repliedMessage = message?.reply_to_message;
+    if (!repliedMessage || getTelegramReplyContext(message, this.config?.maxInputChars)) return false;
+    const messageId = Number(repliedMessage.message_id);
+    const chatId = ctx?.chat?.id;
+    if (chatId == null || !Number.isFinite(messageId)) return false;
+
+    const key = `${chatId}:${messageId}`;
+    const cached = this.richReplyContexts?.get(key);
+    if (!cached?.text) return false;
+    if (Date.now() - Number(cached.updatedAt || cached.createdAt || 0) > 24 * 60 * 60 * 1000) {
+      this.richReplyContexts.delete(key);
+      return false;
+    }
+
+    cached.updatedAt = Date.now();
+    repliedMessage.text = cached.text;
+    return true;
+  }
+
   getAssistantActionStateByToken(token = '') {
     const state = this.assistantActionStates.get(token) || null;
     if (state) state.updatedAt = Date.now();
@@ -5739,6 +5787,7 @@ export class TelegramAIBot {
       const strictTodayNews =
         isNewsQuery && naturalAgentInternals.isStrictTodayNewsQuery(query);
       let raw = '';
+      let rawSource = '';
 
       if (isNewsQuery) {
         try {
@@ -5749,21 +5798,12 @@ export class TelegramAIBot {
             language: newsSettings.language,
             todayOnly: strictTodayNews
           });
+          if (naturalAgentInternals.hasUsefulToolResult(raw)) rawSource = 'dated-news';
         } catch (error) {
           this.logger.warn('Dated news RSS unavailable; trying another search path', {
             error: this.formatLogError(error)
           });
         }
-      }
-
-      if (strictTodayNews && !naturalAgentInternals.hasUsefulToolResult(raw)) {
-        await this.refundQuotaForContext(ctx);
-        await ctx.reply(localText(
-          locale,
-          '暂未找到可验证为今天发布的新闻，请稍后再试。',
-          'No news verified as published today was found. Please try again later.'
-        ));
-        return;
       }
 
       if (
@@ -5851,6 +5891,22 @@ export class TelegramAIBot {
           isAdmin: this.isAdmin(ctx),
           toolUsage: { count: 0 }
         });
+        rawSource = 'generic-search';
+      }
+
+      if (strictTodayNews && rawSource === 'generic-search') {
+        raw = filterSearchResultsToToday(raw, {
+          timeZone: newsSettings.timeZone
+        });
+      }
+      if (strictTodayNews && !naturalAgentInternals.hasUsefulToolResult(raw)) {
+        await this.refundQuotaForContext(ctx);
+        await ctx.reply(localText(
+          locale,
+          '暂未找到可验证为今天发布的新闻。已尝试 Google News、Bing News、可用搜索 API 和 AI 联网搜索，请稍后再试。',
+          'No news verified as published today was found after trying Google News, Bing News, configured search APIs, and AI web search. Please try again later.'
+        ));
+        return;
       }
 
       try {
@@ -8044,6 +8100,11 @@ export class TelegramAIBot {
 
     if (!shouldRespond) return;
 
+    // Telegram clients do not always include a Rich Message's rendered body in
+    // reply_to_message. Restore only this bot's recent Rich output from bounded,
+    // process-local memory so whole-message replies remain conversational.
+    this.hydrateRichReplyContext(ctx);
+
     if (ctx.chat.type !== 'private' && hasBotMention) {
       const stripped = stripTelegramBotMentionsFromMessage(ctx.message, this.botUsername, this.botUserId);
       text = stripped.text;
@@ -8700,6 +8761,7 @@ export class TelegramAIBot {
         reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined,
         reply_markup: extra?.reply_markup
       });
+      this.rememberRichReplyContext?.(ctx, sent?.message_id, deliveryMarkdown);
       return {
         lastMessageId: sent?.message_id || null,
         rich: true,
@@ -8720,6 +8782,7 @@ export class TelegramAIBot {
             reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined,
             reply_markup: extra?.reply_markup
           });
+          this.rememberRichReplyContext?.(ctx, sent?.message_id, verticalMarkdown);
           return { lastMessageId: sent?.message_id || null, rich: true, layout: 'vertical' };
         } catch (retryError) {
           this.logger.warn('Vertical rich message fallback failed; using regular Telegram message', {

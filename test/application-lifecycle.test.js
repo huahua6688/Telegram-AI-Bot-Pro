@@ -109,3 +109,31 @@ test('pending long polling does not block support bot startup', async () => {
     'support:launch'
   ]);
 });
+
+test('primary readiness is reported even while an optional support launch remains pending', async () => {
+  let ready = false;
+  const pendingSupport = new Promise(() => {});
+  const lifecycle = createApplicationLifecycle({
+    bot: {
+      launch(onLaunch) {
+        onLaunch();
+        return new Promise(() => {});
+      },
+      async stop() {}
+    },
+    supportBot: {
+      launch() {
+        return pendingSupport;
+      },
+      async stop() {}
+    },
+    onPrimaryReady() {
+      ready = true;
+    },
+    logger: { error() {}, warn() {} }
+  });
+
+  lifecycle.start();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(ready, true);
+});

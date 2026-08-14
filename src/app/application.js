@@ -164,7 +164,11 @@ export async function createApplication() {
       adminServer,
       db,
       logger,
-      timers: [privacySweepTimer]
+      timers: [privacySweepTimer],
+      onPrimaryReady() {
+        readiness.ready = true;
+        readiness.phase = 'ready';
+      }
     });
 
     return {

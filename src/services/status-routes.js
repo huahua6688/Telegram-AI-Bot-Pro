@@ -205,6 +205,12 @@ function webSearchCapabilityDetail({ config, providerManager }) {
     });
   }
 
+  if (String(config?.tavilySearchApiKey || '').trim()) {
+    return capabilityDetail(CAPABILITY_STATUS.READY, {
+      provider: 'tavily'
+    });
+  }
+
   if (String(config?.braveSearchApiKey || '').trim()) {
     return capabilityDetail(CAPABILITY_STATUS.READY, {
       provider: 'brave'

@@ -542,6 +542,15 @@ function isStrictTodayNewsQuery(query = '') {
   return /今日|今天|本日|当日|當日|当天|當天|\btoday\b/i.test(String(query || ''));
 }
 
+function isBroadNewsQuery(query = '') {
+  const text = String(query || '')
+    .trim()
+    .replace(/[？?。.!！：:，,]/g, '')
+    .replace(/\s+/g, ' ');
+  return /^(?:请|請)?(?:给我|給我|帮我|幫我|查看|搜索|搜一下|查一下|看看)?(?:今天|今日|本日|当日|當日|当天|當天)?的?(?:最新)?(?:新闻|新聞|要闻|要聞|头条|頭條|资讯|資訊)(?:概览|概覽|摘要|速览|速覽)?$/i.test(text) ||
+    /^(?:(?:show|give|find|search)\s+)?(?:me\s+)?(?:(?:today'?s?|latest|current)\s+)?(?:news|headlines|top stories)(?:\s+(?:summary|overview))?$/i.test(text);
+}
+
 function getExplicitNewsDateScope(query = '', now = Date.now(), timeZone = 'Asia/Kuala_Lumpur') {
   const text = String(query || '');
   const [currentYear] = newsLocalDateKey(now, timeZone).split('-').map(Number);
@@ -627,85 +636,119 @@ async function fetchNewsFallback(query = '今日新闻', {
     : normalizedLanguageLower.startsWith('zh')
       ? 'zh-Hans'
       : normalizedLanguage.split('-')[0];
-  const url =
-    'https://news.google.com/rss/search?q=' +
-    encodeURIComponent(rssQuery) +
-    `&hl=${encodeURIComponent(normalizedLanguage)}&gl=${encodeURIComponent(normalizedRegion)}` +
-    `&ceid=${encodeURIComponent(`${normalizedRegion}:${ceidLanguage}`)}`;
+  const broadNews = isBroadNewsQuery(q);
+  const googleUrl = broadNews
+    ? 'https://news.google.com/rss?' +
+      `hl=${encodeURIComponent(normalizedLanguage)}&gl=${encodeURIComponent(normalizedRegion)}` +
+      `&ceid=${encodeURIComponent(`${normalizedRegion}:${ceidLanguage}`)}`
+    : 'https://news.google.com/rss/search?q=' +
+      encodeURIComponent(rssQuery) +
+      `&hl=${encodeURIComponent(normalizedLanguage)}&gl=${encodeURIComponent(normalizedRegion)}` +
+      `&ceid=${encodeURIComponent(`${normalizedRegion}:${ceidLanguage}`)}`;
+  const bingQuery = broadNews
+    ? (normalizedLanguageLower.startsWith('zh') ? '头条新闻' : 'top stories')
+    : rssQuery;
+  const bingUrl =
+    'https://www.bing.com/news/search?q=' +
+    encodeURIComponent(bingQuery) +
+    `&format=rss&setlang=${encodeURIComponent(normalizedLanguage)}` +
+    `&cc=${encodeURIComponent(normalizedRegion)}`;
+  const feeds = [
+    { provider: 'google-news-rss', url: googleUrl },
+    { provider: 'bing-news-rss', url: bingUrl }
+  ];
+  const deadlineAt = Date.now() + boundedTimeout;
+  let lastFetchError = null;
 
-  const response = await fetch(url, {
-    headers: { 'User-Agent': 'Telegram-AI-Bot-Pro' },
-    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(boundedTimeout)]) : AbortSignal.timeout(boundedTimeout)
-  });
+  for (let feedIndex = 0; feedIndex < feeds.length; feedIndex += 1) {
+    const feed = feeds[feedIndex];
+    const remainingMs = Math.max(0, deadlineAt - Date.now());
+    if (remainingMs < 50) break;
+    const remainingFeeds = feeds.length - feedIndex;
+    const attemptTimeoutMs = Math.max(50, Math.floor(remainingMs / remainingFeeds));
+    let xml = '';
 
-  if (!response.ok) return '';
-
-  const xml = await response.text();
-  const itemPattern = new RegExp('<item>([\\s\\S]*?)<\\/item>', 'gi');
-  const items = [];
-
-  for (const match of xml.matchAll(itemPattern)) {
-    const block = match[1];
-    const title = extractXmlTag(block, 'title');
-    const link = extractXmlTag(block, 'link');
-    const pubDate = extractXmlTag(block, 'pubDate');
-    const sourceName = extractXmlTag(block, 'source');
-    const sourceUrl = extractXmlAttribute(block, 'source', 'url');
-    const publishedAtMs = Date.parse(pubDate);
-
-    if (!title || !link) continue;
-    if (explicitDateScope) {
-      if (!Number.isFinite(publishedAtMs)) continue;
-      const [publishedYear, publishedMonth, publishedDay] = newsLocalDateKey(publishedAtMs, timeZone)
-        .split('-')
-        .map(Number);
-      if (publishedYear !== explicitDateScope.year) continue;
-      if (explicitDateScope.month > 0 && publishedMonth !== explicitDateScope.month) continue;
-      if (explicitDateScope.day > 0 && publishedDay !== explicitDateScope.day) continue;
+    try {
+      const timeoutSignal = AbortSignal.timeout(attemptTimeoutMs);
+      const response = await fetch(feed.url, {
+        headers: { 'User-Agent': 'Telegram-AI-Bot-Pro' },
+        signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
+      });
+      if (!response.ok) continue;
+      xml = await response.text();
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      lastFetchError = error;
+      continue;
     }
-    if (shouldFilterFresh) {
-      if (!Number.isFinite(publishedAtMs)) continue;
-      const ageMs = safeNowMs - publishedAtMs;
-      if (ageMs < -15 * 60 * 1000) continue;
-      if (strictToday) {
-        if (newsLocalDateKey(publishedAtMs, timeZone) !== newsLocalDateKey(safeNowMs, timeZone)) continue;
-      } else if (ageMs > 36 * 60 * 60 * 1000) {
-        continue;
+
+    const itemPattern = new RegExp('<item>([\\s\\S]*?)<\\/item>', 'gi');
+    const items = [];
+    for (const match of xml.matchAll(itemPattern)) {
+      const block = match[1];
+      const title = extractXmlTag(block, 'title');
+      const link = extractXmlTag(block, 'link');
+      const pubDate = extractXmlTag(block, 'pubDate');
+      const sourceName = extractXmlTag(block, 'source') || extractXmlTag(block, 'News:Source');
+      const sourceUrl = extractXmlAttribute(block, 'source', 'url');
+      const publishedAtMs = Date.parse(pubDate);
+
+      if (!title || !link) continue;
+      if (explicitDateScope) {
+        if (!Number.isFinite(publishedAtMs)) continue;
+        const [publishedYear, publishedMonth, publishedDay] = newsLocalDateKey(publishedAtMs, timeZone)
+          .split('-')
+          .map(Number);
+        if (publishedYear !== explicitDateScope.year) continue;
+        if (explicitDateScope.month > 0 && publishedMonth !== explicitDateScope.month) continue;
+        if (explicitDateScope.day > 0 && publishedDay !== explicitDateScope.day) continue;
       }
+      if (shouldFilterFresh) {
+        if (!Number.isFinite(publishedAtMs)) continue;
+        const ageMs = safeNowMs - publishedAtMs;
+        if (ageMs < -15 * 60 * 1000) continue;
+        if (strictToday) {
+          if (newsLocalDateKey(publishedAtMs, timeZone) !== newsLocalDateKey(safeNowMs, timeZone)) continue;
+        } else if (ageMs > 36 * 60 * 60 * 1000) {
+          continue;
+        }
+      }
+
+      items.push({
+        title,
+        link,
+        sourceName,
+        sourceUrl,
+        pubDate,
+        publishedAt: Number.isFinite(publishedAtMs) ? new Date(publishedAtMs).toISOString() : '',
+        publishedAtMs: Number.isFinite(publishedAtMs) ? publishedAtMs : 0
+      });
+      if (items.length >= 50) break;
     }
 
-    items.push({
-      title,
-      link,
-      sourceName,
-      sourceUrl,
-      pubDate,
-      publishedAt: Number.isFinite(publishedAtMs) ? new Date(publishedAtMs).toISOString() : '',
-      publishedAtMs: Number.isFinite(publishedAtMs) ? publishedAtMs : 0
+    if (items.length === 0) continue;
+    items.sort((left, right) => right.publishedAtMs - left.publishedAtMs);
+    return JSON.stringify({
+      provider: feed.provider,
+      freshOnly: shouldFilterFresh,
+      strictToday,
+      timeZone,
+      results: items.slice(0, MAX_SEARCH_RESULTS).map((item) => ({
+        title: item.title,
+        description: [item.sourceName, formatSourceTimestamp(item.publishedAt, normalizedLanguage, timeZone)]
+          .filter(Boolean)
+          .join(' · '),
+        url: item.link,
+        sourceName: item.sourceName,
+        sourceUrl: item.sourceUrl,
+        pubDate: item.pubDate,
+        publishedAt: item.publishedAt
+      }))
     });
-    if (items.length >= 50) break;
   }
 
-  if (items.length === 0) return '';
-
-  items.sort((left, right) => right.publishedAtMs - left.publishedAtMs);
-
-  return JSON.stringify({
-    freshOnly: shouldFilterFresh,
-    strictToday,
-    timeZone,
-    results: items.slice(0, MAX_SEARCH_RESULTS).map((item) => ({
-      title: item.title,
-      description: [item.sourceName, formatSourceTimestamp(item.publishedAt, normalizedLanguage, timeZone)]
-        .filter(Boolean)
-        .join(' · '),
-      url: item.link,
-      sourceName: item.sourceName,
-      sourceUrl: item.sourceUrl,
-      pubDate: item.pubDate,
-      publishedAt: item.publishedAt
-    }))
-  });
+  if (lastFetchError?.name === 'TimeoutError') throw lastFetchError;
+  return '';
 }
 
 async function executeTool(bot, ctx, name, args, source = 'natural_agent') {
@@ -1390,6 +1433,7 @@ export const naturalAgentInternals = {
   newsLocalDateKey,
   getExplicitNewsDateScope,
   isDateScopedNewsQuery,
+  isBroadNewsQuery,
   rawFallbackText,
   composeHumanAnswer,
   fetchNewsFallback,

@@ -106,8 +106,18 @@ export function createApplicationLifecycle(resources) {
   return {
     async start() {
       try {
+        const primaryLaunch = launchResource('telegram-bot', resources.bot, resources.logger)
+          .then(() => {
+            try {
+              resources.onPrimaryReady?.();
+            } catch (error) {
+              resources.logger?.warn?.('Primary readiness callback failed', {
+                error: error?.message || String(error)
+              });
+            }
+          });
         await Promise.all([
-          launchResource('telegram-bot', resources.bot, resources.logger),
+          primaryLaunch,
           launchResource('support-bot', resources.supportBot, resources.logger)
         ]);
       } catch (error) {

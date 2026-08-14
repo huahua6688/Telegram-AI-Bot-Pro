@@ -1,5 +1,6 @@
 import { stripHtml, truncateText } from '../utils/text.js';
 import { safeFetchText } from '../utils/safe-http.js';
+import { filterSearchResultsToToday } from '../utils/news-results.js';
 import { ToolAccessPolicy } from './tool-access-policy.js';
 
 const USER_AGENT = 'Mozilla/5.0 (compatible; Telegram-AI-Bot-Pro/1.0; +https://github.com/huahua6688/Telegram-AI-Bot-Pro)';
@@ -647,25 +648,35 @@ export class ToolRegistry {
           });
         case 'web_search':
           usage.count += 1;
+          let personalizedNews = null;
           if (typeof context.newsSearch === 'function') {
-            const personalized = await context.newsSearch(args.query, {
+            personalizedNews = await context.newsSearch(args.query, {
               signal: context.signal,
               timeoutMs: boundedTimeoutMs(context.requestTimeoutMs ?? this.config.requestTimeoutMs)
             });
-            if (personalized?.handled) {
-              const output = String(personalized.output || '').trim();
+            if (personalizedNews?.handled) {
+              const output = String(personalizedNews.output || '').trim();
               return output || toolError(
                 'NEWS_RESULTS_EMPTY',
                 'No verified news results matched the requested date and personal news settings.'
               );
             }
           }
-          return await searchWeb(args.query, {
-            signal: context.signal,
-            timeoutMs: boundedTimeoutMs(context.requestTimeoutMs ?? this.config.requestTimeoutMs),
-            braveApiKey: this.config.braveSearchApiKey,
-            tavilyApiKey: this.config.tavilySearchApiKey
-          });
+          {
+            const output = await searchWeb(args.query, {
+              signal: context.signal,
+              timeoutMs: boundedTimeoutMs(context.requestTimeoutMs ?? this.config.requestTimeoutMs),
+              braveApiKey: this.config.braveSearchApiKey,
+              tavilyApiKey: this.config.tavilySearchApiKey
+            });
+            if (!personalizedNews?.strictToday) return output;
+            return filterSearchResultsToToday(output, {
+              timeZone: personalizedNews.timeZone || 'UTC'
+            }) || toolError(
+              'NEWS_RESULTS_EMPTY',
+              'No verified news results matched today in the user time zone.'
+            );
+          }
         case 'get_weather':
           usage.count += 1;
           return await getWeather(args.location);
