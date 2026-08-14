@@ -519,9 +519,24 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     this.bot.on('message', (ctx, next) => this.handlePossibleBotMessage(ctx, next));
   }
 
-  async launch() {
-    await this.bot.launch({ allowedUpdates: [...TELEGRAM_ALLOWED_UPDATES] });
-    this.logger.info('Telegram bot started', { guardMemberSync: true });
+  async launch(onLaunch) {
+    if (this.botInfo && !this.bot.botInfo) this.bot.botInfo = this.botInfo;
+    let announced = false;
+    const markLaunched = () => {
+      if (announced) return;
+      announced = true;
+      this.logger.info('Telegram bot started', { guardMemberSync: true });
+      onLaunch?.();
+    };
+    const pollingPromise = this.bot.launch(
+      { allowedUpdates: [...TELEGRAM_ALLOWED_UPDATES] },
+      markLaunched
+    );
+    // The platform-mode subclass owns the real launch path. Report readiness
+    // after scheduling polling even if Telegraf's optional callback is not
+    // emitted by the current runtime.
+    markLaunched();
+    await pollingPromise;
   }
 
   createWhoamiKeyboard(ctx, locale = 'zh') {

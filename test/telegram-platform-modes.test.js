@@ -2497,20 +2497,27 @@ test('Guard synchronizes Telegram bans and unbans without blocking ordinary leav
 
 test('bot launch explicitly subscribes to chat member updates without dropping platform updates', async () => {
   let launchOptions;
+  let finishPolling;
+  let ready = 0;
   const bot = createBot({
     bot: {
-      async launch(options) {
+      launch(options) {
         launchOptions = options;
+        return new Promise((resolve) => { finishPolling = resolve; });
       },
       telegram: { async callApi() {} }
     }
   });
 
-  await bot.launch();
+  const launchPromise = bot.launch(() => { ready += 1; });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(ready, 1);
   assert.equal(launchOptions.allowedUpdates.includes('chat_member'), true);
   assert.equal(launchOptions.allowedUpdates.includes('message'), true);
   assert.equal(launchOptions.allowedUpdates.includes('guest_message'), true);
   assert.deepEqual(launchOptions.allowedUpdates, [...platformModesInternals.TELEGRAM_ALLOWED_UPDATES]);
+  finishPolling();
+  await launchPromise;
 });
 
 test('secretary mode replies through the business connection without writing customer text to chat history', async () => {
