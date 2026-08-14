@@ -159,7 +159,7 @@ function decodeHtmlText(value = '') {
     .trim();
 }
 
-function inlineArticle(text, title = 'AI reply', { html = false, rich = false } = {}) {
+function inlineArticle(text, title = 'AI reply', { html = false, rich = false, description = '' } = {}) {
   const rawText = String(text || '').replace(/\u0000/g, '').trim();
   const useRich = Boolean(rich && rawText);
   const useHtml = Boolean(html && rawText && rawText.length <= 4000);
@@ -171,11 +171,12 @@ function inlineArticle(text, title = 'AI reply', { html = false, rich = false } 
     : useHtml
       ? decodeHtmlText(messageText)
       : messageText;
+  const previewDescription = safeText(cleanBotOutput(description), 180);
   return {
     type: 'article',
     id: randomUUID().replace(/-/g, '').slice(0, 32),
     title: safeText(cleanBotOutput(title), 80) || 'AI reply',
-    description: safeText(descriptionText.replace(/\s+/g, ' '), 180),
+    description: previewDescription || safeText(descriptionText.replace(/\s+/g, ' '), 180),
     input_message_content: useRich
       ? { rich_message: { markdown: rawText } }
       : {
@@ -184,6 +185,29 @@ function inlineArticle(text, title = 'AI reply', { html = false, rich = false } 
           link_preview_options: { is_disabled: true }
         }
   };
+}
+
+function normalizedPublisherKey(value = '') {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/^www\./, '')
+    .replace(/[\s\p{P}\p{S}]+/gu, '');
+}
+
+function cleanInlineNewsTitle(title = '', sourceName = '', sourceUrl = '') {
+  const cleaned = safeText(cleanBotOutput(title), 180);
+  const publisherKeys = new Set([normalizedPublisherKey(sourceName)]);
+  try {
+    publisherKeys.add(normalizedPublisherKey(new URL(sourceUrl).hostname));
+  } catch {
+    // Some RSS providers omit the publisher URL. The source name is enough.
+  }
+  publisherKeys.delete('');
+
+  const match = cleaned.match(/^(.+?)\s+(?:[-–—|·])\s+([^\n]+)$/u);
+  if (!match) return cleaned;
+  return publisherKeys.has(normalizedPublisherKey(match[2])) ? match[1].trim() : cleaned;
 }
 
 function isIncompleteInlineTranslationQuery(text = '') {
@@ -221,18 +245,29 @@ function parseInlineSourceItems(raw = '', maxItems = 6) {
         ? data.topics
         : [];
     const items = [];
+    const rssMetadataOnly = /(?:^|-)news-rss$/i.test(String(data.provider || ''));
 
     for (const item of sourceItems) {
       const reference = naturalAgentInternals.extractReferenceLinks(JSON.stringify({ results: [item] }))[0];
       if (!reference?.url) continue;
-      const title = safeText(cleanBotOutput(item.title || item.text || item.heading || reference.title || ''), 180);
+      const sourceName = safeText(cleanBotOutput(item.sourceName || item.source || item.publisher || ''), 120);
+      const title = cleanInlineNewsTitle(
+        item.title || item.text || item.heading || reference.title || '',
+        sourceName,
+        item.sourceUrl || ''
+      );
       if (!title) continue;
       if (items.some((candidate) => candidate.url === reference.url)) continue;
       items.push({
         title,
-        description: safeText(cleanBotOutput(item.description || item.snippet || ''), 320),
+        // Our RSS fallback stores publisher + timestamp in `description` for AI
+        // context. Those fields are rendered separately below, so repeating the
+        // synthetic description makes Telegram previews look duplicated.
+        description: rssMetadataOnly
+          ? ''
+          : safeText(cleanBotOutput(item.description || item.snippet || ''), 320),
         url: reference.url,
-        sourceName: safeText(cleanBotOutput(item.sourceName || item.source || item.publisher || ''), 120),
+        sourceName,
         publishedAt: item.publishedAt || item.pubDate || item.date || ''
       });
       if (items.length >= Math.max(1, Number(maxItems) || 6)) break;
@@ -334,18 +369,24 @@ function buildInlineResponseResults({
     const results = [inlineArticle(
       richDigest || digest,
       localText(locale, `新闻摘要 · ${items.length} 条`, `News digest · ${items.length} items`),
-      richDigest ? { rich: true } : { html: true }
+      {
+        ...(richDigest ? { rich: true } : { html: true }),
+        description: items.slice(0, 2).map((item) => item.title).join('；')
+      }
     )];
     for (const item of items) {
-      const itemRaw = JSON.stringify({ results: [item] });
-      const itemBody = naturalAgentInternals.appendClickableReferences(
-        [item.title, item.description].filter(Boolean).join('\n\n'),
-        itemRaw,
-        locale,
-        3900,
-        timeZone
-      );
-      results.push(inlineArticle(itemBody, item.title, { html: true }));
+      const timestamp = naturalAgentInternals.formatSourceTimestamp(item.publishedAt, locale, timeZone);
+      const sourceLabel = item.sourceName || localText(locale, '打开来源', 'Open source');
+      const metadata = [sourceLabel, timestamp].filter(Boolean).join(' · ');
+      const itemBody = [
+        `<b>${escapeInlineHtml(item.title)}</b>`,
+        item.description ? escapeInlineHtml(item.description) : '',
+        `<a href="${escapeInlineHtml(item.url)}">${escapeInlineHtml(sourceLabel)}</a>${timestamp ? ` · ${escapeInlineHtml(timestamp)}` : ''}`
+      ].filter(Boolean).join('\n\n');
+      results.push(inlineArticle(itemBody, item.title, {
+        html: true,
+        description: [item.description, metadata].filter(Boolean).join(' · ')
+      }));
     }
     return results;
   }
