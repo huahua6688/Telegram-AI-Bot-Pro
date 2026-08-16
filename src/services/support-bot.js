@@ -22,6 +22,13 @@ function asPositiveInteger(value, fallback, maximum) {
   return Math.min(number, maximum);
 }
 
+function telegramErrorCode(error) {
+  const code = Number(error?.response?.error_code ?? error?.code);
+  if (Number.isInteger(code) && code > 0) return code;
+  const match = String(error?.message || error || '').match(/\b(401|409|429|5\d\d)\b/);
+  return match ? Number(match[1]) : 0;
+}
+
 function normalizeAdminIds(value) {
   const source = value instanceof Set
     ? Array.from(value)
@@ -176,6 +183,12 @@ export class SupportTelegramBot {
     this.botInfo = null;
     this.initialized = false;
     this.launched = false;
+    this.pollingState = 'idle';
+    this.pollingRestartCount = 0;
+    this.pollingLastErrorCode = 0;
+    this.pollingLastErrorAt = '';
+    this.pollingRetryTimer = null;
+    this.resolvePollingRetry = null;
   }
 
   validateConfiguration() {
@@ -250,25 +263,78 @@ export class SupportTelegramBot {
       return this;
     }
 
-    let announced = false;
-    const markLaunched = () => {
-      if (announced) return;
-      announced = true;
-      this.launched = true;
-      this.logger?.info?.('Support bot launched', { botId: String(this.botInfo?.id || '') });
-      onLaunch?.();
-    };
+    this.launched = true;
+    this.pollingState = 'starting';
+    this.logger?.info?.('Support bot launch supervisor started', {
+      botId: String(this.botInfo?.id || '')
+    });
+    onLaunch?.();
 
-    const pollingPromise = this.bot.launch();
-    markLaunched();
-    await pollingPromise;
+    let retryDelayMs = Math.max(250, Number(this.config.telegramStartupRetryBaseMs) || 1000);
+    const maximumRetryDelayMs = Math.max(
+      retryDelayMs,
+      Number(this.config.telegramStartupRetryMaxMs) || 30000
+    );
+
+    while (this.launched) {
+      try {
+        this.pollingState = this.pollingRestartCount > 0 ? 'reconnecting' : 'starting';
+        const pollingPromise = this.bot.launch();
+        this.pollingState = 'online';
+        this.logger?.info?.('Support bot launched', {
+          botId: String(this.botInfo?.id || ''),
+          restartCount: this.pollingRestartCount
+        });
+        await pollingPromise;
+        break;
+      } catch (error) {
+        if (!this.launched) break;
+        this.pollingRestartCount += 1;
+        this.pollingLastErrorCode = telegramErrorCode(error);
+        this.pollingLastErrorAt = new Date().toISOString();
+        this.pollingState = 'retrying';
+        this.logger?.warn?.('Support bot polling interrupted; retry scheduled', {
+          botId: String(this.botInfo?.id || ''),
+          errorCode: this.pollingLastErrorCode || null,
+          retryDelayMs,
+          restartCount: this.pollingRestartCount,
+          error: String(error?.message || error).slice(0, 300)
+        });
+        await new Promise((resolve) => {
+          let settled = false;
+          const finish = () => {
+            if (settled) return;
+            settled = true;
+            if (this.pollingRetryTimer) clearTimeout(this.pollingRetryTimer);
+            this.pollingRetryTimer = null;
+            this.resolvePollingRetry = null;
+            resolve();
+          };
+          this.resolvePollingRetry = finish;
+          this.pollingRetryTimer = setTimeout(finish, retryDelayMs);
+          this.pollingRetryTimer.unref?.();
+        });
+        retryDelayMs = Math.min(maximumRetryDelayMs, retryDelayMs * 2);
+      }
+    }
+
+    if (this.pollingState !== 'stopped') this.pollingState = 'offline';
     return this;
   }
 
   async stop(reason = 'shutdown') {
     if (!this.initialized) return;
-    if (this.launched) await this.bot.stop(reason);
+    const wasLaunched = this.launched;
     this.launched = false;
+    this.pollingState = 'stopped';
+    this.resolvePollingRetry?.();
+    if (wasLaunched) {
+      try {
+        await this.bot.stop(reason);
+      } catch (error) {
+        if (!/Bot is not running/i.test(String(error?.message || error))) throw error;
+      }
+    }
     this.rateLimitHits.clear();
     for (const timer of this.ticketAutoCloseTimers.values()) {
       clearTimeout(timer);
@@ -278,6 +344,20 @@ export class SupportTelegramBot {
     this.activeTicketByUser.clear();
     this.adminMessageIndex.clear();
     this.logger?.info?.('Support bot stopped', { reason: safeDisplayText(reason, 80) });
+  }
+
+  getStatus() {
+    return {
+      configured: Boolean(
+        this.config.supportEnabled === true &&
+        String(this.config.supportBotToken || '').trim()
+      ),
+      online: this.pollingState === 'online',
+      state: this.pollingState,
+      restartCount: this.pollingRestartCount,
+      lastErrorCode: this.pollingLastErrorCode || null,
+      lastErrorAt: this.pollingLastErrorAt || null
+    };
   }
 
   clearTicketAutoClose(ticketId) {
@@ -1075,6 +1155,7 @@ export const supportBotInternals = {
   buildSupportTicketText,
   truncateTelegramText,
   createConfigurationError,
+  telegramErrorCode,
   makeTicketId,
   messageReference,
   adminMessageKey

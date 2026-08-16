@@ -241,6 +241,16 @@ test('health payload keeps legacy boolean capabilities and adds status details',
     config,
     providerManager,
     bot: null,
+    supportBot: {
+      getStatus: () => ({
+        configured: true,
+        online: true,
+        state: 'online',
+        restartCount: 2,
+        lastErrorCode: 409,
+        lastErrorAt: '2026-08-02T01:00:00.000Z'
+      })
+    },
     db: {
       chatEncryption: { enabled: true, version: '1' },
       getStats: () => ({ messagesHandled: 3 })
@@ -258,6 +268,14 @@ test('health payload keeps legacy boolean capabilities and adds status details',
   });
 
   assert.equal(payload.status, 'ok');
+  assert.deepEqual(payload.support, {
+    configured: true,
+    online: true,
+    state: 'online',
+    restartCount: 2,
+    lastErrorCode: 409,
+    lastErrorAt: '2026-08-02T01:00:00.000Z'
+  });
   assert.equal(payload.timestamp, '2026-08-02T02:03:04.000Z');
   assert.equal(payload.version, '2.3.4');
   assert.equal(payload.node, 'v22.5.0');

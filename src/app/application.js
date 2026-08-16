@@ -144,6 +144,7 @@ export async function createApplication() {
       db,
       config: runtimeConfig,
       bot,
+      supportBot,
       providerManager,
       logger,
       readiness

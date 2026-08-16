@@ -326,6 +326,21 @@ export function buildHealthPayload(context) {
     Object.entries(capabilityDetails).map(([name, detail]) => [name, detail.status])
   );
   const capabilities = buildCapabilities(context, capabilityDetails);
+  const support = typeof context.supportBot?.getStatus === 'function'
+    ? context.supportBot.getStatus()
+    : {
+        configured: Boolean(
+          config.supportEnabled === true &&
+          String(config.supportBotToken || '').trim()
+        ),
+        online: false,
+        state: config.supportEnabled === true && String(config.supportBotToken || '').trim()
+          ? 'unavailable'
+          : 'disabled',
+        restartCount: 0,
+        lastErrorCode: null,
+        lastErrorAt: null
+      };
 
   return {
     ok: true,
@@ -352,6 +367,7 @@ export function buildHealthPayload(context) {
       enabled: Boolean(db?.chatEncryption?.enabled),
       version: String(db?.chatEncryption?.version || '')
     },
+    support,
     capabilities,
     capabilityStatuses,
     capabilityDetails,
@@ -516,7 +532,7 @@ const STATUS_HTML = String.raw`<!doctype html>
 </body>
 </html>`;
 
-export function installEnhancedStatusRoutes({ server, db, config, bot, providerManager, logger, readiness = null }) {
+export function installEnhancedStatusRoutes({ server, db, config, bot, supportBot = null, providerManager, logger, readiness = null }) {
   if (!server || typeof server.listeners !== 'function') {
     throw new Error('STATUS_SERVER_REQUIRED');
   }
@@ -530,7 +546,7 @@ export function installEnhancedStatusRoutes({ server, db, config, bot, providerM
     server.removeListener('request', listener);
   }
 
-  const context = { db, config, bot, providerManager };
+  const context = { db, config, bot, supportBot, providerManager };
 
   server.on('request', (req, res) => {
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);

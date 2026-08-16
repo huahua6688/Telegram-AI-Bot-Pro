@@ -135,6 +135,50 @@ test('init validates configuration and preserves launch readiness callback', asy
   assert.equal(fixture.fake.actions.length, 6);
 });
 
+test('support polling automatically recovers after a deployment conflict', async () => {
+  const fixture = createFixture({
+    config: {
+      telegramStartupRetryBaseMs: 1,
+      telegramStartupRetryMaxMs: 1
+    }
+  });
+  await fixture.bot.init();
+
+  let launchCalls = 0;
+  let releasePolling;
+  fixture.fake.launch = () => {
+    launchCalls += 1;
+    if (launchCalls === 1) {
+      const error = new Error('409: Conflict: terminated by other getUpdates request');
+      error.response = { error_code: 409 };
+      return Promise.reject(error);
+    }
+    return new Promise((resolve) => { releasePolling = resolve; });
+  };
+  fixture.fake.stop = async (reason) => {
+    fixture.fake.stopCalls.push(reason);
+    releasePolling?.();
+  };
+
+  let ready = 0;
+  const launchPromise = fixture.bot.launch(() => { ready += 1; });
+  for (let index = 0; index < 30 && launchCalls < 2; index += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+
+  assert.equal(ready, 1);
+  assert.equal(launchCalls, 2);
+  assert.equal(fixture.bot.getStatus().online, true);
+  assert.equal(fixture.bot.getStatus().state, 'online');
+  assert.equal(fixture.bot.getStatus().restartCount, 1);
+  assert.equal(fixture.bot.getStatus().lastErrorCode, 409);
+  assert.match(fixture.bot.getStatus().lastErrorAt, /^\d{4}-\d{2}-\d{2}T/);
+
+  await fixture.bot.stop('TEST');
+  await launchPromise;
+  assert.equal(fixture.bot.getStatus().state, 'stopped');
+});
+
 test('/start sends only one concise localized greeting', async () => {
   const fixture = createFixture();
   await fixture.bot.init();
