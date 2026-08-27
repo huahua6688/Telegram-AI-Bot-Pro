@@ -159,6 +159,7 @@ export class AgentTaskService {
           throw new Error('AGENT_RUNTIME_LIMIT_REACHED');
         }
         const response = await selection.client.chatCompletion({ model: selection.model, messages, tools: TOOLS, requestTimeoutMs: this.config.requestTimeoutMs, signal });
+        await this.db.incrementStats?.('aiCalls', 1, task.userId);
         const usage = response?.usage || {};
         billingCalls.push(response?._billingCall || {
           costUsd: null,

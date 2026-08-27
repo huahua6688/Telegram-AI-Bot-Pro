@@ -267,6 +267,8 @@ Zeabur AI Hub 按标准 OpenAI-compatible Provider 使用：设置 `DEFAULT_AI_P
 
 当平台支持 OpenAI-compatible 的 `GET /models` 时，机器人会自动同步可用模型，管理员也可以在“管理 → 同步平台模型”中手动刷新。此时模型名环境变量可以留空；同步失败时，已填写的模型名仍作为兜底。接口没有提供说明时，界面会明确标注依据模型名称推测的用途。
 
+管理员的“我的模型”只修改管理员本人；“全局默认模型”保存在 SQLite，只影响仍使用“自动”模式的用户，不覆盖用户手动选择。恢复环境变量后重新使用 Zeabur 中的默认 Provider/模型。管理概览显示全站统计，用户详情显示该用户自己的消息、AI 调用、平台成本和 Agent 任务状态。
+
 同步目录会按接口类型分流：聊天/视觉模型进入聊天与识图，图片生成模型进入画图，TTS 和语音识别模型进入对应语音功能。Embedding、Rerank 和 Video 也会保留在专用目录中，但只有项目存在兼容执行接口且相关功能已启用时才会调用，避免把专用模型错误发送到聊天接口。
 
 若 AI Hub 是收费平台，建议使用 `DEFAULT_AI_PROVIDER=auto`，并把 `openai-compatible` 放在 `AI_PROVIDER_FALLBACK_ORDER` 最后。系统会优先尝试前面的免费平台；免费额度不足、限流或模型不可用时，才使用 AI Hub 动态发现的聊天模型兜底，这一步可能产生费用。不接受自动付费兜底时，请从回退顺序移除 `openai-compatible` 或关闭 Provider fallback。把 AI Hub 固定为当前 Provider 时，价格未知的模型仍要求在 Mini App 手动选择。模型只有在平台明确返回零价格或 ID 明确标记免费时才显示“免费”。

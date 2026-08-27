@@ -74,6 +74,42 @@ test('effective AI settings preserve a configured persisted model', () => {
   assert.equal(settings.autoRouting, false);
 });
 
+test('global AI default affects automatic users but never overwrites manual users', () => {
+  const base = {
+    config: {
+      defaultAIProvider: 'gemini',
+      aiProvider: 'gemini',
+      defaultModel: 'gemini-default',
+      availableModels: ['gemini-default']
+    },
+    providerManager: {
+      getProviderModels: (providerId) => providerId === 'openrouter'
+        ? ['openrouter-global', 'openrouter-manual']
+        : ['gemini-default']
+    }
+  };
+  const automatic = TelegramAIBot.prototype.getEffectiveAISettings.call({
+    ...base,
+    db: {
+      getUserAISettings: () => ({ providerId: '', modelId: '', fallbackEnabled: true }),
+      getGlobalAISettings: () => ({ providerId: 'openrouter', modelId: 'openrouter-global' })
+    }
+  }, 1);
+  const manual = TelegramAIBot.prototype.getEffectiveAISettings.call({
+    ...base,
+    db: {
+      getUserAISettings: () => ({ providerId: 'openrouter', modelId: 'openrouter-manual', fallbackEnabled: false }),
+      getGlobalAISettings: () => ({ providerId: 'openrouter', modelId: 'openrouter-global' })
+    }
+  }, 2);
+
+  assert.equal(automatic.providerId, 'openrouter');
+  assert.equal(automatic.modelId, 'openrouter-global');
+  assert.equal(automatic.autoRouting, true);
+  assert.equal(manual.modelId, 'openrouter-manual');
+  assert.equal(manual.autoRouting, false);
+});
+
 test('blank canonical settings use Smart automatic routing without becoming a manual override', () => {
   const makeSettings = (defaultAIProvider) => TelegramAIBot.prototype.getEffectiveAISettings.call(
     {
@@ -137,7 +173,7 @@ test('automatic routing ignores a stale per-user fallback-off preference', () =>
   assert.equal(settings.fallbackEnabled, true);
 });
 
-test('explicit automatic provider is canonical even when the configured default is manual', () => {
+test('legacy explicit automatic provider inherits the configured global default', () => {
   const settings = TelegramAIBot.prototype.getEffectiveAISettings.call(
     {
       db: {
@@ -161,7 +197,7 @@ test('explicit automatic provider is canonical even when the configured default 
   );
 
   assert.equal(settings.rawProviderId, 'auto');
-  assert.equal(settings.providerId, 'auto');
+  assert.equal(settings.providerId, 'gemini');
   assert.equal(settings.autoRouting, true);
   assert.equal(settings.manualProvider, false);
 });

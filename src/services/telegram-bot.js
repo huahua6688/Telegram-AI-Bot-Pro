@@ -1236,6 +1236,7 @@ export class TelegramAIBot {
     this.bot.action(/^voice_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleVoiceActionCallback(ctx)));
     this.bot.action(/^image_pick:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleImageActionCallback(ctx)));
     this.bot.action(/^ai:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleAISettingsCallback(ctx)));
+    this.bot.action(/^admin_global:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleAdminGlobalAISettingsCallback(ctx)));
     this.bot.action(/^billing:(store|balance|terms|support)$/, (ctx) => this.handleBillingCallback(ctx));
     this.bot.action(/^stars_pkg:([a-z0-9][a-z0-9_-]{0,39})$/, (ctx) => this.handleStarsProductCallback(ctx));
     this.bot.action(/^agent_approval:([0-9a-f-]{36}):(yes|no)$/, (ctx) => this.handleAgentApproval(ctx));
@@ -1875,7 +1876,7 @@ export class TelegramAIBot {
         ? {
             status: '🤖 Bot status',
             whoami: '👤 My ID',
-            models: '🧠 Models',
+            models: '🧠 My models',
             quota: '📊 Quota',
             aiTest: '🧪 AI test',
             configCheck: '🧭 Config check',
@@ -1887,7 +1888,7 @@ export class TelegramAIBot {
         : {
             status: '🤖 Bot 状态',
             whoami: '👤 我的 ID',
-            models: '🧠 模型列表',
+            models: '🧠 我的模型',
             quota: '📊 额度状态',
             aiTest: '🧪 AI 测试',
             configCheck: '🧭 配置检查',
@@ -1906,6 +1907,7 @@ export class TelegramAIBot {
         Markup.button.callback(labels.models, 'admin_pick:models'),
         Markup.button.callback(labels.quota, 'admin_pick:quota')
       ],
+      [Markup.button.callback(localText(locale, '🌐 全局默认模型', '🌐 Global default model'), 'admin_pick:global_models')],
       [
         Markup.button.callback(labels.aiTest, 'admin_pick:ai_test'),
         Markup.button.callback(labels.configCheck, 'admin_pick:config_check')
@@ -1982,14 +1984,21 @@ export class TelegramAIBot {
 
   getEffectiveAISettings(userId) {
     const stored = this.db.getUserAISettings?.(userId) || {};
+    const globalSettings = this.db.getGlobalAISettings?.() || {};
     const rawProviderId = String(stored.providerId || '').trim();
     const rawModelId = String(stored.modelId || '').trim();
-    const defaultProviderId = this.config.defaultAIProvider || this.config.aiProvider;
+    const defaultProviderId = String(
+      globalSettings.providerId || this.config.defaultAIProvider || this.config.aiProvider
+    ).trim();
     const manualProvider = Boolean(rawProviderId && rawProviderId !== 'auto');
     const manualModel = Boolean(rawModelId);
     const autoRouting = !manualProvider && !manualModel;
-    const providerId = rawProviderId || defaultProviderId;
+    const providerId = rawProviderId && rawProviderId !== 'auto' ? rawProviderId : defaultProviderId;
     const models = this.providerManager?.getProviderModels?.(providerId) || this.config.availableModels || [];
+    const globalModelId = String(globalSettings.modelId || '').trim();
+    const defaultModelId = globalModelId && (models.length === 0 || models.includes(globalModelId))
+      ? globalModelId
+      : models[0] || this.config.defaultModel;
     // Model selections survive deployments in SQLite. Do not keep sending a
     // retired model forever after the server's configured model list changes.
     // An empty model list can represent a custom provider, so preserve its
@@ -1997,7 +2006,7 @@ export class TelegramAIBot {
     const modelId =
       rawModelId && (models.length === 0 || models.includes(rawModelId))
         ? rawModelId
-        : models[0] || this.config.defaultModel;
+        : defaultModelId;
     return {
       userId: String(userId || ''),
       providerId,
@@ -6217,7 +6226,7 @@ export class TelegramAIBot {
         }
       });
 
-      await this.db.incrementStats('aiCalls');
+      await this.db.incrementStats('aiCalls', 1, ctx.from?.id);
 
       const title =
         mode === 'keypoints'
@@ -6524,7 +6533,7 @@ export class TelegramAIBot {
               const grounded = await searchClient.searchWeb({ model, query });
               if (grounded?.text) {
                 await this.db.incrementStats('toolCalls');
-                await this.db.incrementStats('aiCalls');
+                await this.db.incrementStats('aiCalls', 1, ctx.from?.id);
                 const richNews = isNewsQuery
                   ? await this.trySendRichAssistantReply(
                       ctx,
@@ -6686,7 +6695,8 @@ export class TelegramAIBot {
           prompt,
           aiClient: selected.client,
           capabilities: selected.capabilities,
-          providerName: selected.providerName
+          providerName: selected.providerName,
+          userId: ctx.from?.id
         })
       );
       if (!result.ok) {
@@ -6746,7 +6756,8 @@ export class TelegramAIBot {
           mimeType: file.mimeType,
           aiClient: selected.client,
           capabilities: selected.capabilities,
-          providerName: selected.providerName
+          providerName: selected.providerName,
+          userId: ctx.from?.id
         })
       );
       if (!result.ok) {
@@ -6880,7 +6891,7 @@ export class TelegramAIBot {
         await this.replyWithSupport(ctx, this.formatUserFacingError(result.error || 'unknown error', locale), undefined, locale);
         return;
       }
-      await this.db.incrementStats('aiCalls');
+      await this.db.incrementStats('aiCalls', 1, ctx.from?.id);
       await ctx.replyWithAudio({ source: result.audio, filename: 'speech.mp3' });
     } catch (error) {
       await this.refundQuotaForContext(ctx);
@@ -7213,7 +7224,7 @@ export class TelegramAIBot {
         }
       });
 
-      await this.db.incrementStats("aiCalls");
+      await this.db.incrementStats("aiCalls", 1, ctx.from?.id);
 
       const usedModel = completion.model || model;
       const text = completion.result?.text || "";
@@ -7309,6 +7320,101 @@ export class TelegramAIBot {
       await sendTextReply(ctx, lines.join('\n'), this.config.maxOutputChars, this.createAdminActionKeyboard(locale));
     } catch (error) {
       await ctx.reply(localText(locale, `❌ 同步失败：${error.message}\n\n请确认 AI_BASE_URL 支持 GET /models，且 AI_API_KEY 有权限。原有模型配置仍可使用。`, `❌ Sync failed: ${error.message}\n\nVerify GET /models support and API-key permission. Existing configured models remain available.`), this.createAdminActionKeyboard(locale));
+    }
+  }
+
+  getAdminGlobalAISettings() {
+    const stored = this.db.getGlobalAISettings?.() || {};
+    const providerId = String(
+      stored.providerId || this.config.defaultAIProvider || this.config.aiProvider || 'auto'
+    );
+    const models = providerId === 'auto'
+      ? []
+      : this.providerManager?.getProviderModels?.(providerId) || [];
+    const storedModel = String(stored.modelId || '');
+    const modelId = storedModel && (models.length === 0 || models.includes(storedModel))
+      ? storedModel
+      : models[0] || (providerId === this.config.aiProvider ? this.config.defaultModel : '');
+    return { providerId, modelId, source: stored.providerId || stored.modelId ? 'database' : 'environment' };
+  }
+
+  createAdminGlobalAIKeyboard(settings, locale = 'zh') {
+    const providers = (this.providerManager?.listProviders?.() || [])
+      .filter((item) => item.configured && item.enabled);
+    const providerButtons = providers.map((item) => Markup.button.callback(
+      `${item.id === settings.providerId ? '✅ ' : ''}${item.name || item.id}`,
+      `admin_global:p:${item.id}`
+    ));
+    const models = settings.providerId === 'auto'
+      ? []
+      : this.providerManager?.getProviderModels?.(settings.providerId) || [];
+    const modelButtons = models.map((model, index) => Markup.button.callback(
+      `${model === settings.modelId ? '✅ ' : ''}${model}`.slice(0, 60),
+      `admin_global:m:${index}`
+    ));
+    return Markup.inlineKeyboard([
+      ...chunkItems(providerButtons, 2),
+      ...chunkItems(modelButtons, 1),
+      [Markup.button.callback(localText(locale, '恢复环境变量默认值', 'Restore environment default'), 'admin_global:reset')],
+      [Markup.button.callback(localText(locale, '返回管理', 'Back to admin'), 'admin_pick:back')]
+    ]);
+  }
+
+  async showAdminGlobalAISettings(ctx) {
+    const locale = this.getLocale(ctx);
+    const settings = this.getAdminGlobalAISettings();
+    const scope = localText(
+      locale,
+      '只影响选择“自动”的用户；用户手动选择的模型不会被覆盖。',
+      'Only affects users in Auto mode. Manual user selections are not overwritten.'
+    );
+    await ctx.reply([
+      localText(locale, '🌐 全局默认模型', '🌐 Global default model'),
+      '',
+      `${localText(locale, '平台', 'Provider')}: ${settings.providerId || '-'}`,
+      `${localText(locale, '模型', 'Model')}: ${settings.modelId || '-'}`,
+      `${localText(locale, '来源', 'Source')}: ${settings.source === 'database' ? 'SQLite' : 'ENV'}`,
+      '',
+      scope
+    ].join('\n'), this.createAdminGlobalAIKeyboard(settings, locale));
+  }
+
+  async handleAdminGlobalAISettingsCallback(ctx) {
+    const locale = this.getLocale(ctx);
+    if (!this.isAdmin(ctx)) {
+      await ctx.answerCbQuery?.();
+      await ctx.reply(this.t(locale, 'adminOnly'));
+      return;
+    }
+    await ctx.answerCbQuery?.();
+    const action = String(ctx.match?.[1] || '');
+    if (action === 'reset') {
+      this.db.resetGlobalAISettings?.();
+      await this.showAdminGlobalAISettings(ctx);
+      return;
+    }
+    const [kind, value] = action.split(':');
+    const current = this.getAdminGlobalAISettings();
+    if (kind === 'p') {
+      const provider = (this.providerManager?.listProviders?.() || [])
+        .find((item) => item.id === value && item.configured && item.enabled);
+      if (!provider) {
+        await ctx.reply(localText(locale, '这个平台不可用。', 'This provider is unavailable.'));
+        return;
+      }
+      this.db.setGlobalAISettings?.({ providerId: provider.id, modelId: provider.models?.[0] || '' });
+      await this.showAdminGlobalAISettings(ctx);
+      return;
+    }
+    if (kind === 'm') {
+      const models = this.providerManager?.getProviderModels?.(current.providerId) || [];
+      const model = models[Number.parseInt(value, 10)];
+      if (!model) {
+        await ctx.reply(localText(locale, '这个模型不可用。', 'This model is unavailable.'));
+        return;
+      }
+      this.db.setGlobalAISettings?.({ providerId: current.providerId, modelId: model });
+      await this.showAdminGlobalAISettings(ctx);
     }
   }
 
@@ -7771,6 +7877,11 @@ export class TelegramAIBot {
 
     if (target === 'models') {
       await this.handleModels(ctx);
+      return;
+    }
+
+    if (target === 'global_models') {
+      await this.showAdminGlobalAISettings(ctx);
       return;
     }
 
@@ -8341,7 +8452,7 @@ export class TelegramAIBot {
 
     if (action === 'auto') {
       settings = this.db.setUserAISettings?.(userId, {
-        providerId: 'auto',
+        providerId: '',
         modelId: '',
         fallbackEnabled: Boolean(this.config.enableProviderFallback)
       }) || settings;
@@ -9028,7 +9139,7 @@ export class TelegramAIBot {
       }
 
       await this.db.incrementStats('messagesHandled');
-      await this.db.incrementStats('aiCalls');
+      await this.db.incrementStats('aiCalls', 1, ctx.from?.id);
       await this.db.setConversation(
         sessionId,
         buildConversationHistory(
