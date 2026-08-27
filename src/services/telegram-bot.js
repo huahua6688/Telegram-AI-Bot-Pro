@@ -1,5 +1,6 @@
 import { Markup, Telegraf } from 'telegraf';
 import { randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { buildConversationHistory } from '../utils/conversation.js';
 import {
   createTelegramSessionId as createSessionId,
@@ -25,6 +26,7 @@ import { naturalAgentInternals, tryHandleNaturalAgent } from './natural-agent.js
 import { PROVIDER_LABELS } from './ai-provider-manager.js';
 import { createAIModelRouter } from './ai-model-router.js';
 import { formatModelProfile } from './ai-model-catalog.js';
+import { getPremiumReservationUnits, usdToCredits } from './model-billing-policy.js';
 import { getBuildInfo } from '../app/build-info.js';
 import {
   BILLING_CREDIT_TYPES,
@@ -292,6 +294,15 @@ function isEnglishLocale(locale = 'en') {
 
 function localText(locale = 'en', zh = '', en = '') {
   return isEnglishLocale(locale) ? en : zh;
+}
+
+function escapeRichHtml(value = '') {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;');
 }
 
 function looksLikeImplicitNewsFollowUp(text = '') {
@@ -1158,7 +1169,7 @@ function createStreamingFrames(text, minLength) {
 }
 
 export class TelegramAIBot {
-  constructor({ config, db, aiClient, providerManager = null, toolRegistry, pluginManager, logger, accessControl = null }) {
+  constructor({ config, db, aiClient, providerManager = null, toolRegistry, pluginManager, logger, accessControl = null, githubService = null, agentTaskService = null }) {
     this.config = config;
     this.db = db;
     this.aiClient = aiClient;
@@ -1168,11 +1179,16 @@ export class TelegramAIBot {
     this.pluginManager = pluginManager;
     this.logger = logger;
     this.accessControl = accessControl;
+    this.githubService = githubService;
+    this.agentTaskService = agentTaskService;
     this.rateLimits = new Map();
     this.assistantActionStates = new Map();
     this.assistantActionStatesByMessage = new Map();
     this.richReplyContexts = new Map();
     this.pendingMenuActions = new Map();
+    this.requestContext = new AsyncLocalStorage();
+    this.pendingMeteredReservations = new Map();
+    this.activeDrafts = new Map();
     this.aiCooldowns = new Map();
     this.activeModes = new Map();
     this.activeServiceProvider = null;
@@ -1184,7 +1200,7 @@ export class TelegramAIBot {
     // This middleware is registered before every command/action handler,
     // including constructor-time callback handlers. It turns a debit into a
     // consumed usage record only after the handler has delivered successfully.
-    this.bot.use(async (ctx, next) => {
+    this.bot.use((ctx, next) => this.requestContext.run(ctx, async () => {
       try {
         const result = await next();
         await this.commitQuotaForContext(ctx);
@@ -1193,7 +1209,7 @@ export class TelegramAIBot {
         await this.refundQuotaForContext(ctx);
         throw error;
       }
-    });
+    }));
     this.bot.use(async (ctx, next) => {
       if (ctx.from && typeof this.db.upsertUser === 'function') {
         const isAdmin = this.config.adminUserIds?.has(String(ctx.from.id)) || false;
@@ -1222,6 +1238,9 @@ export class TelegramAIBot {
     this.bot.action(/^ai:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleAISettingsCallback(ctx)));
     this.bot.action(/^billing:(store|balance|terms|support)$/, (ctx) => this.handleBillingCallback(ctx));
     this.bot.action(/^stars_pkg:([a-z0-9][a-z0-9_-]{0,39})$/, (ctx) => this.handleStarsProductCallback(ctx));
+    this.bot.action(/^agent_approval:([0-9a-f-]{36}):(yes|no)$/, (ctx) => this.handleAgentApproval(ctx));
+    this.bot.action(/^agent_task:([0-9a-f-]{36}):(status|pause|resume|cancel)$/, (ctx) => this.handleAgentTaskAction(ctx));
+    this.agentTaskService?.setNotifier?.((task) => this.sendAgentTaskNotification(task));
     this.documentParser = new DocumentParser(config, logger);
     this.multimodalActions = new MultimodalActionService({
       aiClient,
@@ -1998,6 +2017,44 @@ export class TelegramAIBot {
     };
   }
 
+  resolveBillingModelTarget({ providerId = '', modelId = '', capability = 'chat', fallbackEnabled = true } = {}) {
+    let resolvedProvider = String(providerId || '').trim();
+    let resolvedModel = String(modelId || '').trim();
+    if ((!resolvedProvider || resolvedProvider === 'auto') && resolvedModel) {
+      resolvedProvider = this.providerManager?.listProviders?.()
+        .find((provider) => provider.models?.includes?.(resolvedModel))?.id || resolvedProvider;
+    }
+    if (!resolvedProvider || resolvedProvider === 'auto' || !resolvedModel) {
+      const selected = this.providerManager?.selectProvider?.({
+        capability,
+        preferredProvider: resolvedProvider,
+        fallbackEnabled
+      });
+      resolvedProvider = selected?.providerId || resolvedProvider;
+      resolvedModel = resolvedModel || selected?.model || '';
+    }
+    return {
+      providerId: resolvedProvider,
+      modelId: resolvedModel,
+      tier: this.providerManager?.getModelBillingTier?.(resolvedProvider, resolvedModel) || 'paid'
+    };
+  }
+
+  getPendingUsageReservation(userId, creditType = 'chat') {
+    const type = this.normalizeBillingCreditType(creditType);
+    const activeContext = this.requestContext?.getStore?.();
+    const contextual = activeContext?.state?.billingReservations?.[type];
+    if (contextual?.reserved) return contextual;
+    return this.pendingMeteredReservations?.get?.(String(userId || '')) || null;
+  }
+
+  forgetPendingUsageReservation(reservation) {
+    const userId = String(reservation?.userId || '');
+    if (userId && this.pendingMeteredReservations?.get?.(userId) === reservation) {
+      this.pendingMeteredReservations.delete(userId);
+    }
+  }
+
   getSupportLabel(locale = 'zh') {
     return localText(locale, '🧑‍💻 联系客服', '🧑‍💻 Contact support');
   }
@@ -2472,6 +2529,14 @@ export class TelegramAIBot {
         : '';
       lines.push(`${this.getBillingCreditLabel(type, locale)}${suffix}: ${localText(locale, '今日免费剩余', 'daily free')} ${freeRemaining} · ${localText(locale, '已购', 'purchased')} ${credit.purchased}`);
     }
+    const recentCosts = this.db.listProviderUsageCosts?.({ userId, limit: 3 }) || [];
+    if (recentCosts.length > 0) {
+      lines.push('', localText(locale, '最近高级模型结算：', 'Recent premium settlements:'));
+      for (const item of recentCosts) {
+        const cost = item.costUsd == null ? localText(locale, '平台未回传', 'not reported') : `$${item.costUsd.toFixed(4)}`;
+        lines.push(`• ${item.modelId || item.providerId}: ${item.billedCredits} credits · ${cost}`);
+      }
+    }
     await ctx.reply(lines.join('\n'), this.createQuotaPurchaseKeyboard(locale));
   }
 
@@ -2821,10 +2886,11 @@ export class TelegramAIBot {
       const result = this.db.reserveUsage({
         userId: normalizedUserId,
         creditType: type,
-        units: 1,
+        units: Math.max(1, Math.trunc(Number(options.units) || 1)),
         requestKey: options.requestKey || `telegram:${randomUUID()}:${type}`,
-        dailyFreeQuota: free.dailyFreeQuota,
-        zeroFreeQuotaMeansUnlimited: free.zeroFreeQuotaMeansUnlimited,
+        dailyFreeQuota: options.paidOnly ? 0 : free.dailyFreeQuota,
+        zeroFreeQuotaMeansUnlimited: options.paidOnly ? false : free.zeroFreeQuotaMeansUnlimited,
+        paidOnly: Boolean(options.paidOnly),
         isAdmin,
         metadata: options.metadata || {}
       });
@@ -2856,6 +2922,20 @@ export class TelegramAIBot {
       reservation.consumed = true;
       return true;
     }
+    if (reservation.metered && typeof this.db.settleMeteredUsage === 'function') {
+      const result = this.db.settleMeteredUsage(reservation.recordId || reservation.requestKey, {
+        billedCredits: Number(reservation.record?.units || 1),
+        providerId: reservation.providerId || '',
+        modelId: reservation.modelId || '',
+        costUsd: null,
+        metadata: { costKnown: false, settlement: 'reserved_cap' }
+      });
+      if (!result?.settled && !result?.duplicate) throw new Error(result?.reason || 'Metered usage could not be committed.');
+      reservation.reserved = false;
+      reservation.consumed = true;
+      this.forgetPendingUsageReservation(reservation);
+      return true;
+    }
     if (typeof this.db.commitUsage !== 'function') throw new Error('Usage commit storage is unavailable.');
     const result = this.db.commitUsage(reservation.recordId || reservation.requestKey);
     const committed = Boolean(
@@ -2865,6 +2945,7 @@ export class TelegramAIBot {
     if (!committed) throw new Error(result?.reason || 'Usage reservation could not be committed.');
     reservation.reserved = false;
     reservation.consumed = true;
+    this.forgetPendingUsageReservation(reservation);
     return true;
   }
 
@@ -2883,6 +2964,7 @@ export class TelegramAIBot {
     }
     reservation.reserved = false;
     reservation.refunded = true;
+    this.forgetPendingUsageReservation(reservation);
     return true;
   }
 
@@ -2961,15 +3043,78 @@ export class TelegramAIBot {
 
     if (ctx.state.billingReservations[type]) return Boolean(ctx.state.billingReservations[type].allowed);
 
+    let metered = false;
+    let reservationUnits = 1;
+    let providerId = '';
+    let modelId = '';
+    if (this.providerManager) {
+      if (type === 'chat') {
+        const settings = this.getEffectiveAISettings(userId);
+        const target = this.resolveBillingModelTarget({
+          providerId: settings.providerId,
+          modelId: settings.modelId,
+          capability: 'chat',
+          fallbackEnabled: settings.fallbackEnabled
+        });
+        providerId = target.providerId;
+        modelId = target.modelId;
+        metered = target.tier !== 'free';
+      } else {
+        const targets = {
+          vision: [this.config.visionProvider, this.config.visionModel],
+          image_generation: [this.config.imageProvider, this.config.imageModel],
+          tts: [this.config.ttsProvider, this.config.ttsModel],
+          live_voice: [this.config.transcriptionProvider, this.config.transcriptionModel],
+          video: [this.config.visionProvider, this.config.visionModel]
+        };
+        [providerId, modelId] = targets[type] || ['', ''];
+        const target = this.resolveBillingModelTarget({
+          providerId,
+          modelId,
+          capability: type === 'image_generation'
+            ? 'imageGeneration'
+            : type === 'tts'
+              ? 'speechSynthesis'
+              : type === 'live_voice'
+                ? 'speechTranscription'
+                : 'vision'
+        });
+        providerId = target.providerId;
+        modelId = target.modelId;
+        metered = target.tier !== 'free';
+      }
+      if (metered) {
+        reservationUnits = getPremiumReservationUnits(this.config, type) || (this.isAdminUserId(userId) ? 1 : null);
+        if (!reservationUnits) {
+          ctx.state.costlyActionAllowed = false;
+          await notifyDenied(localText(
+            locale,
+            `此高级能力已安全关闭：管理员尚未配置 ${type} 的美元额度换算，无法保证不会亏损。`,
+            `This premium capability is disabled until its USD-per-credit conversion is configured.`
+          ));
+          return false;
+        }
+      }
+    }
+
     const quota = await this.reserveUsageForUser(userId, type, {
       requestKey: this.createBillingRequestKey(ctx, type),
-      metadata: { chatId: String(ctx.chat?.id || ''), updateId: ctx.update?.update_id ?? null }
+      units: reservationUnits,
+      paidOnly: metered,
+      metadata: { chatId: String(ctx.chat?.id || ''), updateId: ctx.update?.update_id ?? null, metered, providerId, modelId }
     });
+    quota.metered = metered;
+    quota.providerId = providerId;
+    quota.modelId = modelId;
+    quota.maximumUsd = Number(this.config.billingMaxRequestUsd) || 0;
     ctx.state.billingReservations[type] = quota;
     ctx.state.dailyQuotaResult = quota;
     ctx.state.costlyActionAllowed = Boolean(quota.allowed);
 
-    if (quota.allowed) return true;
+    if (quota.allowed) {
+      this.pendingMeteredReservations?.set?.(String(userId), quota);
+      return true;
+    }
 
     // A duplicate Telegram delivery is already running, completed, or was
     // previously refunded. Suppress it quietly; it is not a balance failure
@@ -3056,12 +3201,13 @@ export class TelegramAIBot {
 
   createAIModelKeyboard(providerId = '', currentModel = '', locale = 'zh') {
     const models = this.getProviderModelsForMenu(providerId);
-    const buttons = models.map((model, index) =>
-      Markup.button.callback(
-        `${model === currentModel ? localText(locale, '当前 ', 'Current ') : ''}${model}`,
+    const buttons = models.map((model, index) => {
+      const paid = this.providerManager?.getModelBillingTier?.(providerId, model) !== 'free';
+      return Markup.button.callback(
+        `${model === currentModel ? localText(locale, '当前 ', 'Current ') : ''}${paid ? '🔒 ' : '🆓 '}${model}`,
         `ai:m:${index}`
-      )
-    );
+      );
+    });
     const keyboard = Markup.inlineKeyboard([
       [Markup.button.callback(localText(locale, '🤖 自动选择', '🤖 Auto select'), 'ai:auto')],
       ...chunkItems(buttons, 1),
@@ -4170,6 +4316,43 @@ export class TelegramAIBot {
     );
   }
 
+  settlePendingMeteredUsage(userId, { result, providerId, model, reservation: explicitReservation = null }) {
+    const reservation = explicitReservation || this.getPendingUsageReservation(userId, 'chat');
+    if (!reservation?.reserved) return null;
+    const billing = result?.billing || {};
+    const hasBillingCalls = Array.isArray(billing.calls) && billing.calls.length > 0;
+    if (!reservation.metered && !hasBillingCalls) return null;
+    const known = billing.costKnown === true && Number.isFinite(Number(billing.actualCostUsd));
+    const requested = known ? usdToCredits(Number(billing.actualCostUsd), this.config) : null;
+    const reservedUnits = Number(reservation.record?.units || 1);
+    const billedCredits = reservation.metered && known
+      ? Math.min(reservedUnits, requested || reservedUnits)
+      : reservedUnits;
+    const firstRequestId = billing.calls?.find((call) => call.providerRequestId)?.providerRequestId || '';
+    const settled = this.db.settleMeteredUsage?.(reservation.recordId || reservation.requestKey, {
+      billedCredits,
+      providerId,
+      modelId: model,
+      costUsd: known ? Number(billing.actualCostUsd) : null,
+      promptTokens: billing.promptTokens,
+      completionTokens: billing.completionTokens,
+      totalTokens: billing.totalTokens,
+      providerRequestId: firstRequestId,
+      metadata: {
+        costKnown: known,
+        providerCalls: Array.isArray(billing.calls) ? billing.calls.length : 0,
+        exceededConfiguredBudget: Boolean(reservation.metered && known && requested > reservedUnits),
+        customerAccess: reservation.metered ? 'paid' : 'free'
+      }
+    });
+    if (!settled?.settled && !settled?.duplicate) throw new Error(settled?.reason || 'METERED_BILLING_SETTLEMENT_FAILED');
+    reservation.reserved = false;
+    reservation.consumed = true;
+    reservation.settlement = settled;
+    this.forgetPendingUsageReservation(reservation);
+    return settled;
+  }
+
   async completeWithAiFallback({
     scope = 'chat',
     capability = 'chat',
@@ -4183,26 +4366,58 @@ export class TelegramAIBot {
     maxRetries
   } = {}) {
     if (this.providerManager) {
-      const managed = await this.providerManager.execute({
-        userId,
-        capability,
-        preferredProvider: preferredProvider || this.config.aiProvider,
-        preferredModel: model,
-        fallbackEnabled,
-        ignoreCooldown,
-        maxRetries,
-        request,
-        scope
-      });
-      const normalizedResult = this.normalizeAiResult(managed.result, request.messages || []);
-      return {
-        result: normalizedResult,
-        model: managed.model,
-        providerId: managed.providerId,
-        providerName: managed.providerName,
-        switched: managed.switched,
-        attempted: managed.attempted
+      const creditTypeByCapability = {
+        chat: 'chat',
+        vision: 'vision',
+        imageGeneration: 'image_generation',
+        speechSynthesis: 'tts',
+        speechTranscription: 'live_voice',
+        liveAudio: 'live_voice'
       };
+      const pendingReservation = this.getPendingUsageReservation(userId, creditTypeByCapability[capability] || 'chat');
+      const billingAccess = this.isAdminUserId(userId) ? 'admin' : pendingReservation?.metered ? 'paid' : 'free';
+      try {
+        const managed = await this.providerManager.execute({
+          userId,
+          capability,
+          preferredProvider: preferredProvider || this.config.aiProvider,
+          preferredModel: model,
+          fallbackEnabled,
+          ignoreCooldown,
+          maxRetries,
+          request: {
+            ...request,
+            maxBillingCostUsd: pendingReservation?.maximumUsd || Number(this.config.billingMaxRequestUsd) || 0
+          },
+          scope,
+          billingAccess
+        });
+        const normalizedResult = this.normalizeAiResult(managed.result, request.messages || []);
+        this.settlePendingMeteredUsage(userId, {
+          result: normalizedResult,
+          providerId: managed.providerId,
+          model: managed.model,
+          reservation: pendingReservation
+        });
+        return {
+          result: normalizedResult,
+          model: managed.model,
+          providerId: managed.providerId,
+          providerName: managed.providerName,
+          switched: managed.switched,
+          attempted: managed.attempted
+        };
+      } catch (error) {
+        if (Array.isArray(error?.billing?.calls) && error.billing.calls.length > 0) {
+          this.settlePendingMeteredUsage(userId, {
+            result: { billing: error.billing },
+            providerId: preferredProvider || pendingReservation?.providerId || '',
+            model: model || pendingReservation?.modelId || '',
+            reservation: pendingReservation
+          });
+        }
+        throw error;
+      }
     }
 
     const candidates = this.buildAiModelCandidates(model);
@@ -4747,6 +4962,447 @@ export class TelegramAIBot {
     }
   }
 
+  async handleGithubCommand(ctx) {
+    const locale = this.getLocale(ctx);
+    const userId = String(ctx.from?.id || '');
+    const action = extractCommandArgs(ctx.message?.text || '').trim().toLowerCase() || 'status';
+    if (!this.githubService?.isConfigured()) {
+      await ctx.reply(localText(locale, 'GitHub App 尚未配置。请管理员设置 PUBLIC_BASE_URL、GITHUB_APP_CLIENT_ID、GITHUB_APP_CLIENT_SECRET 和加密密钥。', 'GitHub App is not configured yet.'));
+      return;
+    }
+    if (action === 'connect') {
+      const url = this.githubService.createAuthorizationUrl(userId);
+      const installUrl = this.githubService.getInstallationUrl?.() || '';
+      const rows = [];
+      if (installUrl) rows.push([Markup.button.url(localText(locale, '1️⃣ 选择并安装到仓库', '1️⃣ Select repositories'), installUrl)]);
+      rows.push([Markup.button.url(localText(locale, installUrl ? '2️⃣ 连接 GitHub 身份' : '连接 GitHub', installUrl ? '2️⃣ Authorize GitHub' : 'Connect GitHub'), url)]);
+      await ctx.reply(localText(
+        locale,
+        installUrl ? '先选择允许访问的仓库，再连接 GitHub 身份。Bot 只能操作你安装 GitHub App 时选中的仓库。' : '点击下面按钮连接 GitHub。管理员尚未配置 App slug，因此请先确认 GitHub App 已安装到目标仓库。',
+        installUrl ? 'First select repositories, then authorize your GitHub identity. The bot can only access repositories selected during installation.' : 'Connect GitHub below. The app slug is not configured, so make sure the GitHub App is already installed on the target repository.'
+      ), Markup.inlineKeyboard(rows));
+      return;
+    }
+    if (action === 'disconnect') {
+      this.githubService.disconnect(userId);
+      await ctx.reply(localText(locale, 'GitHub 连接已删除。', 'GitHub connection removed.'));
+      return;
+    }
+    if (action === 'repos') {
+      try {
+        const repos = await this.githubService.listRepositories(userId);
+        await ctx.reply(repos.length ? repos.slice(0, 40).map((repo) => `${repo.private ? '🔒' : '🌐'} ${repo.fullName}`).join('\n') : localText(locale, '没有可访问的仓库。', 'No accessible repositories.'));
+      } catch (error) {
+        await ctx.reply(error.message === 'GITHUB_NOT_CONNECTED' ? localText(locale, '请先发送 /github connect。', 'Run /github connect first.') : this.formatUserFacingError(error, locale));
+      }
+      return;
+    }
+    const connection = this.githubService.getConnection(userId);
+    await ctx.reply(connection ? `✅ GitHub @${connection.githubLogin}` : localText(locale, '尚未连接。发送 /github connect 开始。', 'Not connected. Run /github connect to begin.'));
+  }
+
+  createAgentApprovalKeyboard(approval) {
+    return Markup.inlineKeyboard([[
+      Markup.button.callback('✅ 批准', `agent_approval:${approval.id}:yes`),
+      Markup.button.callback('❌ 拒绝', `agent_approval:${approval.id}:no`)
+    ]]);
+  }
+
+  createAgentTaskKeyboard(task) {
+    const rows = [];
+    if (['queued', 'running'].includes(task?.status)) {
+      rows.push([
+        Markup.button.callback('🔄 查看状态', `agent_task:${task.id}:status`),
+        Markup.button.callback('⏸ 暂停', `agent_task:${task.id}:pause`),
+        Markup.button.callback('⛔ 取消', `agent_task:${task.id}:cancel`)
+      ]);
+    } else if (task?.status === 'paused') {
+      rows.push([
+        Markup.button.callback('▶️ 继续', `agent_task:${task.id}:resume`),
+        Markup.button.callback('⛔ 取消', `agent_task:${task.id}:cancel`)
+      ]);
+    }
+    return rows.length > 0 ? Markup.inlineKeyboard(rows) : undefined;
+  }
+
+  getAgentTaskDisplay(task) {
+    const approval = task?.approval || this.db.getPendingToolApproval?.(task?.id);
+    const costs = task?.id ? this.db.listProviderUsageCosts?.({ taskId: task.id, limit: 1 }) || [] : [];
+    const statusLabels = {
+      queued: '⏳ 已排队',
+      running: '⚙️ 正在执行',
+      waiting_approval: '🔐 等待确认',
+      paused: '⏸ 已暂停',
+      succeeded: '✅ 已完成',
+      failed: '❌ 执行失败',
+      cancelled: '⛔ 已取消'
+    };
+    let detail = '';
+    if (approval?.action === 'github_create_branch') detail = `准备创建任务分支 ${task.branch}`;
+    else if (approval?.action === 'github_put_file') detail = `准备写入 ${approval.payload?.args?.path || '文件'}`;
+    else if (approval?.action === 'github_create_pr') detail = '准备创建 Pull Request';
+    else if (task?.result?.text) detail = String(task.result.text).slice(0, 3000);
+    else if (task?.error) detail = task.error;
+    const costLine = costs[0]
+      ? `\n结算：${costs[0].billedCredits} credits${costs[0].costUsd == null ? '' : ` · $${costs[0].costUsd.toFixed(4)}`}`
+      : '';
+    const text = [
+      statusLabels[task?.status] || `Agent 状态：${task?.status || 'unknown'}`,
+      `仓库：${task?.repository || '-'}`,
+      `分支：${task?.branch || '-'}`,
+      detail ? `\n${detail}` : '',
+      costLine
+    ].filter(Boolean).join('\n');
+    return { text, approval };
+  }
+
+  buildAgentRichButtons(task, approval) {
+    if (task?.status === 'waiting_approval' && approval) {
+      return `<tg-button-row align="center"><tg-button type="callback_data" style="success" data="agent_approval:${approval.id}:yes">✅ 批准</tg-button><tg-button type="callback_data" style="danger" data="agent_approval:${approval.id}:no">❌ 拒绝</tg-button></tg-button-row>`;
+    }
+    if (['queued', 'running'].includes(task?.status)) {
+      return `<tg-button-row align="center"><tg-button type="callback_data" style="primary" data="agent_task:${task.id}:status">🔄 状态</tg-button><tg-button type="callback_data" data="agent_task:${task.id}:pause">⏸ 暂停</tg-button><tg-button type="callback_data" style="danger" data="agent_task:${task.id}:cancel">⛔ 取消</tg-button></tg-button-row>`;
+    }
+    if (task?.status === 'paused') {
+      return `<tg-button-row align="center"><tg-button type="callback_data" style="success" data="agent_task:${task.id}:resume">▶️ 继续</tg-button><tg-button type="callback_data" style="danger" data="agent_task:${task.id}:cancel">⛔ 取消</tg-button></tg-button-row>`;
+    }
+    if (task?.status === 'succeeded') {
+      return '<tg-button-row align="center"><tg-button type="disabled" style="success">✅ 已完成</tg-button></tg-button-row>';
+    }
+    if (['failed', 'cancelled'].includes(task?.status)) {
+      return `<tg-button-row align="center"><tg-button type="disabled" style="danger">${task.status === 'failed' ? '❌ 执行失败' : '⛔ 已取消'}</tg-button></tg-button-row>`;
+    }
+    return '';
+  }
+
+  async sendAgentTaskState({ ctx = null, chatId, userId, callbackQueryId = '' }, task) {
+    const telegram = ctx?.telegram || this.bot.telegram;
+    const resolvedChatId = chatId || ctx?.chat?.id;
+    const resolvedUserId = userId || ctx?.from?.id || task?.userId;
+    const isPrivate = ctx?.chat?.type === 'private' || String(resolvedChatId) === String(resolvedUserId);
+    const { text, approval } = this.getAgentTaskDisplay(task);
+    const ephemeral = isPrivate ? undefined : {
+      receiver_user_id: Number(resolvedUserId),
+      ...(callbackQueryId ? { callback_query_id: callbackQueryId, replace_callback_query_message: true } : {})
+    };
+    const richButtons = this.buildAgentRichButtons(task, approval);
+    if (this.config.enableRichMessages && typeof telegram?.callApi === 'function') {
+      try {
+        return await telegram.callApi('sendRichMessage', {
+          chat_id: resolvedChatId,
+          rich_message: { html: `<h3>Agent</h3><p>${escapeRichHtml(text).replaceAll('\n', '<br>')}</p>${richButtons}` },
+          ...(ephemeral ? { ephemeral_message_parameters: ephemeral } : {})
+        });
+      } catch (error) {
+        this.logger?.warn?.('Agent rich state unavailable; using regular buttons', { taskId: task?.id, error: error.message });
+      }
+    }
+    const keyboard = task?.status === 'waiting_approval' && approval
+      ? this.createAgentApprovalKeyboard(approval)
+      : this.createAgentTaskKeyboard(task);
+    if (!ephemeral && ctx?.reply) return ctx.reply(text, keyboard);
+    return telegram.callApi('sendMessage', {
+      chat_id: resolvedChatId,
+      text,
+      ...(keyboard?.reply_markup ? { reply_markup: keyboard.reply_markup } : {}),
+      ...(ephemeral ? { ephemeral_message_parameters: ephemeral } : {})
+    });
+  }
+
+  async replyWithAgentState(ctx, task) {
+    return this.sendAgentTaskState({
+      ctx,
+      chatId: ctx.chat?.id,
+      userId: ctx.from?.id,
+      callbackQueryId: ctx.callbackQuery?.id || ''
+    }, task);
+  }
+
+  async sendAgentTaskNotification(task) {
+    const state = await this.sendAgentTaskState({ chatId: task.chatId, userId: task.userId }, task);
+    if (['succeeded', 'failed', 'cancelled'].includes(task?.status)) {
+      await this.sendAgentReportDocument(task);
+    }
+    return state;
+  }
+
+  buildAgentReport(task) {
+    const events = this.db.listAgentTaskEvents?.(task.id) || [];
+    const costs = this.db.listProviderUsageCosts?.({ taskId: task.id, limit: 20 }) || [];
+    const actualCostUsd = costs.every((cost) => Number.isFinite(cost.costUsd))
+      ? costs.reduce((sum, cost) => sum + Number(cost.costUsd), 0)
+      : null;
+    const billedCredits = costs.reduce((sum, cost) => sum + Number(cost.billedCredits || 0), 0);
+    const eventLines = events.slice(-40).map((event) => {
+      const detail = event.payload && typeof event.payload === 'object'
+        ? JSON.stringify(event.payload)
+        : String(event.payload || '');
+      return `- ${event.createdAt || ''} · ${event.type || event.eventType || 'event'}${detail ? ` · ${truncateText(detail, 500)}` : ''}`;
+    });
+    return truncateText([
+      '# Telegram Agent Task Report',
+      '',
+      `- Task: ${task.id}`,
+      `- Status: ${task.status}`,
+      `- Repository: ${task.repository || '-'}`,
+      `- Branch: ${task.branch || '-'}`,
+      `- Provider: ${task.providerId || '-'}`,
+      `- Model: ${task.model || task.modelId || '-'}`,
+      `- Billed credits: ${billedCredits}`,
+      `- Cost (USD): ${actualCostUsd == null ? 'unknown' : actualCostUsd.toFixed(6)}`,
+      '',
+      '## Request',
+      '',
+      String(task.prompt || '-'),
+      '',
+      '## Result',
+      '',
+      String(task.result?.text || task.error || '-'),
+      ...(eventLines.length ? ['', '## Recent events', '', ...eventLines] : [])
+    ].join('\n'), 30000);
+  }
+
+  async sendAgentReportDocument(task) {
+    const telegram = this.bot.telegram;
+    if (!telegram?.sendDocument || !task?.chatId || !task?.userId) return null;
+    const isPrivate = String(task.chatId) === String(task.userId);
+    const ephemeral = isPrivate ? undefined : { receiver_user_id: Number(task.userId) };
+    const filename = `agent-${String(task.id).slice(0, 8)}-report.md`;
+    let uploaded = null;
+    try {
+      uploaded = await telegram.sendDocument(
+        task.chatId,
+        { source: Buffer.from(this.buildAgentReport(task), 'utf8'), filename },
+        {
+          caption: `Agent ${task.status} · ${task.repository || task.id}`,
+          ...(ephemeral ? { ephemeral_message_parameters: ephemeral } : {})
+        }
+      );
+      const fileId = uploaded?.document?.file_id;
+      if (!this.config.enableRichMessages || !fileId || typeof telegram.callApi !== 'function') return uploaded;
+      const rich = await telegram.callApi('sendRichMessage', {
+        chat_id: task.chatId,
+        rich_message: {
+          html: `<h3>📄 Agent 报告</h3><p>${escapeRichHtml(task.repository || task.id)} · ${escapeRichHtml(task.status)}</p><tg-document src="tg://document?id=agent_report"></tg-document>`,
+          media: [{ id: 'agent_report', media: { type: 'document', media: fileId } }]
+        },
+        ...(ephemeral ? { ephemeral_message_parameters: ephemeral } : {})
+      });
+      try {
+        if (uploaded.ephemeral_message_id) {
+          await telegram.callApi('deleteEphemeralMessage', {
+            chat_id: task.chatId,
+            ephemeral_message_id: uploaded.ephemeral_message_id
+          });
+        } else if (uploaded.message_id) {
+          await telegram.callApi('deleteMessage', { chat_id: task.chatId, message_id: uploaded.message_id });
+        }
+      } catch {
+        // The embedded report is already delivered; leaving the upload visible is harmless.
+      }
+      return rich;
+    } catch (error) {
+      this.logger?.warn?.('Failed to deliver Agent report document', {
+        taskId: task?.id,
+        error: this.formatLogError(error)
+      });
+      return uploaded;
+    }
+  }
+
+  async handleAgentCommand(ctx) {
+    const locale = this.getLocale(ctx);
+    if (!this.agentTaskService?.isConfigured()) {
+      await ctx.reply(localText(locale, 'Agent 尚未完整配置：需要启用 Agent、付费换算、GitHub App 和独立 Worker。', 'Agent is not fully configured: billing, GitHub App, and the isolated worker are required.'));
+      return;
+    }
+    const input = extractCommandArgs(ctx.message?.text || '').trim();
+    if (!input || /^(?:status|list|状态|任务)$/i.test(input)) {
+      const tasks = this.db.listAgentTasks?.({ userId: String(ctx.from.id), limit: 8 }) || [];
+      if (tasks.length === 0) {
+        await ctx.reply(localText(locale, '还没有 Agent 任务。用法：/agent owner/repo 任务说明', 'No Agent tasks yet. Usage: /agent owner/repo task description'));
+        return;
+      }
+      await ctx.reply(tasks.map((task) => `${task.id.slice(0, 8)} · ${task.status} · ${task.repository}`).join('\n'));
+      return;
+    }
+    const match = input.match(/^([\w.-]+\/[\w.-]+)\s+([\s\S]+)$/);
+    if (!match) {
+      await ctx.reply(localText(locale, '用法：/agent owner/repo 任务说明', 'Usage: /agent owner/repo task description'));
+      return;
+    }
+    try {
+      const task = await this.agentTaskService.start({ userId: String(ctx.from.id), chatId: String(ctx.chat?.id || ''), repository: match[1], prompt: match[2] });
+      await this.replyWithAgentState(ctx, task);
+    } catch (error) {
+      const message = error.message === 'INSUFFICIENT_CREDITS'
+        ? localText(locale, 'Agent 仅限付费余额，当前额度不足。', 'Agent requires purchased credits and your balance is insufficient.')
+        : error.message === 'GITHUB_NOT_CONNECTED'
+          ? localText(locale, '请先发送 /github connect。', 'Run /github connect first.')
+          : this.formatUserFacingError(error, locale);
+      await ctx.reply(message, this.createQuotaPurchaseKeyboard(locale));
+    }
+  }
+
+  async handleAgentApproval(ctx) {
+    const match = String(ctx.callbackQuery?.data || '').match(/^agent_approval:([0-9a-f-]{36}):(yes|no)$/);
+    if (!match) return;
+    await ctx.answerCbQuery(match[2] === 'yes' ? '已批准，Agent 继续执行' : '已拒绝');
+    try {
+      const task = await this.agentTaskService.approve({ approvalId: match[1], userId: String(ctx.from.id), approved: match[2] === 'yes', background: true });
+      await this.replyWithAgentState(ctx, task);
+    } catch (error) {
+      await ctx.reply(this.formatUserFacingError(error, this.getLocale(ctx)));
+    }
+  }
+
+  async handleAgentTaskAction(ctx) {
+    const match = String(ctx.callbackQuery?.data || '').match(/^agent_task:([0-9a-f-]{36}):(status|pause|resume|cancel)$/);
+    if (!match) return;
+    await ctx.answerCbQuery('正在处理…');
+    const userId = String(ctx.from.id);
+    try {
+      const task = match[2] === 'pause'
+        ? this.agentTaskService.pause({ taskId: match[1], userId })
+        : match[2] === 'resume'
+          ? this.agentTaskService.resume({ taskId: match[1], userId })
+          : match[2] === 'cancel'
+            ? await this.agentTaskService.cancel({ taskId: match[1], userId })
+            : this.agentTaskService.getOwnedTask(match[1], userId);
+      await this.replyWithAgentState(ctx, task);
+    } catch (error) {
+      await this.sendAgentTaskState({
+        ctx,
+        chatId: ctx.chat?.id,
+        userId,
+        callbackQueryId: ctx.callbackQuery?.id || ''
+      }, { id: match[1], status: 'failed', error: this.formatUserFacingError(error, this.getLocale(ctx)) });
+    }
+  }
+
+  getWelcomeSettings(chatId) {
+    const raw = this.db.getMeta?.(`telegram:welcome:${chatId}`) || '';
+    if (!raw) return null;
+    try {
+      const value = JSON.parse(raw);
+      return value?.enabled && String(value.text || '').trim() ? value : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async getWelcomePermission(ctx) {
+    if (!ctx.chat?.id || !this.botUserId || typeof ctx.telegram?.getChatMember !== 'function') return null;
+    try {
+      const member = await ctx.telegram.getChatMember(ctx.chat.id, this.botUserId);
+      if (member?.status === 'creator') return true;
+      if (member?.status !== 'administrator') return false;
+      return member.can_send_welcome_messages === true;
+    } catch {
+      return null;
+    }
+  }
+
+  async handleWelcomeCommand(ctx) {
+    const locale = this.getLocale(ctx);
+    if (ctx.chat?.type === 'private') {
+      await ctx.reply(this.t(locale, 'privateOnlyCommand'));
+      return;
+    }
+    if (!(await this.canManageGroupSettings(ctx))) {
+      await ctx.reply(this.t(locale, 'groupAdminOnly'));
+      return;
+    }
+    const input = extractCommandArgs(ctx.message?.text || '').trim();
+    const [action = 'status'] = input.split(/\s+/, 1);
+    const current = this.getWelcomeSettings(ctx.chat.id);
+    if (/^(?:off|disable|关闭)$/i.test(action)) {
+      this.db.setMeta?.(`telegram:welcome:${ctx.chat.id}`, JSON.stringify({ enabled: false }));
+      await ctx.reply(localText(locale, '群欢迎消息已关闭。', 'Group welcome messages are disabled.'));
+      return;
+    }
+    if (/^(?:set|设置)$/i.test(action)) {
+      const message = truncateText(input.slice(action.length).trim(), 1800);
+      if (!message) {
+        await ctx.reply(localText(
+          locale,
+          '用法：/welcome set 欢迎 {name} 加入 {chat}\n可用变量：{name}、{username}、{chat}',
+          'Usage: /welcome set Welcome {name} to {chat}\nVariables: {name}, {username}, {chat}'
+        ));
+        return;
+      }
+      this.db.setMeta?.(`telegram:welcome:${ctx.chat.id}`, JSON.stringify({
+        enabled: true,
+        text: message,
+        updatedBy: String(ctx.from?.id || ''),
+        updatedAt: new Date().toISOString()
+      }));
+      const permission = await this.getWelcomePermission(ctx);
+      const permissionLine = permission === false
+        ? localText(locale, '\n⚠️ 还需把 Bot 设为管理员并授予“发送欢迎消息”权限。', '\n⚠️ Make the bot an administrator and grant “Send welcome messages”.')
+        : '';
+      await ctx.reply(localText(locale, '群欢迎消息已保存。', 'Group welcome message saved.') + permissionLine);
+      return;
+    }
+    const permission = await this.getWelcomePermission(ctx);
+    await ctx.reply([
+      current
+        ? localText(locale, '群欢迎消息：已开启', 'Group welcome message: enabled')
+        : localText(locale, '群欢迎消息：已关闭', 'Group welcome message: disabled'),
+      localText(locale, `发送权限：${permission === true ? '正常' : permission === false ? '缺少' : '无法确认'}`, `Permission: ${permission === true ? 'ready' : permission === false ? 'missing' : 'unknown'}`),
+      current ? localText(locale, `内容：${current.text}`, `Text: ${current.text}`) : '',
+      localText(locale, '设置：/welcome set 欢迎 {name} 加入 {chat}\n关闭：/welcome off', 'Set: /welcome set Welcome {name} to {chat}\nDisable: /welcome off')
+    ].filter(Boolean).join('\n'));
+  }
+
+  renderWelcomeText(template, member, chat) {
+    const name = [member?.first_name, member?.last_name].filter(Boolean).join(' ').trim() || '新成员';
+    const username = member?.username ? `@${member.username}` : name;
+    return truncateText(String(template || '')
+      .replaceAll('{name}', name)
+      .replaceAll('{username}', username)
+      .replaceAll('{chat}', String(chat?.title || 'this group')), 2000);
+  }
+
+  async handleWelcomeMembers(ctx) {
+    const settings = this.getWelcomeSettings(ctx.chat?.id);
+    if (!settings) return false;
+    const members = (ctx.message?.new_chat_members || []).filter((member) => (
+      member?.id && String(member.id) !== String(this.botUserId) && member.is_bot !== true
+    ));
+    for (const member of members) {
+      const text = this.renderWelcomeText(settings.text, member, ctx.chat);
+      const privateUrl = this.botUsername ? `https://t.me/${this.botUsername}?start=welcome` : '';
+      const ephemeral = { receiver_user_id: Number(member.id) };
+      try {
+        if (this.config.enableRichMessages && typeof ctx.telegram?.callApi === 'function') {
+          const button = privateUrl
+            ? `<tg-button-row align="center"><tg-button type="url" style="primary" url="${escapeRichHtml(privateUrl)}">🚀 开始使用</tg-button><tg-button type="callback_data" style="success" data="billing:store">⭐ 购买额度</tg-button></tg-button-row>`
+            : '';
+          await ctx.telegram.callApi('sendRichMessage', {
+            chat_id: ctx.chat.id,
+            rich_message: { html: `<h3>👋 欢迎</h3><p>${escapeRichHtml(text).replaceAll('\n', '<br>')}</p>${button}` },
+            ephemeral_message_parameters: ephemeral
+          });
+        } else {
+          await ctx.telegram.callApi('sendMessage', {
+            chat_id: ctx.chat.id,
+            text: `👋 ${text}`,
+            reply_markup: privateUrl ? Markup.inlineKeyboard([[Markup.button.url('🚀 开始使用', privateUrl)]]).reply_markup : undefined,
+            ephemeral_message_parameters: ephemeral
+          });
+        }
+      } catch (error) {
+        this.logger?.warn?.('Failed to send private group welcome message', {
+          chatId: ctx.chat?.id,
+          userId: member.id,
+          error: this.formatLogError(error)
+        });
+      }
+    }
+    return members.length > 0;
+  }
+
   async init() {
     this.bot.catch(async (error, ctx) => {
       this.logger.error('Telegram handler error', { chatId: ctx.chat?.id, error: this.formatLogError(error) });
@@ -4778,6 +5434,7 @@ export class TelegramAIBot {
     });
 
     this.registerCommands();
+    this.bot.on('stopped_message_generation', (ctx) => this.handleStoppedMessageGeneration(ctx));
     this.bot.on('message', (ctx) => this.handleIncomingMessage(ctx));
 
     this.sweepEphemeralState();
@@ -4811,6 +5468,7 @@ export class TelegramAIBot {
     this.botUsername = me.username || '';
     this.botUserId = String(me.id || '');
     await this.setLocalizedBotCommands();
+    await this.agentTaskService?.recoverInterruptedTasks?.();
   }
 
   registerCommands() {
@@ -4839,6 +5497,9 @@ export class TelegramAIBot {
     this.bot.command('terms', (ctx) => this.handleStarsTerms(ctx));
     this.bot.command('paysupport', (ctx) => this.handleStarsPaymentSupport(ctx));
     this.bot.command('refundstars', (ctx) => this.handleStarsRefund(ctx));
+    this.bot.command('github', (ctx) => this.handleGithubCommand(ctx));
+    this.bot.command('agent', (ctx) => this.handleAgentCommand(ctx));
+    this.bot.command('welcome', (ctx) => this.handleWelcomeCommand(ctx));
     this.bot.on('pre_checkout_query', (ctx) => this.handleStarsPreCheckout(ctx));
     this.bot.on('successful_payment', (ctx) => this.handleStarsSuccessfulPayment(ctx));
     this.bot.action(/^set_model:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleModelCallback(ctx)));
@@ -8076,6 +8737,10 @@ export class TelegramAIBot {
 
   async handleIncomingMessage(ctx) {
     const { forceRespond = false } = arguments[1] || {};
+    if (ctx.message?.new_chat_members?.length) {
+      await this.handleWelcomeMembers(ctx);
+      return;
+    }
     if (ctx.message?.successful_payment) {
       await this.handleStarsSuccessfulPayment(ctx);
       return;
@@ -8230,6 +8895,7 @@ export class TelegramAIBot {
     const aiSettings = this.getEffectiveAISettings(ctx.from.id);
     let activeAiModel = aiSettings.modelId || user?.preferredModel || chat?.defaultModel || this.config.defaultModel;
     let assistantDelivered = false;
+    let draftStreamer = null;
 
     try {
       await ctx.sendChatAction('typing');
@@ -8311,7 +8977,7 @@ export class TelegramAIBot {
       });
       const model = smartRoute.model || smartRoute.modelId || activeAiModel;
       const toolUsage = { count: 0 };
-      const draftStreamer = typeof this.createAssistantDraftStreamer === 'function'
+      draftStreamer = typeof this.createAssistantDraftStreamer === 'function'
         ? this.createAssistantDraftStreamer(ctx)
         : null;
       const completion = await this.completeWithAiFallback({
@@ -8329,6 +8995,7 @@ export class TelegramAIBot {
             ? this.toolRegistry.getDefinitions()
             : [],
           onTextDelta: draftStreamer?.onTextDelta,
+          signal: draftStreamer?.signal,
           toolRunner: async (toolCall) => {
             const output = await this.toolRegistry.execute(toolCall, {
               source: 'assistant_chat',
@@ -8349,6 +9016,7 @@ export class TelegramAIBot {
           }
         }
       });
+      if (draftStreamer?.stopped) throw new DOMException('Telegram user stopped generation', 'AbortError');
 
       const result = this.normalizeAiResult(completion.result, messages);
       activeAiModel = completion.model || model;
@@ -8401,6 +9069,7 @@ export class TelegramAIBot {
       const reply = await this.sendAssistantReply(ctx, visibleAssistantText, {}, {
         skipSimulatedStreaming: Boolean(draftStreamer?.sent)
       });
+      draftStreamer?.finalize?.();
       assistantDelivered = true;
       if (reply?.lastMessageId && this.config?.miniAppEnabled === false) {
         const state = this.createAssistantActionState({
@@ -8429,6 +9098,27 @@ export class TelegramAIBot {
         );
       }
     } catch (error) {
+      const generationStopped = Boolean(draftStreamer?.stopped || (
+        draftStreamer?.signal?.aborted && /abort|stop/i.test(String(error?.name || error?.message || ''))
+      ));
+      draftStreamer?.finalize?.();
+      if (generationStopped) {
+        const reservation = this.getPendingUsageReservation(ctx.from?.id, messageCreditType);
+        if (reservation?.metered) {
+          this.settlePendingMeteredUsage(ctx.from?.id, {
+            result: { billing: { calls: [], costKnown: false } },
+            providerId: reservation.providerId || '',
+            model: reservation.modelId || activeAiModel,
+            reservation
+          });
+        } else {
+          await this.refundQuotaForContext(ctx);
+        }
+        if (!draftStreamer?.sent) {
+          await ctx.reply(localText(locale, '已停止生成。', 'Generation stopped.'));
+        }
+        return;
+      }
       if (!assistantDelivered) await this.refundQuotaForContext(ctx);
       // ProviderManager owns provider/model health and cooldowns. Mirroring a
       // provider-wide failure into the legacy model cooldown would pre-block
@@ -8628,6 +9318,22 @@ export class TelegramAIBot {
     let richDraftEnabled = Boolean(this.config.enableRichMessages);
     let richDraftSent = false;
     let richFallbackLogged = false;
+    let stopped = false;
+    const controller = new AbortController();
+    const key = `${ctx.chat.id}:${draftId}`;
+    const state = {
+      controller,
+      stop() {
+        stopped = true;
+      },
+      get stopped() {
+        return stopped;
+      },
+      get lastText() {
+        return lastText;
+      }
+    };
+    this.activeDrafts?.set?.(key, state);
 
     const onTextDelta = async (_delta, fullText) => {
       if (disabled) return;
@@ -8652,7 +9358,9 @@ export class TelegramAIBot {
             chat_id: ctx.chat.id,
             message_thread_id: ctx.message?.message_thread_id,
             draft_id: draftId,
-            rich_message: { markdown: richPreview }
+            rich_message: { markdown: richPreview },
+            can_stop: true,
+            keep_on_stop: true
           });
           sent = true;
           richDraftSent = true;
@@ -8678,7 +9386,9 @@ export class TelegramAIBot {
           chat_id: ctx.chat.id,
           message_thread_id: ctx.message?.message_thread_id,
           draft_id: draftId,
-          text: plainPreview
+          text: plainPreview,
+          can_stop: true,
+          keep_on_stop: true
         });
         sent = true;
         lastText = cleaned;
@@ -8694,13 +9404,46 @@ export class TelegramAIBot {
 
     return {
       onTextDelta,
+      signal: controller.signal,
+      draftId,
+      finalize: () => this.activeDrafts?.delete?.(key),
       get sent() {
         return sent;
+      },
+      get stopped() {
+        return stopped;
+      },
+      get lastText() {
+        return lastText;
       },
       get rich() {
         return richDraftSent;
       }
     };
+  }
+
+  async handleStoppedMessageGeneration(ctx) {
+    const update = ctx.update?.stopped_message_generation || ctx.stoppedMessageGeneration || {};
+    const key = `${update.chat?.id || ctx.chat?.id || ''}:${update.draft_id || ''}`;
+    const draft = this.activeDrafts?.get?.(key);
+    if (!draft) return false;
+    draft.stop?.();
+    draft.controller.abort(new DOMException('Telegram user stopped generation', 'AbortError'));
+    this.activeDrafts.delete(key);
+    if (draft.lastText && typeof ctx.telegram?.callApi === 'function') {
+      try {
+        await ctx.telegram.callApi('sendMessage', {
+          chat_id: update.chat?.id || ctx.chat?.id,
+          text: truncateText(cleanBotOutput(draft.lastText), Math.min(4096, Number(this.config.maxOutputChars) || 4096))
+        });
+      } catch (error) {
+        this.logger?.warn?.('Failed to preserve stopped Telegram draft', {
+          chatId: update.chat?.id || ctx.chat?.id,
+          error: this.formatLogError(error)
+        });
+      }
+    }
+    return true;
   }
 
   async sendAssistantReply(ctx, text, extra = {}, options = {}) {

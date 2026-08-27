@@ -2,6 +2,17 @@ import { truncateText } from '../utils/text.js';
 
 import { createRequestAbort } from '../utils/request-abort.js';
 import { readSseJson } from '../utils/sse.js';
+import { appendBillingCall, summarizeBillingCalls } from './model-billing-policy.js';
+
+export function attachResponseBilling(payload, headers) {
+  if (!payload || typeof payload !== 'object' || ArrayBuffer.isView(payload) || payload instanceof ArrayBuffer) return payload;
+  Object.defineProperty(payload, '_billingCall', {
+    value: appendBillingCall([], payload, headers),
+    enumerable: false,
+    configurable: true
+  });
+  return payload;
+}
 
 function flattenContent(content) {
   if (typeof content === 'string') return content;
@@ -40,6 +51,18 @@ function mergeStreamToolCall(toolCalls, delta = {}, fallbackIndex = 0) {
   toolCalls[index] = current;
 }
 
+function attachBillingToError(error, billingCalls) {
+  if (error && typeof error === 'object') error.billing = summarizeBillingCalls(billingCalls);
+  return error;
+}
+
+function billingBudgetReached(calls, maximumUsd) {
+  const maximum = Number(maximumUsd);
+  if (!Number.isFinite(maximum) || maximum <= 0 || calls.length === 0) return false;
+  const summary = summarizeBillingCalls(calls);
+  return summary.costKnown && Number(summary.actualCostUsd) >= maximum;
+}
+
 export class OpenAICompatibleClient {
   constructor(config, logger) {
     this.config = config;
@@ -72,7 +95,7 @@ export class OpenAICompatibleClient {
 
       const contentType = response.headers.get('content-type') || '';
       if (contentType.includes('application/json')) {
-        return response.json();
+        return attachResponseBilling(await response.json(), response.headers);
       }
       return response.arrayBuffer();
     } finally {
@@ -92,8 +115,10 @@ export class OpenAICompatibleClient {
     const payload = {
       model,
       messages,
-      temperature
+      temperature,
+      max_tokens: Math.max(128, Math.min(16_384, Number(this.config.aiMaxOutputTokens) || 2048))
     };
+    if (this.includeUsageCosts) payload.usage = { include: true };
 
     if (tools.length > 0) {
       payload.tools = tools;
@@ -156,7 +181,7 @@ export class OpenAICompatibleClient {
 
       const contentType = response.headers.get('content-type') || '';
       if (!contentType.includes('text/event-stream')) {
-        return response.json();
+        return attachResponseBilling(await response.json(), response.headers);
       }
 
       let content = '';
@@ -182,7 +207,7 @@ export class OpenAICompatibleClient {
         }
       });
 
-      return {
+      return attachResponseBilling({
         choices: [{
           finish_reason: finishReason,
           message: {
@@ -192,14 +217,15 @@ export class OpenAICompatibleClient {
           }
         }],
         usage
-      };
+      }, response.headers);
     } finally {
       requestAbort.dispose();
     }
   }
 
-  async completeWithTools({ model, messages, tools = [], toolRunner, temperature, signal, requestTimeoutMs, onTextDelta }) {
+  async completeWithTools({ model, messages, tools = [], toolRunner, temperature, signal, requestTimeoutMs, onTextDelta, maxBillingCostUsd = 0 }) {
     const workingMessages = [...messages];
+    const billingCalls = [];
 
     for (let step = 0; step < Math.max(1, this.config.aiMaxToolSteps); step += 1) {
       const response = await this.chatCompletion({
@@ -211,9 +237,10 @@ export class OpenAICompatibleClient {
         requestTimeoutMs,
         onTextDelta
       });
+      if (response?._billingCall) billingCalls.push(response._billingCall);
       const choice = response.choices?.[0];
       if (!choice?.message) {
-        throw new Error('AI provider returned an empty response.');
+        throw attachBillingToError(new Error('AI provider returned an empty response.'), billingCalls);
       }
 
       const assistantMessage = {
@@ -227,18 +254,47 @@ export class OpenAICompatibleClient {
         return {
           text: flattenContent(choice.message.content),
           messages: workingMessages,
-          raw: response
+          raw: response,
+          billing: summarizeBillingCalls(billingCalls)
         };
       }
 
+      if (billingBudgetReached(billingCalls, maxBillingCostUsd)) {
+        const error = new Error('MODEL_BILLING_BUDGET_REACHED');
+        error.code = 'MODEL_BILLING_BUDGET_REACHED';
+        throw attachBillingToError(error, billingCalls);
+      }
+      if (
+        Number(maxBillingCostUsd) > 0 &&
+        billingCalls.some((call) => !Number.isFinite(call.costUsd))
+      ) {
+        const error = new Error('MODEL_COST_UNAVAILABLE_FOR_MULTI_STEP_REQUEST');
+        error.code = 'MODEL_COST_UNAVAILABLE_FOR_MULTI_STEP_REQUEST';
+        throw attachBillingToError(error, billingCalls);
+      }
+
       for (const toolCall of choice.message.tool_calls) {
-        const toolResult = await toolRunner(toolCall);
+        let toolResult;
+        try {
+          toolResult = await toolRunner(toolCall);
+        } catch (error) {
+          throw attachBillingToError(error, billingCalls);
+        }
         workingMessages.push({
           role: 'tool',
           tool_call_id: toolCall.id,
           content: toolResult
         });
       }
+    }
+
+    if (
+      billingBudgetReached(billingCalls, maxBillingCostUsd) ||
+      (Number(maxBillingCostUsd) > 0 && billingCalls.some((call) => !Number.isFinite(call.costUsd)))
+    ) {
+      const error = new Error('MODEL_BILLING_BUDGET_REACHED');
+      error.code = 'MODEL_BILLING_BUDGET_REACHED';
+      throw attachBillingToError(error, billingCalls);
     }
 
     const finalResponse = await this.chatCompletion({
@@ -249,11 +305,13 @@ export class OpenAICompatibleClient {
       requestTimeoutMs,
       onTextDelta
     });
+    if (finalResponse?._billingCall) billingCalls.push(finalResponse._billingCall);
     const finalChoice = finalResponse.choices?.[0]?.message;
     return {
       text: flattenContent(finalChoice?.content),
       messages: [...workingMessages, { role: 'assistant', content: finalChoice?.content ?? '' }],
-      raw: finalResponse
+      raw: finalResponse,
+      billing: summarizeBillingCalls(billingCalls)
     };
   }
 

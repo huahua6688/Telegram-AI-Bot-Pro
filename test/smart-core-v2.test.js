@@ -308,6 +308,8 @@ test('provider fragments use one throttled rich draft and let final model struct
   assert.equal(calls[0].payload.chat_id, 77);
   assert.ok(calls[0].payload.draft_id > 0);
   assert.equal(calls[0].payload.rich_message.markdown, 'Streaming answer');
+  assert.equal(calls[0].payload.can_stop, true);
+  assert.equal(calls[0].payload.keep_on_stop, true);
 
   const final = await TelegramAIBot.prototype.sendAssistantReply.call(
     fakeBot,
@@ -353,7 +355,42 @@ test('rich draft failures fall back to the existing plain Telegram draft', async
   assert.deepEqual(calls.map((item) => item.method), ['sendRichMessageDraft', 'sendMessageDraft']);
   assert.equal(calls[0].payload.rich_message.markdown, '**Streaming answer**');
   assert.equal(calls[1].payload.text, 'Streaming answer');
+  assert.equal(calls[1].payload.can_stop, true);
+  assert.equal(calls[1].payload.keep_on_stop, true);
   assert.equal(warnings.length, 1);
+});
+
+test('Telegram stop-generation updates abort the matching provider request', async () => {
+  const calls = [];
+  const fakeBot = {
+    config: {
+      enableStreamingReplies: true,
+      enableRichMessages: true,
+      streamingEditIntervalMs: 350,
+      maxOutputChars: 4096
+    },
+    logger: logger(),
+    activeDrafts: new Map()
+  };
+  const ctx = {
+    chat: { id: 77, type: 'private' },
+    message: { message_id: 42 },
+    telegram: { async callApi(method, payload) { calls.push({ method, payload }); return true; } }
+  };
+  const streamer = TelegramAIBot.prototype.createAssistantDraftStreamer.call(fakeBot, ctx);
+  assert.equal(streamer.signal.aborted, false);
+
+  await streamer.onTextDelta('Partial ans', 'Partial answer to preserve');
+  const stopped = await TelegramAIBot.prototype.handleStoppedMessageGeneration.call(fakeBot, {
+    update: { stopped_message_generation: { chat: { id: 77 }, draft_id: streamer.draftId } },
+    telegram: ctx.telegram
+  });
+  assert.equal(stopped, true);
+  assert.equal(streamer.stopped, true);
+  assert.equal(streamer.signal.aborted, true);
+  assert.equal(fakeBot.activeDrafts.size, 0);
+  assert.deepEqual(calls.map((item) => item.method), ['sendRichMessageDraft', 'sendMessage']);
+  assert.equal(calls[1].payload.text, 'Partial answer to preserve');
 });
 
 test('short code selected by the model still uses rich rendering without forcing ordinary replies', async () => {

@@ -8,7 +8,9 @@ export function createTelegramBot({
   toolRegistry,
   pluginManager,
   logger,
-  accessControl
+  accessControl,
+  githubService,
+  agentTaskService
 }) {
   return new PlatformModesTelegramAIBot({
     config,
@@ -18,6 +20,8 @@ export function createTelegramBot({
     toolRegistry,
     pluginManager,
     logger,
-    accessControl
+    accessControl,
+    githubService,
+    agentTaskService
   });
 }

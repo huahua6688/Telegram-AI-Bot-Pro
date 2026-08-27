@@ -1,4 +1,4 @@
-import { OpenAICompatibleClient } from './openai-compatible-client.js';
+import { OpenAICompatibleClient, attachResponseBilling } from './openai-compatible-client.js';
 import { UnsupportedClientFeatureError } from './unsupported-client-feature-error.js';
 import { truncateText } from '../utils/text.js';
 import { createRequestAbort } from '../utils/request-abort.js';
@@ -10,6 +10,7 @@ export class OpenAIStyleNativeClient extends OpenAICompatibleClient {
     this.nativeBaseUrl = options.baseUrl.replace(/\/$/, '');
     this.nativeApiKey = options.apiKey;
     this.nativeHeaders = options.headers || {};
+    this.includeUsageCosts = Boolean(options.includeUsageCosts);
     this.capabilities = options.capabilities || {
       chat: true,
       toolCalls: true,
@@ -55,7 +56,7 @@ export class OpenAIStyleNativeClient extends OpenAICompatibleClient {
 
       const contentType = response.headers.get('content-type') || '';
       if (contentType.includes('application/json')) {
-        return response.json();
+        return attachResponseBilling(await response.json(), response.headers);
       }
       return response.arrayBuffer();
     } finally {

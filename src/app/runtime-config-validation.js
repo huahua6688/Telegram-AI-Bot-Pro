@@ -23,6 +23,28 @@ export function getRuntimeConfigErrors(config = {}) {
     errors.push('ADMIN_API_ENABLED=true requires ADMIN_API_TOKEN.');
   }
 
+  if (config.agentEnabled) {
+    if (!(Number(config.billingUsdPerChatCredit) > 0)) {
+      errors.push('AGENT_ENABLED=true requires BILLING_USD_PER_CHAT_CREDIT.');
+    }
+    const workerUrl = String(config.agentWorkerUrl || '');
+    if (!/^https:\/\//i.test(workerUrl) && !/^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/i.test(workerUrl)) {
+      errors.push('AGENT_ENABLED=true requires an HTTPS AGENT_WORKER_URL (localhost HTTP is allowed for development).');
+    }
+    if (String(config.agentWorkerSecret || '').length < 32) {
+      errors.push('AGENT_ENABLED=true requires AGENT_WORKER_SECRET with at least 32 characters.');
+    }
+    if (!/^https:\/\//i.test(String(config.publicBaseUrl || ''))) {
+      errors.push('AGENT_ENABLED=true requires an HTTPS PUBLIC_BASE_URL.');
+    }
+    if (!String(config.githubAppClientId || '') || !String(config.githubAppClientSecret || '')) {
+      errors.push('AGENT_ENABLED=true requires GITHUB_APP_CLIENT_ID and GITHUB_APP_CLIENT_SECRET.');
+    }
+    if (String(config.githubTokenEncryptionKey || '').length < 32) {
+      errors.push('AGENT_ENABLED=true requires GITHUB_TOKEN_ENCRYPTION_KEY (or CHAT_ENCRYPTION_KEY) with at least 32 characters.');
+    }
+  }
+
   const supportBotToken = String(config.supportBotToken || '').trim();
   if (config.supportEnabled && supportBotToken) {
     if (supportBotToken === botToken) {

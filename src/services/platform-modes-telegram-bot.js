@@ -48,7 +48,8 @@ const TELEGRAM_ALLOWED_UPDATES = Object.freeze([
   'chat_join_request',
   'chat_boost',
   'removed_chat_boost',
-  'managed_bot'
+  'managed_bot',
+  'stopped_message_generation'
 ]);
 
 function localText(locale, zh, en) {

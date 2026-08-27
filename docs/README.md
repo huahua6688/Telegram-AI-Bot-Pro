@@ -16,6 +16,10 @@
 
     docs/STARS_PAYMENTS.md
 
+## 付费模型、Agent 与 GitHub
+
+    docs/PAID_AGENT_GITHUB.md
+
 ## 故障排查
 
     docs/TROUBLESHOOTING.md

@@ -1,0 +1,20 @@
+services:
+  agent-worker:
+    build: .
+    restart: unless-stopped
+    environment:
+      PORT: "8080"
+      AGENT_WORKER_SECRET: "replace-with-at-least-32-random-characters"
+      SANDBOX_IMAGE: "node:22-alpine"
+      SANDBOX_GIT_IMAGE: "alpine/git:v2.47.2"
+      SANDBOX_MAX_CONCURRENT_RUNS: "2"
+      WORKSPACE_ROOT: "/workspaces"
+      WORKSPACE_HOST_ROOT: "/var/lib/telegram-agent-worker"
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/telegram-agent-worker:/workspaces
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
