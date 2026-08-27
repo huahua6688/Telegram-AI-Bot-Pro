@@ -6045,7 +6045,8 @@ export class TelegramAIBot {
             '你好，我是你的 AI 助手。',
             '',
             '直接发送文字、图片、语音、文件或链接，并告诉我你想做什么。',
-            '模型、设置、聊天记录和额度都在输入框旁的「控制台」。'
+            '模型、设置、聊天记录和额度都在输入框旁的「控制台」。',
+            '发送 /help 查看帮助。'
           ].join('\n');
       await ctx.reply(text, this.createBottomKeyboard(locale));
       return;
