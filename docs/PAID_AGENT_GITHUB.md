@@ -5,13 +5,13 @@
 系统将 Provider/模型分为 `free` 和 `paid`。默认将承载 Zeabur AI Hub 的 `openai-compatible` 整个平台设为付费；其他已经支持的 Provider 可继续使用每日免费次数，但平台目录明确标记为付费的模型仍然优先按付费处理。付费和价格未知的模型一律只能使用购买余额。
 
 ```env
-BILLING_USD_PER_CHAT_CREDIT=0.01
+BILLING_USD_PER_CHAT_CREDIT=0.10
 BILLING_USD_PER_VISION_CREDIT=0.05
 BILLING_USD_PER_IMAGE_CREDIT=0.10
 BILLING_USD_PER_TTS_CREDIT=0.02
 BILLING_USD_PER_LIVE_VOICE_CREDIT=0.02
 BILLING_USD_PER_VIDEO_CREDIT=0.50
-BILLING_COST_MARKUP=1.25
+BILLING_COST_MARKUP=1.50
 BILLING_MAX_REQUEST_USD=2
 AI_MAX_OUTPUT_TOKENS=2048
 FREE_MODEL_PATTERNS=:free,gemini-2.5-flash-lite
@@ -20,7 +20,7 @@ FREE_PROVIDER_PATTERNS=gemini,gemini-live,groq,openrouter,github-models,huggingf
 PAID_PROVIDER_PATTERNS=openai-compatible
 ```
 
-上面的金额只是换算示例，不是建议售价。应根据 Stars 实收、退款、平台费用和目标利润重新计算。某能力的换算值留空时，该能力的付费/未知成本模型会安全关闭。
+聊天额度与三档套餐采用保守起步值：300 Stars/30 聊天额度、800 Stars/90 聊天额度、2000 Stars/240 聊天额度。按每个聊天额度 0.10 美元、1.5 倍成本加成计算，一次 1 美元的模型请求约扣 15 个额度。该方案按每 Star 仅 0.01 美元的保守奖励估值留出空间；仍应定期对照 Telegram 所有者账户显示的实时 `usd_rate`、退款和实际模型账单调整。某能力的换算值留空时，该能力的付费/未知成本模型会安全关闭。
 
 请求开始前会冻结 `BILLING_MAX_REQUEST_USD` 对应的额度，并用 `AI_MAX_OUTPUT_TOKENS` 限制单次兼容接口的最大输出。Zeabur AI Hub 的 `x-litellm-response-cost` 和 OpenRouter 的 `usage.cost` 会被归一化；成功后按真实成本乘 `BILLING_COST_MARKUP` 结算，未使用额度自动退回。没有可靠费用字段的平台按冻结上限扣费，避免亏损。所有调用写入 `provider_usage_costs`。单个已经发出的 Provider 请求无法在费用达到美元阈值的瞬间被切断，因此上线前仍应按最昂贵模型的最大输入、最大输出成本设置冻结上限和 Stars 售价。
 
