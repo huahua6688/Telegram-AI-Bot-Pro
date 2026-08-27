@@ -815,6 +815,157 @@ test('message labels show identity only to level-one administrators', async () =
   );
 });
 
+test('support bot ignores ordinary group messages before rate limiting or ticket creation', async () => {
+  const fixture = createFixture();
+  await fixture.bot.init();
+  const calls = [];
+  const replies = [];
+
+  await fixture.fake.handlers.message({
+    chat: { id: -10001, type: 'supergroup' },
+    from: { id: 41, first_name: 'Group user' },
+    message: { message_id: 1, text: '客服在吗' },
+    telegram: { async callApi(method, payload) { calls.push({ method, payload }); } },
+    reply: async (...args) => replies.push(args)
+  });
+
+  assert.equal(calls.length, 0);
+  assert.equal(replies.length, 0);
+  assert.equal(fixture.bot.tickets.size, 0);
+  assert.equal(fixture.bot.rateLimitHits.size, 0);
+});
+
+test('@support bot and /support in groups return only a private-chat entry', async () => {
+  const fixture = createFixture();
+  await fixture.bot.init();
+  const calls = [];
+  const replies = [];
+  const telegram = {
+    async callApi(method, payload) {
+      calls.push({ method, payload });
+      return { ephemeral_message_id: calls.length };
+    }
+  };
+  const base = {
+    chat: { id: -10002, type: 'supergroup' },
+    telegram,
+    reply: async (...args) => replies.push(args)
+  };
+
+  await fixture.fake.handlers.message({
+    ...base,
+    from: { id: 42, first_name: 'Alice' },
+    message: { message_id: 2, text: '@SupportTestBot' }
+  });
+  await fixture.fake.handlers.message({
+    ...base,
+    from: { id: 43, first_name: 'Bob' },
+    message: { message_id: 3, text: '/support@SupportTestBot' }
+  });
+  await fixture.fake.handlers.message({
+    ...base,
+    from: { id: 44, first_name: 'Other bot user' },
+    message: { message_id: 4, text: '/support@DifferentBot' }
+  });
+
+  assert.equal(replies.length, 0);
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls.map((call) => call.method), ['sendMessage', 'sendMessage']);
+  assert.deepEqual(calls.map((call) => call.payload.ephemeral_message_parameters.receiver_user_id), [42, 43]);
+  for (const call of calls) {
+    const button = call.payload.reply_markup.inline_keyboard[0][0];
+    assert.equal(button.text, '💬 联系客服');
+    assert.equal(button.url, 'https://t.me/SupportTestBot?start=support');
+    assert.doesNotMatch(JSON.stringify(call.payload), /工单|套餐|余额|Stars/);
+  }
+  assert.equal(fixture.bot.tickets.size, 0);
+  assert.equal(fixture.bot.rateLimitHits.size, 0);
+});
+
+test('support bot ignores group media and all channel updates', async () => {
+  const fixture = createFixture();
+  await fixture.bot.init();
+  const calls = [];
+  const replies = [];
+  const telegram = { async callApi(method, payload) { calls.push({ method, payload }); } };
+  const mediaMessages = [
+    { message_id: 10, photo: [{ file_id: 'photo' }], caption: '@SupportTestBot' },
+    { message_id: 11, voice: { file_id: 'voice' } },
+    { message_id: 12, document: { file_id: 'document', file_name: 'private.pdf' } }
+  ];
+  for (const message of mediaMessages) {
+    await fixture.fake.handlers.message({
+      chat: { id: -10003, type: 'group' },
+      from: { id: 44 },
+      message,
+      telegram,
+      reply: async (...args) => replies.push(args)
+    });
+  }
+  await fixture.fake.handlers.message({
+    chat: { id: -10004, type: 'channel' },
+    from: { id: 45 },
+    message: { message_id: 13, text: '/support@SupportTestBot' },
+    telegram,
+    reply: async (...args) => replies.push(args)
+  });
+
+  assert.equal(calls.length, 0);
+  assert.equal(replies.length, 0);
+  assert.equal(fixture.bot.tickets.size, 0);
+  assert.equal(fixture.bot.rateLimitHits.size, 0);
+});
+
+test('private support creates isolated tickets while the backend rejects group calls', async () => {
+  const fixture = createFixture();
+  await fixture.bot.init();
+  const telegram = createTelegram();
+
+  const blocked = await fixture.bot.handleUserRequest({
+    chat: { id: -10005, type: 'group' },
+    from: { id: 50 },
+    message: { message_id: 20, text: 'must not create a ticket' },
+    telegram,
+    reply: async () => assert.fail('group backend guard must not reply')
+  });
+  assert.equal(blocked, false);
+  assert.equal(fixture.bot.rateLimitHits.size, 0);
+
+  for (const userId of [51, 52]) {
+    await fixture.fake.handlers.message({
+      chat: { id: userId, type: 'private' },
+      from: { id: userId, first_name: `User ${userId}`, language_code: 'zh-CN' },
+      message: { message_id: userId, text: `private issue ${userId}` },
+      telegram,
+      reply: async () => undefined
+    });
+  }
+
+  const first = fixture.bot.getActiveTicket('51');
+  const second = fixture.bot.getActiveTicket('52');
+  assert.ok(first);
+  assert.ok(second);
+  assert.notEqual(first.ticketId, second.ticketId);
+  assert.equal(first.userId, '51');
+  assert.equal(second.userId, '52');
+  assert.equal(first.messageRefs[0].chatId, '51');
+  assert.equal(second.messageRefs[0].chatId, '52');
+});
+
+test('private support prompts use force_reply without changing the greeting', async () => {
+  const fixture = createFixture();
+  await fixture.bot.init();
+  const replies = [];
+  await fixture.fake.handlers.start({
+    chat: { id: 61, type: 'private' },
+    from: { id: 61, language_code: 'zh-CN' },
+    reply: async (text, extra) => replies.push({ text, extra })
+  });
+  assert.equal(replies[0].text, '你好，请问有什么可以帮你的？');
+  assert.equal(replies[0].extra.reply_markup.force_reply, true);
+  assert.match(replies[0].extra.reply_markup.input_field_placeholder, /描述/);
+});
+
 test('legacy parser helpers remain compatible without being used for authorization', () => {
   assert.equal(supportBotInternals.parseSupportTicketUserId({ text: '[support-ticket:user=42]' }), '42');
   assert.match(supportBotInternals.buildSupportTicketText({ user: { id: 42 }, message: { text: 'x' }, now: new Date(0) }), /user=42/);
