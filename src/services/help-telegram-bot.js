@@ -11,8 +11,7 @@ function buildHiddenFeatureHelp(locale = 'zh') {
       '',
       'Send text, photos, voice, files, or links and describe what you need.',
       'I can chat, search, translate, summarize, understand media, and help with code or errors.',
-      'Open Console for models, settings, history, and credits. Use /whoami to view your Telegram ID.',
-      '/help'
+      'Open Console for models, settings, history, and credits. Use /whoami to view your Telegram ID.'
     ].join('\n');
   }
 
@@ -21,8 +20,7 @@ function buildHiddenFeatureHelp(locale = 'zh') {
     '',
     '直接发送文字、图片、语音、文件或链接，并说明你想做什么。',
     '我可以聊天、搜索、翻译、总结、识别媒体，以及协助代码和报错。',
-    '模型、设置、记录和额度请打开「控制台」；查看 Telegram ID 使用 /whoami。',
-    '/help'
+    '模型、设置、记录和额度请打开「控制台」；查看 Telegram ID 使用 /whoami。'
   ].join('\n');
 }
 
