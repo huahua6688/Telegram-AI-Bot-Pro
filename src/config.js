@@ -49,6 +49,11 @@ function parseUnitInterval(value, defaultValue) {
   return Math.min(1, Math.max(0, parsed));
 }
 
+function parsePositiveNumber(value, defaultValue = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : defaultValue;
+}
+
 function parseList(value) {
   return (value ?? '')
     .split(',')
@@ -373,6 +378,7 @@ export function loadConfig() {
     modelDiscoveryEnabled: parseBoolean(process.env.MODEL_DISCOVERY_ENABLED, true),
     systemPrompt: process.env.AI_SYSTEM_PROMPT || personaPresets.default,
     temperature: Number.parseFloat(process.env.AI_TEMPERATURE || '0.6') || 0.6,
+    aiMaxOutputTokens: Math.max(128, Math.min(16_384, parseInteger(process.env.AI_MAX_OUTPUT_TOKENS, 2048))),
     transcriptionProvider: normalizeProvider(process.env.TRANSCRIPTION_PROVIDER || 'gemini-live', 'gemini-live'),
     transcriptionModel: process.env.TRANSCRIPTION_MODEL || 'gpt-4o-mini-transcribe',
     ttsProvider: normalizeProvider(process.env.TTS_PROVIDER || 'gemini-live', 'gemini-live'),
@@ -467,6 +473,35 @@ export function loadConfig() {
     starsRefundLeaseSeconds: Math.max(30, parseInteger(process.env.STARS_REFUND_LEASE_SECONDS, 300)),
     starsTermsText: process.env.STARS_TERMS_TEXT || '',
     starsSupportText: process.env.STARS_SUPPORT_TEXT || '',
+    billingUsdPerChatCredit: parsePositiveNumber(process.env.BILLING_USD_PER_CHAT_CREDIT, 0),
+    billingUsdPerCredit: Object.freeze({
+      chat: parsePositiveNumber(process.env.BILLING_USD_PER_CHAT_CREDIT, 0),
+      vision: parsePositiveNumber(process.env.BILLING_USD_PER_VISION_CREDIT, 0),
+      image_generation: parsePositiveNumber(process.env.BILLING_USD_PER_IMAGE_CREDIT, 0),
+      tts: parsePositiveNumber(process.env.BILLING_USD_PER_TTS_CREDIT, 0),
+      live_voice: parsePositiveNumber(process.env.BILLING_USD_PER_LIVE_VOICE_CREDIT, 0),
+      video: parsePositiveNumber(process.env.BILLING_USD_PER_VIDEO_CREDIT, 0)
+    }),
+    billingCostMarkup: Math.max(1, parsePositiveNumber(process.env.BILLING_COST_MARKUP, 1.25)),
+    billingMaxRequestUsd: parsePositiveNumber(process.env.BILLING_MAX_REQUEST_USD, 2),
+    freeProviderPatterns: parseList(
+      process.env.FREE_PROVIDER_PATTERNS ||
+      'gemini,gemini-live,groq,openrouter,github-models,huggingface,mistral,openai,anthropic,deepseek,qwen,grok,glm,doubao'
+    ),
+    paidProviderPatterns: parseList(process.env.PAID_PROVIDER_PATTERNS || 'openai-compatible'),
+    freeModelPatterns: parseList(process.env.FREE_MODEL_PATTERNS || ':free,gemini-2.5-flash-lite'),
+    paidModelPatterns: parseList(process.env.PAID_MODEL_PATTERNS),
+    agentEnabled: parseBoolean(process.env.AGENT_ENABLED, false),
+    agentMaxTaskUsd: parsePositiveNumber(process.env.AGENT_MAX_TASK_USD, 5),
+    agentMaxRuntimeMinutes: Math.max(1, Math.min(24 * 60, parseInteger(process.env.AGENT_MAX_RUNTIME_MINUTES, 60))),
+    agentWorkerUrl: String(process.env.AGENT_WORKER_URL || '').replace(/\/$/, ''),
+    agentWorkerSecret: process.env.AGENT_WORKER_SECRET || '',
+    publicBaseUrl: String(process.env.PUBLIC_BASE_URL || '').replace(/\/$/, ''),
+    githubAppClientId: process.env.GITHUB_APP_CLIENT_ID || '',
+    githubAppClientSecret: process.env.GITHUB_APP_CLIENT_SECRET || '',
+    githubAppSlug: process.env.GITHUB_APP_SLUG || '',
+    githubAppCallbackPath: process.env.GITHUB_APP_CALLBACK_PATH || '/auth/github/callback',
+    githubTokenEncryptionKey: process.env.GITHUB_TOKEN_ENCRYPTION_KEY || process.env.CHAT_ENCRYPTION_KEY || '',
     healthPort: parseInteger(process.env.HEALTH_PORT || process.env.PORT, 3000),
     adminApiPort: parseInteger(process.env.ADMIN_API_PORT, 3001),
     adminApiPrefix: process.env.ADMIN_API_PREFIX || '/admin/api/v1',

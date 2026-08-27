@@ -4324,14 +4324,34 @@ async function handleMiniAppModelSync(req, res, context) {
   }
 }
 
-export function startHealthServer({ port, db, config, logger, providerManager = null, readiness = null }) {
+export function startHealthServer({ port, db, config, logger, providerManager = null, githubService = null, readiness = null }) {
   const effectiveReadiness = readiness || { ready: true, phase: 'ready' };
-  const context = { db, config, logger, providerManager, readiness: effectiveReadiness };
+  const context = { db, config, logger, providerManager, githubService, readiness: effectiveReadiness };
 
   const server = http.createServer((req, res) => {
     void (async () => {
       const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
       const pathname = url.pathname;
+
+      if (pathname === config.githubAppCallbackPath) {
+        if (req.method !== 'GET') {
+          res.setHeader('Allow', 'GET');
+          sendJson(res, 405, { ok: false, error: 'METHOD_NOT_ALLOWED' });
+          return;
+        }
+        try {
+          const code = url.searchParams.get('code') || '';
+          const state = url.searchParams.get('state') || '';
+          if (!code || !state) throw new Error('GitHub did not return an authorization code.');
+          const connection = await githubService?.completeAuthorization({ code, state });
+          if (!connection) throw new Error('GitHub authorization is not configured.');
+          sendHtml(res, 200, '<!doctype html><meta charset="utf-8"><title>GitHub connected</title><main style="font-family:system-ui;max-width:560px;margin:64px auto;padding:24px"><h1>GitHub 已连接</h1><p>可以关闭此页面并返回 Telegram。</p></main>');
+        } catch (error) {
+          logger.warn('GitHub OAuth callback failed', { error: error.message });
+          sendHtml(res, 400, '<!doctype html><meta charset="utf-8"><title>GitHub connection failed</title><main style="font-family:system-ui;max-width:560px;margin:64px auto;padding:24px"><h1>GitHub 连接失败</h1><p>授权已过期或配置不完整，请返回 Telegram 重试。</p></main>');
+        }
+        return;
+      }
 
       if (pathname === '/app' || pathname === '/app/') {
         sendHtml(res, 200, MINI_APP_HTML);

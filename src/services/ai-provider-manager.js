@@ -5,6 +5,7 @@ import {
   listAIProviderDefinitions
 } from './ai-provider-registry.js';
 import { normalizeDiscoveredModels } from './ai-model-catalog.js';
+import { classifyModelBilling, summarizeBillingCalls } from './model-billing-policy.js';
 
 export const PROVIDER_LABELS = Object.freeze({
   auto: 'Auto',
@@ -196,6 +197,11 @@ export class AIProviderManager {
 
   getModelCatalog(providerId = '') {
     return [...(this.discoveredModels.get(normalizeProviderId(providerId)) || [])];
+  }
+
+  getModelBillingTier(providerId = '', model = '') {
+    const catalogEntry = this.getModelCatalog(providerId).find((item) => item.id === model) || null;
+    return classifyModelBilling({ providerId, model, catalogEntry, config: this.config });
   }
 
   getModelsForCapability(providerId = '', capability = 'chat') {
@@ -557,7 +563,8 @@ export class AIProviderManager {
     ignoreCooldown = false,
     maxRetries,
     request = {},
-    scope = 'chat'
+    scope = 'chat',
+    billingAccess = 'paid'
   } = {}) {
     const providerOrder = this.buildProviderOrder({ capability, preferredProvider, fallbackEnabled });
     const normalizedPreferredProvider = normalizeProviderId(preferredProvider);
@@ -578,8 +585,17 @@ export class AIProviderManager {
         )[0] || ''
       : '';
     const attempted = [];
+    const billingCalls = [];
     let lastError = null;
 
+    const maximumBillingCost = Number(request.maxBillingCostUsd);
+    const hasReachedBillingLimit = () => {
+      if (!Number.isFinite(maximumBillingCost) || maximumBillingCost <= 0 || billingCalls.length === 0) return false;
+      const summary = summarizeBillingCalls(billingCalls);
+      return !summary.costKnown || Number(summary.actualCostUsd) >= maximumBillingCost;
+    };
+
+    providerLoop:
     for (const providerId of providerOrder) {
       if (!this.isEnabled(providerId)) {
         attempted.push({ providerId, status: 'disabled' });
@@ -617,6 +633,10 @@ export class AIProviderManager {
 
       modelLoop:
       for (const model of modelCandidates) {
+        if (billingAccess === 'free' && this.getModelBillingTier(providerId, model) !== 'free') {
+          attempted.push({ providerId, model, status: 'paid_model_required' });
+          continue;
+        }
         if (!ignoreCooldown && this.getModelCooldown(providerId, capability, model)) {
           attempted.push({ providerId, model, status: 'model_cooldown' });
           continue;
@@ -630,9 +650,11 @@ export class AIProviderManager {
               ...providerRequest,
               model
             });
+            if (Array.isArray(result?.billing?.calls)) billingCalls.push(...result.billing.calls);
             if (!String(result?.text || '').trim()) {
               throw new Error('AI provider returned an empty response.');
             }
+            if (billingCalls.length > 0) result.billing = summarizeBillingCalls(billingCalls);
             this.markSuccess(providerId, capability);
             this.markModelSuccess(providerId, capability, model);
             return {
@@ -649,12 +671,17 @@ export class AIProviderManager {
               attempted
             };
           } catch (error) {
+            if (Array.isArray(error?.billing?.calls)) billingCalls.push(...error.billing.calls);
             if (request.signal?.aborted) {
               throw error;
             }
             lastError = error;
             const errorType = classifyProviderError(error);
             attempted.push({ providerId, model, attempt, status: errorType, message: error.message });
+            if (hasReachedBillingLimit()) {
+              attempted.push({ providerId, model, status: 'billing_budget_reached' });
+              break providerLoop;
+            }
             const deadlineTimeout = errorType === 'timeout' && request.suppressTimeoutCooldown;
             const providerWideFailure = isProviderWideFailure(errorType, error);
             const retryable = !providerWideFailure && !deadlineTimeout &&
@@ -705,6 +732,7 @@ export class AIProviderManager {
     wrapped.code = onlySetupProblems ? 'NO_USABLE_AI_PROVIDER' : 'AI_PROVIDERS_FAILED';
     wrapped.cause = lastError;
     wrapped.attemptedProviders = attempted;
+    if (billingCalls.length > 0) wrapped.billing = summarizeBillingCalls(billingCalls);
     throw wrapped;
   }
 }

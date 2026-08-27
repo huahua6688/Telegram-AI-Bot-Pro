@@ -23,7 +23,9 @@ import {
 // v8: Single-owner leases for Telegram Stars refund attempts
 // v9: Per-user news region, language, and time-zone preferences
 // v10: Admin-console lookup and pagination indexes for larger deployments
-const CURRENT_SCHEMA_VERSION = 10;
+// v11: Metered AI costs, durable agent tasks, GitHub App connections, and approvals
+// v12: Refreshable GitHub App user access tokens
+const CURRENT_SCHEMA_VERSION = 12;
 
 export const BILLING_CREDIT_TYPES = Object.freeze([
   'chat',
@@ -467,6 +469,12 @@ export class BotDatabase {
       }
       if (version === 10) {
         this.applySchemaV10();
+      }
+      if (version === 11) {
+        this.applySchemaV11();
+      }
+      if (version === 12) {
+        this.applySchemaV12();
       }
       this.setMeta('schemaVersion', String(version));
     }
@@ -1445,6 +1453,112 @@ export class BotDatabase {
     this.db.prepare('DELETE FROM sessions WHERE id = ?').run(String(sessionId));
     this.db.prepare('DELETE FROM conversations WHERE session_id = ?').run(String(sessionId));
     await this.write();
+  }
+
+  applySchemaV11() {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS provider_usage_costs (
+        id TEXT PRIMARY KEY,
+        usage_record_id TEXT,
+        user_id TEXT NOT NULL,
+        task_id TEXT NOT NULL DEFAULT '',
+        provider_id TEXT NOT NULL,
+        model_id TEXT NOT NULL,
+        provider_request_id TEXT NOT NULL DEFAULT '',
+        cost_usd_micros INTEGER CHECK(cost_usd_micros IS NULL OR cost_usd_micros >= 0),
+        billed_credits INTEGER NOT NULL CHECK(billed_credits >= 0),
+        prompt_tokens INTEGER NOT NULL DEFAULT 0,
+        completion_tokens INTEGER NOT NULL DEFAULT 0,
+        total_tokens INTEGER NOT NULL DEFAULT 0,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(usage_record_id) REFERENCES usage_records(id) ON DELETE SET NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE RESTRICT
+      );
+
+      CREATE TABLE IF NOT EXISTS agent_tasks (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        chat_id TEXT NOT NULL DEFAULT '',
+        prompt TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'queued'
+          CHECK(status IN ('queued', 'running', 'waiting_approval', 'paused', 'succeeded', 'failed', 'cancelled')),
+        provider_id TEXT NOT NULL DEFAULT '',
+        model_id TEXT NOT NULL DEFAULT '',
+        repository TEXT NOT NULL DEFAULT '',
+        branch TEXT NOT NULL DEFAULT '',
+        reservation_id TEXT,
+        result_json TEXT NOT NULL DEFAULT '{}',
+        error TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        started_at TEXT NOT NULL DEFAULT '',
+        finished_at TEXT NOT NULL DEFAULT '',
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE RESTRICT,
+        FOREIGN KEY(reservation_id) REFERENCES usage_records(id) ON DELETE SET NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS agent_task_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id TEXT NOT NULL,
+        event_type TEXT NOT NULL,
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS github_connections (
+        user_id TEXT PRIMARY KEY,
+        github_user_id TEXT NOT NULL DEFAULT '',
+        github_login TEXT NOT NULL DEFAULT '',
+        token_encrypted TEXT NOT NULL,
+        refresh_token_encrypted TEXT NOT NULL DEFAULT '',
+        scope TEXT NOT NULL DEFAULT '',
+        expires_at TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS oauth_states (
+        state_hash TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        provider TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        consumed_at TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS tool_approvals (
+        id TEXT PRIMARY KEY,
+        task_id TEXT NOT NULL,
+        user_id TEXT NOT NULL,
+        action TEXT NOT NULL,
+        payload_json TEXT NOT NULL DEFAULT '{}',
+        status TEXT NOT NULL DEFAULT 'pending'
+          CHECK(status IN ('pending', 'approved', 'rejected', 'expired')),
+        expires_at TEXT NOT NULL,
+        decided_at TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(task_id) REFERENCES agent_tasks(id) ON DELETE CASCADE,
+        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE RESTRICT
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_provider_costs_user_created ON provider_usage_costs(user_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_provider_costs_task ON provider_usage_costs(task_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_agent_tasks_user_created ON agent_tasks(user_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_agent_tasks_status_updated ON agent_tasks(status, updated_at);
+      CREATE INDEX IF NOT EXISTS idx_agent_events_task ON agent_task_events(task_id, id);
+      CREATE INDEX IF NOT EXISTS idx_tool_approvals_task_status ON tool_approvals(task_id, status);
+    `);
+  }
+
+  applySchemaV12() {
+    const columns = new Set(this.db.prepare('PRAGMA table_info(github_connections)').all().map((column) => column.name));
+    if (!columns.has('refresh_token_encrypted')) {
+      this.db.exec("ALTER TABLE github_connections ADD COLUMN refresh_token_encrypted TEXT NOT NULL DEFAULT ''");
+    }
   }
 
   applySchemaV10() {
@@ -3293,7 +3407,8 @@ export class BotDatabase {
     isAdmin = false,
     usageDate = new Date().toISOString().slice(0, 10),
     metadata = {},
-    zeroFreeQuotaMeansUnlimited = false
+    zeroFreeQuotaMeansUnlimited = false,
+    paidOnly = false
   } = {}) {
     const normalizedUserId = String(userId || '').trim();
     const normalizedType = normalizeBillingCreditType(creditType);
@@ -3350,7 +3465,7 @@ export class BotDatabase {
       const timestamp = now();
       let freeQuota = normalizedFreeQuota;
       let unlimitedFree = Boolean(zeroFreeQuotaMeansUnlimited && freeQuota === 0);
-      if (normalizedType === 'chat') {
+      if (normalizedType === 'chat' && !paidOnly) {
         const quota = this.getUserDailyQuota(normalizedUserId, normalizedFreeQuota);
         if (quota?.dailyQuotaOverride != null) {
           freeQuota = quota.dailyQuotaOverride;
@@ -3359,7 +3474,7 @@ export class BotDatabase {
       }
 
       const daily = this.getDailyCreditUsage(normalizedUserId, normalizedType, normalizedDate);
-      const canUseDailyFree = unlimitedFree || (freeQuota > 0 && daily.used + normalizedUnits <= freeQuota);
+      const canUseDailyFree = !paidOnly && (unlimitedFree || (freeQuota > 0 && daily.used + normalizedUnits <= freeQuota));
       let source = '';
       let balanceAfter = balanceState.balance;
       let freeRemaining = unlimitedFree ? Infinity : Math.max(0, freeQuota - daily.used);
@@ -3538,14 +3653,27 @@ export class BotDatabase {
     const cutoff = new Date(Date.now() - safeAgeMs).toISOString();
     const stale = this.db
       .prepare(
-        `SELECT id FROM usage_records
-         WHERE status = 'reserved' AND updated_at <= ?
-         ORDER BY updated_at ASC
+        `SELECT u.id, a.id AS agent_task_id FROM usage_records u
+         LEFT JOIN agent_tasks a ON a.reservation_id = u.id
+         WHERE u.status = 'reserved' AND u.updated_at <= ?
+           AND (
+             a.id IS NULL
+             OR a.status NOT IN ('queued', 'running', 'waiting_approval')
+             OR (a.status IN ('queued', 'running') AND a.updated_at <= ?)
+             OR (a.status = 'waiting_approval' AND NOT EXISTS (
+               SELECT 1 FROM tool_approvals p
+               WHERE p.task_id = a.id AND p.status = 'pending' AND p.expires_at > ?
+             ))
+           )
+         ORDER BY u.updated_at ASC
          LIMIT ?`
       )
-      .all(cutoff, safeLimit);
+      .all(cutoff, cutoff, new Date().toISOString(), safeLimit);
     let refunded = 0;
     for (const row of stale) {
+      if (row.agent_task_id) {
+        this.updateAgentTask(row.agent_task_id, { status: 'cancelled', error: 'Task reservation expired.' });
+      }
       if (this.refundUsage(row.id).refunded) refunded += 1;
     }
     return { scanned: stale.length, refunded, cutoff };
@@ -4105,6 +4233,239 @@ export class BotDatabase {
 
     this.setMeta('updatedAt', timestamp);
     return result.changes || 0;
+  }
+
+  settleMeteredUsage(idOrRequestKey, {
+    billedCredits,
+    providerId = '',
+    modelId = '',
+    taskId = '',
+    costUsd = null,
+    promptTokens = 0,
+    completionTokens = 0,
+    totalTokens = 0,
+    providerRequestId = '',
+    metadata = {}
+  } = {}) {
+    const identifier = String(idOrRequestKey || '').trim();
+    const requestedCredits = Math.max(1, Math.trunc(Number(billedCredits) || 1));
+    return this.runImmediateTransaction(() => {
+      const record = this.getUsageRecord(identifier);
+      if (!record) return { settled: false, reason: 'USAGE_NOT_FOUND', record: null };
+      if (record.status === 'consumed') return { settled: false, duplicate: true, reason: 'USAGE_ALREADY_COMMITTED', record };
+      if (record.status === 'refunded') return { settled: false, reason: 'USAGE_ALREADY_REFUNDED', record };
+      if (requestedCredits > record.units) {
+        return { settled: false, reason: 'ACTUAL_COST_EXCEEDS_RESERVATION', record };
+      }
+
+      const timestamp = now();
+      const refundCredits = record.source === 'paid' ? record.units - requestedCredits : 0;
+      let finalBalance = this.getCreditBalance(record.userId, record.creditType).balance;
+      if (refundCredits > 0) {
+        finalBalance += refundCredits;
+        this.db.prepare(
+          `INSERT INTO user_credit_balances(user_id, credit_type, balance, updated_at)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(user_id, credit_type) DO UPDATE SET
+             balance = user_credit_balances.balance + excluded.balance,
+             updated_at = excluded.updated_at`
+        ).run(record.userId, record.creditType, refundCredits, timestamp);
+      }
+
+      const mergedMetadata = { ...(record.metadata || {}), ...parseJsonObject(metadata) };
+      this.db.prepare(
+        `UPDATE usage_records SET units = ?, status = 'consumed', balance_after = ?, metadata_json = ?, updated_at = ?
+         WHERE id = ? AND status = 'reserved'`
+      ).run(requestedCredits, finalBalance, JSON.stringify(mergedMetadata), timestamp, record.id);
+
+      const numericCost = Number(costUsd);
+      const costMicros = Number.isFinite(numericCost) && numericCost >= 0 ? Math.round(numericCost * 1_000_000) : null;
+      this.db.prepare(
+        `INSERT INTO provider_usage_costs(
+           id, usage_record_id, user_id, task_id, provider_id, model_id, provider_request_id,
+           cost_usd_micros, billed_credits, prompt_tokens, completion_tokens, total_tokens,
+           metadata_json, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      ).run(
+        randomUUID(), record.id, record.userId, String(taskId || ''), String(providerId || ''),
+        String(modelId || ''), String(providerRequestId || ''), costMicros, requestedCredits,
+        Math.max(0, Math.trunc(Number(promptTokens) || 0)),
+        Math.max(0, Math.trunc(Number(completionTokens) || 0)),
+        Math.max(0, Math.trunc(Number(totalTokens) || 0)), JSON.stringify(parseJsonObject(metadata)), timestamp
+      );
+      this.setMeta('updatedAt', timestamp);
+      return {
+        settled: true,
+        refundedCredits: refundCredits,
+        billedCredits: requestedCredits,
+        costUsd: costMicros == null ? null : costMicros / 1_000_000,
+        record: this.getUsageRecord(record.id)
+      };
+    });
+  }
+
+  listProviderUsageCosts({ userId = '', taskId = '', limit = 50 } = {}) {
+    const filters = [];
+    const args = [];
+    if (userId) { filters.push('user_id = ?'); args.push(String(userId)); }
+    if (taskId) { filters.push('task_id = ?'); args.push(String(taskId)); }
+    const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+    return this.db.prepare(
+      `SELECT * FROM provider_usage_costs ${where} ORDER BY created_at DESC LIMIT ?`
+    ).all(...args, Math.max(1, Math.min(500, Math.trunc(Number(limit) || 50)))).map((row) => ({
+      id: row.id,
+      usageRecordId: row.usage_record_id || '',
+      userId: row.user_id,
+      taskId: row.task_id || '',
+      providerId: row.provider_id,
+      modelId: row.model_id,
+      providerRequestId: row.provider_request_id || '',
+      costUsd: row.cost_usd_micros == null ? null : row.cost_usd_micros / 1_000_000,
+      billedCredits: row.billed_credits,
+      promptTokens: row.prompt_tokens,
+      completionTokens: row.completion_tokens,
+      totalTokens: row.total_tokens,
+      metadata: parseJsonObject(row.metadata_json),
+      createdAt: row.created_at
+    }));
+  }
+
+  createAgentTask({ userId, chatId = '', prompt, providerId = '', modelId = '', repository = '', branch = '', reservationId = '' }) {
+    const id = randomUUID();
+    const timestamp = now();
+    this.db.prepare(
+      `INSERT INTO agent_tasks(id, user_id, chat_id, prompt, provider_id, model_id, repository, branch, reservation_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(id, String(userId), String(chatId), String(prompt), String(providerId), String(modelId), String(repository), String(branch), reservationId || null, timestamp, timestamp);
+    this.addAgentTaskEvent(id, 'queued', {});
+    return this.getAgentTask(id);
+  }
+
+  getAgentTask(taskId) {
+    const row = this.db.prepare('SELECT * FROM agent_tasks WHERE id = ?').get(String(taskId));
+    if (!row) return null;
+    return {
+      id: row.id, userId: row.user_id, chatId: row.chat_id, prompt: row.prompt, status: row.status,
+      providerId: row.provider_id, modelId: row.model_id, repository: row.repository, branch: row.branch,
+      reservationId: row.reservation_id || '', result: parseJsonObject(row.result_json), error: row.error,
+      createdAt: row.created_at, startedAt: row.started_at, finishedAt: row.finished_at, updatedAt: row.updated_at
+    };
+  }
+
+  listAgentTasks({ userId = '', statuses = [], limit = 20 } = {}) {
+    const filters = [];
+    const args = [];
+    if (userId) {
+      filters.push('user_id = ?');
+      args.push(String(userId));
+    }
+    const normalizedStatuses = (statuses || []).map(String).filter(Boolean);
+    if (normalizedStatuses.length > 0) {
+      filters.push(`status IN (${normalizedStatuses.map(() => '?').join(',')})`);
+      args.push(...normalizedStatuses);
+    }
+    const where = filters.length > 0 ? `WHERE ${filters.join(' AND ')}` : '';
+    return this.db.prepare(
+      `SELECT id FROM agent_tasks ${where} ORDER BY created_at DESC LIMIT ?`
+    ).all(...args, Math.max(1, Math.min(100, Math.trunc(Number(limit) || 20))))
+      .map((row) => this.getAgentTask(row.id));
+  }
+
+  updateAgentTask(taskId, patch = {}) {
+    const current = this.getAgentTask(taskId);
+    if (!current) return null;
+    const status = String(patch.status || current.status);
+    const timestamp = now();
+    const startedAt = patch.startedAt ?? (status === 'running' && !current.startedAt ? timestamp : current.startedAt);
+    const finishedAt = patch.finishedAt ?? (['succeeded', 'failed', 'cancelled'].includes(status) ? timestamp : current.finishedAt);
+    this.db.prepare(
+      `UPDATE agent_tasks SET status = ?, provider_id = ?, model_id = ?, repository = ?, branch = ?,
+       result_json = ?, error = ?, started_at = ?, finished_at = ?, updated_at = ? WHERE id = ?`
+    ).run(status, String(patch.providerId ?? current.providerId), String(patch.modelId ?? current.modelId),
+      String(patch.repository ?? current.repository), String(patch.branch ?? current.branch),
+      JSON.stringify(patch.result ?? current.result ?? {}), String(patch.error ?? current.error),
+      String(startedAt || ''), String(finishedAt || ''), timestamp, String(taskId));
+    this.addAgentTaskEvent(taskId, status, patch.event || {});
+    return this.getAgentTask(taskId);
+  }
+
+  addAgentTaskEvent(taskId, eventType, payload = {}) {
+    this.db.prepare(
+      'INSERT INTO agent_task_events(task_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?)'
+    ).run(String(taskId), String(eventType), JSON.stringify(parseJsonObject(payload)), now());
+  }
+
+  listAgentTaskEvents(taskId) {
+    return this.db.prepare('SELECT * FROM agent_task_events WHERE task_id = ? ORDER BY id').all(String(taskId)).map((row) => ({
+      id: row.id, taskId: row.task_id, type: row.event_type, payload: parseJsonObject(row.payload_json), createdAt: row.created_at
+    }));
+  }
+
+  saveGithubConnection({ userId, githubUserId = '', githubLogin = '', tokenEncrypted, refreshTokenEncrypted = '', scope = '', expiresAt = '' }) {
+    const timestamp = now();
+    this.db.prepare(
+      `INSERT INTO github_connections(user_id, github_user_id, github_login, token_encrypted, refresh_token_encrypted, scope, expires_at, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(user_id) DO UPDATE SET github_user_id = excluded.github_user_id, github_login = excluded.github_login,
+       token_encrypted = excluded.token_encrypted, refresh_token_encrypted = excluded.refresh_token_encrypted,
+       scope = excluded.scope, expires_at = excluded.expires_at, updated_at = excluded.updated_at`
+    ).run(String(userId), String(githubUserId), String(githubLogin), String(tokenEncrypted), String(refreshTokenEncrypted), String(scope), String(expiresAt), timestamp, timestamp);
+    return this.getGithubConnection(userId);
+  }
+
+  getGithubConnection(userId) {
+    const row = this.db.prepare('SELECT * FROM github_connections WHERE user_id = ?').get(String(userId));
+    return row ? { userId: row.user_id, githubUserId: row.github_user_id, githubLogin: row.github_login, tokenEncrypted: row.token_encrypted, refreshTokenEncrypted: row.refresh_token_encrypted || '', scope: row.scope, expiresAt: row.expires_at, createdAt: row.created_at, updatedAt: row.updated_at } : null;
+  }
+
+  deleteGithubConnection(userId) {
+    return this.db.prepare('DELETE FROM github_connections WHERE user_id = ?').run(String(userId)).changes > 0;
+  }
+
+  createOauthState({ stateHash, userId, provider = 'github', expiresAt }) {
+    this.db.prepare('INSERT INTO oauth_states(state_hash, user_id, provider, expires_at, created_at) VALUES (?, ?, ?, ?, ?)')
+      .run(String(stateHash), String(userId), String(provider), String(expiresAt), now());
+  }
+
+  consumeOauthState({ stateHash, provider = 'github' }) {
+    return this.runImmediateTransaction(() => {
+      const row = this.db.prepare('SELECT * FROM oauth_states WHERE state_hash = ? AND provider = ?').get(String(stateHash), String(provider));
+      if (!row || row.consumed_at || Date.parse(row.expires_at) <= Date.now()) return null;
+      const timestamp = now();
+      this.db.prepare("UPDATE oauth_states SET consumed_at = ? WHERE state_hash = ? AND consumed_at = ''").run(timestamp, String(stateHash));
+      return { userId: row.user_id, provider: row.provider };
+    });
+  }
+
+  createToolApproval({ taskId, userId, action, payload = {}, expiresAt }) {
+    const id = randomUUID();
+    this.db.prepare(
+      'INSERT INTO tool_approvals(id, task_id, user_id, action, payload_json, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(id, String(taskId), String(userId), String(action), JSON.stringify(parseJsonObject(payload)), String(expiresAt), now());
+    return this.getToolApproval(id);
+  }
+
+  getToolApproval(id) {
+    const row = this.db.prepare('SELECT * FROM tool_approvals WHERE id = ?').get(String(id));
+    return row ? { id: row.id, taskId: row.task_id, userId: row.user_id, action: row.action, payload: parseJsonObject(row.payload_json), status: row.status, expiresAt: row.expires_at, decidedAt: row.decided_at, createdAt: row.created_at } : null;
+  }
+
+  getPendingToolApproval(taskId) {
+    const row = this.db.prepare(
+      `SELECT id FROM tool_approvals
+       WHERE task_id = ? AND status = 'pending' AND expires_at > ?
+       ORDER BY created_at DESC LIMIT 1`
+    ).get(String(taskId), now());
+    return row ? this.getToolApproval(row.id) : null;
+  }
+
+  decideToolApproval(id, userId, approved) {
+    const timestamp = now();
+    const status = approved ? 'approved' : 'rejected';
+    const result = this.db.prepare(
+      `UPDATE tool_approvals SET status = ?, decided_at = ? WHERE id = ? AND user_id = ? AND status = 'pending' AND expires_at > ?`
+    ).run(status, timestamp, String(id), String(userId), timestamp);
+    return result.changes === 1 ? this.getToolApproval(id) : null;
   }
 
 

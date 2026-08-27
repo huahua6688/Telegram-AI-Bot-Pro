@@ -41,8 +41,13 @@ test('loadConfig defaults to automatic free-first provider routing', () => {
   resetEnv();
   delete process.env.DEFAULT_AI_PROVIDER;
   delete process.env.AI_PROVIDER;
+  delete process.env.FREE_PROVIDER_PATTERNS;
+  delete process.env.PAID_PROVIDER_PATTERNS;
   const config = loadConfig();
   assert.equal(config.aiProvider, 'auto');
+  assert.ok(config.freeProviderPatterns.includes('gemini'));
+  assert.ok(config.freeProviderPatterns.includes('openrouter'));
+  assert.deepEqual(config.paidProviderPatterns, ['openai-compatible']);
 });
 
 test('loadConfig resolves anthropic provider aliases and keys', () => {

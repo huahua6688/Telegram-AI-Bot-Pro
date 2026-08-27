@@ -26,6 +26,8 @@ import {
   stopApplicationResources
 } from './application-lifecycle.js';
 import { createSupportBot } from '../services/support-bot.js';
+import { GitHubAppService } from '../services/github-app-service.js';
+import { AgentTaskService } from '../services/agent-task-service.js';
 
 function ensureRuntimeFileDirectory(filePath = '', label = 'file') {
   const raw = String(filePath || '').trim();
@@ -88,12 +90,15 @@ export async function createApplication() {
     const accessControl = new AccessControlService({ config: runtimeConfig, db, logger });
     const aiClient = createAIProviderClient(runtimeConfig, logger);
     const providerManager = createAIProviderManager(runtimeConfig, logger, db);
+    const githubService = new GitHubAppService({ config: runtimeConfig, db, logger });
+    const agentTaskService = new AgentTaskService({ config: runtimeConfig, db, providerManager, githubService, logger });
     healthServer = startHealthServer({
       port: runtimeConfig.healthPort,
       db,
       config: runtimeConfig,
       logger,
       providerManager,
+      githubService,
       readiness
     });
     if (runtimeConfig.modelDiscoveryEnabled !== false && providerManager.isConfigured('openai-compatible')) {
@@ -121,7 +126,9 @@ export async function createApplication() {
       toolRegistry,
       pluginManager,
       logger,
-      accessControl
+      accessControl,
+      githubService,
+      agentTaskService
     });
 
     await bot.init();

@@ -55,6 +55,15 @@ test('runtime config accepts enabled Admin API with token', () => {
   assert.deepEqual(errors, []);
 });
 
+test('runtime config fails closed when Agent isolation or billing secrets are incomplete', () => {
+  const errors = getRuntimeConfigErrors(validConfig({ agentEnabled: true }));
+  assert.ok(errors.some((item) => item.includes('BILLING_USD_PER_CHAT_CREDIT')));
+  assert.ok(errors.some((item) => item.includes('AGENT_WORKER_URL')));
+  assert.ok(errors.some((item) => item.includes('AGENT_WORKER_SECRET')));
+  assert.ok(errors.some((item) => item.includes('GITHUB_APP_CLIENT_ID')));
+  assert.ok(errors.some((item) => item.includes('GITHUB_TOKEN_ENCRYPTION_KEY')));
+});
+
 test('runtime config accepts a separately configured support bot', () => {
   const errors = getRuntimeConfigErrors(validConfig({
     supportEnabled: true,

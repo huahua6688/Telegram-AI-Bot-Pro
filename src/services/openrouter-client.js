@@ -14,6 +14,7 @@ export class OpenRouterClient extends OpenAIStyleNativeClient {
       apiKey: config.openrouterApiKey,
       baseUrl: config.openrouterBaseUrl,
       headers: openRouterHeaders(config),
+      includeUsageCosts: true,
       capabilities: {
         chat: true,
         toolCalls: true,

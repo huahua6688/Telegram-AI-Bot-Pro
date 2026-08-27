@@ -8,7 +8,7 @@
 
 ```env
 STARS_PAYMENTS_ENABLED=true
-STARS_PRODUCTS_JSON=[{"id":"starter","title":"入门额度包","titleEn":"Starter credits","description":"适合轻量聊天、图片和语音使用","descriptionEn":"Starter credits for chat, images and voice","price":50,"credits":{"chat":200,"vision":20,"image_generation":5,"tts":20,"live_voice":10,"video":0}},{"id":"standard","title":"标准额度包","titleEn":"Standard credits","description":"适合日常聊天、识图、画图和语音","descriptionEn":"Balanced credits for regular AI use","price":150,"credits":{"chat":800,"vision":80,"image_generation":20,"tts":80,"live_voice":40,"video":0}},{"id":"pro","title":"高级额度包","titleEn":"Pro credits","description":"适合高频使用全部已开放能力","descriptionEn":"Larger credits for frequent AI use","price":500,"credits":{"chat":3000,"vision":300,"image_generation":75,"tts":300,"live_voice":150,"video":0}}]
+STARS_PRODUCTS_JSON=[{"id":"starter","title":"入门额度包","titleEn":"Starter credits","description":"包含约2次高成本AI Hub请求及免费平台扩展额度","descriptionEn":"Includes about 2 high-cost AI Hub requests plus free-provider credits","price":300,"credits":{"chat":30,"vision":20,"image_generation":5,"tts":20,"live_voice":10,"video":0}},{"id":"standard","title":"标准额度包","titleEn":"Standard credits","description":"包含约6次高成本AI Hub请求及日常功能额度","descriptionEn":"Includes about 6 high-cost AI Hub requests plus regular feature credits","price":800,"credits":{"chat":90,"vision":80,"image_generation":20,"tts":80,"live_voice":40,"video":0}},{"id":"pro","title":"高级额度包","titleEn":"Pro credits","description":"包含约16次高成本AI Hub请求及高频功能额度","descriptionEn":"Includes about 16 high-cost AI Hub requests plus high-volume feature credits","price":2000,"credits":{"chat":240,"vision":300,"image_generation":75,"tts":300,"live_voice":150,"video":0}}]
 ```
 
 字段说明：
