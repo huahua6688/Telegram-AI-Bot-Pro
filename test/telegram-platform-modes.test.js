@@ -71,10 +71,26 @@ test('/help owns the five Telegram platform mode buttons while /whoami stays cle
   ]);
   assert.equal(bot.createWhoamiKeyboard({}, 'zh'), undefined);
   assert.match(replies[0].text, /Telegram 扩展模式/);
-  assert.match(replies[0].text, /把 @botusername 放在句末/);
-  assert.match(replies[0].text, /\/ask@botusername/);
+  assert.match(replies[0].text, /直接发送文字、图片、语音、文件或链接/);
+  assert.doesNotMatch(replies[0].text, /群聊中如何叫我|@botusername|\/ask@botusername/);
   assert.match(PlatformModesTelegramAIBot.prototype.constructor.toString(), /platform_mode:/);
   assert.doesNotMatch(PlatformModesTelegramAIBot.prototype.registerCommands.toString(), /platform_mode:/);
+});
+
+test('/help adds welcome setup only for bot or group administrators', async () => {
+  const bot = createBot({
+    methods: { async canShowWelcomeHelp() { return true; } }
+  });
+  const replies = [];
+  await bot.handleHelp({
+    chat: { id: -100, type: 'supergroup' },
+    from: { id: 7 },
+    reply: async (text, extra) => replies.push({ text, extra })
+  });
+
+  const buttons = replies[0].extra.reply_markup.inline_keyboard.flat();
+  const setup = buttons.find((button) => button.callback_data === 'help:welcome');
+  assert.equal(setup.text, '👋 欢迎语设置方法');
 });
 
 test('inline mode returns a personal AI article with short Telegram caching', async () => {

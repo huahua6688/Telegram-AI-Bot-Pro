@@ -330,3 +330,129 @@ test('compact table capability falls back to the existing plain private store', 
   assert.match(replies[0].text, /购买额度/);
   assert.equal(replies[0].extra.reply_markup.inline_keyboard.length > 0, true);
 });
+
+test('group /help and /whoami replies are isolated ephemeral messages', async () => {
+  const bot = Object.create(TelegramAIBot.prototype);
+  bot.bot = { telegram: null };
+  bot.logger = { warn() {} };
+  bot.formatLogError = (error) => ({ message: String(error?.message || error) });
+  const calls = [];
+
+  for (const [userId, ephemeralMessageId, command] of [
+    [101, 1001, '/help'],
+    [102, 1002, '/whoami']
+  ]) {
+    let publicReplies = 0;
+    const ctx = {
+      chat: { id: -10020, type: 'supergroup' },
+      from: { id: userId },
+      message: { message_id: userId, ephemeral_message_id: ephemeralMessageId, text: command },
+      telegram: {
+        async callApi(method, payload) {
+          calls.push({ method, payload });
+          return { ephemeral_message_id: ephemeralMessageId + 10 };
+        }
+      },
+      reply: async () => { publicReplies += 1; }
+    };
+
+    await bot.withPrivateGroupCommandReply(ctx, () =>
+      ctx.reply(`reply for ${userId}`, { reply_parameters: { message_id: userId } })
+    );
+    assert.equal(publicReplies, 0);
+  }
+
+  assert.deepEqual(calls.map((call) => call.method), ['sendMessage', 'sendMessage']);
+  assert.deepEqual(calls.map((call) => [
+    call.payload.ephemeral_message_parameters.receiver_user_id,
+    call.payload.reply_parameters.ephemeral_message_id
+  ]), [[101, 1001], [102, 1002]]);
+  assert.equal(calls.some((call) => call.payload.reply_parameters.message_id), false);
+});
+
+test('private command reply stays normal and group ephemeral failure falls back to direct chat', async () => {
+  const bot = Object.create(TelegramAIBot.prototype);
+  bot.bot = { telegram: null };
+  bot.logger = { warn() {} };
+  bot.formatLogError = (error) => ({ message: String(error?.message || error) });
+  let privateReplies = 0;
+  const privateCtx = {
+    chat: { id: 201, type: 'private' },
+    from: { id: 201 },
+    reply: async () => { privateReplies += 1; }
+  };
+  await bot.withPrivateGroupCommandReply(privateCtx, () => privateCtx.reply('private'));
+  assert.equal(privateReplies, 1);
+
+  let publicReplies = 0;
+  const groupCtx = {
+    chat: { id: -10021, type: 'group' },
+    from: { id: 202 },
+    message: { ephemeral_message_id: 2002 },
+    telegram: {
+      async callApi(_method, payload) {
+        if (payload.ephemeral_message_parameters) throw new Error('ephemeral unsupported');
+        assert.equal(payload.chat_id, 202);
+        return { message_id: 9 };
+      }
+    },
+    reply: async () => { publicReplies += 1; }
+  };
+  assert.deepEqual(
+    await bot.withPrivateGroupCommandReply(groupCtx, () => groupCtx.reply('secret')),
+    { message_id: 9 }
+  );
+  assert.equal(publicReplies, 0);
+});
+
+test('group command never becomes public when ephemeral and direct-chat delivery both fail', async () => {
+  const bot = Object.create(TelegramAIBot.prototype);
+  bot.bot = { telegram: null };
+  bot.logger = { warn() {} };
+  bot.formatLogError = (error) => ({ message: String(error?.message || error) });
+  let publicReplies = 0;
+  let calls = 0;
+  const ctx = {
+    chat: { id: -10022, type: 'supergroup' },
+    from: { id: 203 },
+    message: { ephemeral_message_id: 2003 },
+    telegram: { async callApi() { calls += 1; throw new Error('blocked'); } },
+    reply: async () => { publicReplies += 1; }
+  };
+  assert.equal(await bot.withPrivateGroupCommandReply(ctx, () => ctx.reply('secret')), false);
+  assert.equal(calls, 2);
+  assert.equal(publicReplies, 0);
+});
+
+test('/whoami shows only the requested private and group identity fields', async () => {
+  const bot = Object.create(TelegramAIBot.prototype);
+  bot.config = { maxOutputChars: 4096, miniAppEnabled: true };
+  bot.getLocale = () => 'zh';
+  bot.isAdmin = (ctx) => Number(ctx.from?.id) === 301;
+  bot.createWhoamiKeyboard = () => undefined;
+
+  const privateReplies = [];
+  await bot.handleWhoami({
+    chat: { id: 301, type: 'private' },
+    from: { id: 301, username: 'alice' },
+    message: { message_id: 1 },
+    reply: async (text) => privateReplies.push(text)
+  });
+  assert.match(privateReplies[0], /用户 ID：301/);
+  assert.match(privateReplies[0], /用户名：@alice/);
+  assert.match(privateReplies[0], /Bot 管理员：是/);
+  assert.doesNotMatch(privateReplies[0], /聊天 ID|群组 ID|Zeabur|ADMIN_USER_IDS/);
+
+  const groupReplies = [];
+  await bot.handleWhoami({
+    chat: { id: -10030, type: 'supergroup' },
+    from: { id: 302, username: 'bob' },
+    message: { message_id: 2 },
+    reply: async (text) => groupReplies.push(text)
+  });
+  assert.match(groupReplies[0], /用户 ID：302/);
+  assert.match(groupReplies[0], /群组 ID：-10030/);
+  assert.match(groupReplies[0], /用户名：@bob/);
+  assert.match(groupReplies[0], /Bot 管理员：否/);
+  assert.doesNotMatch(groupReplies[0], /聊天 ID|Zeabur|ADMIN_USER_IDS/);
+});

@@ -184,12 +184,17 @@ const BOT_COMMAND_DESCRIPTIONS = {
 
 function createLocalizedBotCommands(locale = 'en', compact = false) {
   const normalized = normalizeLanguageCode(locale, 'en');
+  const command = (name, description) => ({
+    command: name,
+    description,
+    ...(['help', 'whoami'].includes(name) ? { is_ephemeral: true } : {})
+  });
   if (compact) {
     const descriptions = BOT_COMMAND_DESCRIPTIONS[normalized] || BOT_COMMAND_DESCRIPTIONS.en;
     return [
-      { command: 'start', description: descriptions[0] || BOT_COMMAND_DESCRIPTIONS.en[0] },
-      { command: 'help', description: descriptions[2] || BOT_COMMAND_DESCRIPTIONS.en[2] },
-      { command: 'whoami', description: descriptions[8] || BOT_COMMAND_DESCRIPTIONS.en[8] }
+      command('start', descriptions[0] || BOT_COMMAND_DESCRIPTIONS.en[0]),
+      command('help', descriptions[2] || BOT_COMMAND_DESCRIPTIONS.en[2]),
+      command('whoami', descriptions[8] || BOT_COMMAND_DESCRIPTIONS.en[8])
     ];
   }
   const minimalDescriptions = {
@@ -198,10 +203,9 @@ function createLocalizedBotCommands(locale = 'en', compact = false) {
     en: ['Open assistant', 'Open simple menu', 'Show help', 'Clear current chat', 'Show Telegram ID']
   };
   const descriptions = minimalDescriptions[normalized] || minimalDescriptions.en;
-  return BOT_COMMAND_NAMES.map((command, index) => ({
-    command,
-    description: descriptions[index] || minimalDescriptions.en[index]
-  }));
+  return BOT_COMMAND_NAMES.map((name, index) =>
+    command(name, descriptions[index] || minimalDescriptions.en[index])
+  );
 }
 
 const LANGUAGE_PROMPTS = {
@@ -2119,6 +2123,30 @@ export class TelegramAIBot {
         inline_keyboard: rows
       }
     };
+  }
+
+  withWelcomeHelpButton(extra, locale = 'zh', enabled = false) {
+    if (!enabled) return extra;
+    const existingRows = extra?.reply_markup?.inline_keyboard || [];
+    return {
+      ...(extra || {}),
+      reply_markup: {
+        ...(extra?.reply_markup || {}),
+        inline_keyboard: [
+          ...existingRows,
+          [Markup.button.callback(
+            localText(locale, '👋 欢迎语设置方法', '👋 Welcome setup'),
+            'help:welcome'
+          )]
+        ]
+      }
+    };
+  }
+
+  async canShowWelcomeHelp(ctx) {
+    if (this.isAdmin(ctx)) return true;
+    if (!['group', 'supergroup'].includes(String(ctx.chat?.type || ''))) return false;
+    return this.canManageGroupSettings(ctx);
   }
 
   async replyWithSupport(ctx, text, extra, locale = this.getLocale(ctx)) {
@@ -5811,6 +5839,67 @@ export class TelegramAIBot {
     await this.agentTaskService?.recoverInterruptedTasks?.();
   }
 
+  async withPrivateGroupCommandReply(ctx, handler) {
+    const chatType = String(ctx.chat?.type || '').toLowerCase();
+    if (!['group', 'supergroup'].includes(chatType)) return handler();
+
+    const telegram = ctx.telegram || this.bot?.telegram;
+    if (typeof telegram?.callApi !== 'function') {
+      this.logger?.warn?.('Private group command reply unavailable', {
+        chatId: ctx.chat?.id,
+        userId: ctx.from?.id
+      });
+      return false;
+    }
+
+    const originalReply = ctx.reply.bind(ctx);
+    ctx.reply = async (text, extra = {}) => {
+      const payloadExtra = { ...(extra || {}) };
+      delete payloadExtra.reply_parameters;
+      delete payloadExtra.reply_to_message_id;
+      const ephemeralMessageId = ctx.message?.ephemeral_message_id;
+      const content = {
+        text: String(text || ''),
+        ...payloadExtra
+      };
+      try {
+        return await telegram.callApi('sendMessage', {
+          chat_id: ctx.chat.id,
+          ...content,
+          ephemeral_message_parameters: {
+            receiver_user_id: Number(ctx.from.id)
+          },
+          ...(ephemeralMessageId != null
+            ? { reply_parameters: { ephemeral_message_id: ephemeralMessageId } }
+            : {})
+        });
+      } catch (error) {
+        this.logger?.warn?.('Private group command reply unavailable; trying direct chat', {
+          chatId: ctx.chat?.id,
+          userId: ctx.from?.id,
+          error: this.formatLogError(error)
+        });
+        return telegram.callApi('sendMessage', {
+          chat_id: Number(ctx.from.id),
+          ...content
+        });
+      }
+    };
+
+    try {
+      return await handler();
+    } catch (error) {
+      this.logger?.warn?.('Private group command reply failed without public fallback', {
+        chatId: ctx.chat?.id,
+        userId: ctx.from?.id,
+        error: this.formatLogError(error)
+      });
+      return false;
+    } finally {
+      ctx.reply = originalReply;
+    }
+  }
+
   registerCommands() {
     this.bot.command('start', (ctx) => this.handleStart(ctx));
     this.bot.command('menu', (ctx) => this.handleMenu(ctx));
@@ -5820,12 +5909,16 @@ export class TelegramAIBot {
     this.bot.command('clear', (ctx) => this.handleClearPrompt(ctx));
     this.bot.command('topic', (ctx) => this.handleTopicShow(ctx));
     this.bot.command('topics', (ctx) => this.handleTopicsShow(ctx));
-    this.bot.command('help', (ctx) => this.handleHelp(ctx));
+    this.bot.command('help', (ctx) =>
+      this.withPrivateGroupCommandReply(ctx, () => this.handleHelp(ctx))
+    );
     this.bot.command('web', (ctx) => this.runWebSearch(ctx, extractCommandArgs(ctx.message?.text || '')));
     this.bot.command('persona', (ctx) => this.handlePersona(ctx));
     this.bot.command('language', (ctx) => this.handleLanguage(ctx));
     this.bot.command('status', (ctx) => this.handleStatus(ctx));
-    this.bot.command('whoami', (ctx) => this.handleWhoami(ctx));
+    this.bot.command('whoami', (ctx) =>
+      this.withPrivateGroupCommandReply(ctx, () => this.handleWhoami(ctx))
+    );
     this.bot.command('translate', (ctx) => this.runTranslation(ctx, extractCommandArgs(ctx.message.text || ''), 'auto'));
     this.bot.command('tr', (ctx) => this.runTranslation(ctx, extractCommandArgs(ctx.message.text || ''), 'auto'));
     this.bot.command('chatmode', (ctx) => this.handleChatMode(ctx));
@@ -5840,6 +5933,7 @@ export class TelegramAIBot {
     this.bot.command('github', (ctx) => this.handleGithubCommand(ctx));
     this.bot.command('agent', (ctx) => this.handleAgentCommand(ctx));
     this.bot.command('welcome', (ctx) => this.handleWelcomeCommand(ctx));
+    this.bot.action('help:welcome', (ctx) => this.handleWelcomeHelp(ctx));
     this.bot.on('pre_checkout_query', (ctx) => this.handleStarsPreCheckout(ctx));
     this.bot.on('successful_payment', (ctx) => this.handleStarsSuccessfulPayment(ctx));
     this.bot.action(/^set_model:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleModelCallback(ctx)));
@@ -5859,7 +5953,7 @@ export class TelegramAIBot {
     if (this.accessControl) {
       return this.accessControl.isAdmin(userId);
     }
-    return this.config.adminUserIds.has(userId);
+    return Boolean(this.config?.adminUserIds?.has?.(userId));
   }
 
   async canManageGroupSettings(ctx) {
@@ -5934,20 +6028,24 @@ export class TelegramAIBot {
       await this.handleStarsStore(ctx);
       return;
     }
+    if (startParameter === 'help') {
+      await this.handleHelp(ctx);
+      return;
+    }
 
     if (this.config?.miniAppEnabled !== false) {
       const text = locale === 'en'
         ? [
             'Hi, I am your AI assistant.',
             '',
-            'Tell me what you need or send content directly. I will choose the right capability automatically.',
-            'Use the button below only when you want to enable private chat. Open Console beside the message box for settings and history.'
+            'Send text, photos, voice, files, or links and tell me what you need.',
+            'Open Console beside the message box for models, settings, history, and credits.'
           ].join('\n')
         : [
             '你好，我是你的 AI 助手。',
             '',
-            '直接告诉我你要做什么或发送内容，我会自动选择合适的能力。',
-            '只有需要开启隐私聊天时才用下方按钮；设置和聊天记录在输入框旁的「控制台」。'
+            '直接发送文字、图片、语音、文件或链接，并告诉我你想做什么。',
+            '模型、设置、聊天记录和额度都在输入框旁的「控制台」。'
           ].join('\n');
       await ctx.reply(text, this.createBottomKeyboard(locale));
       return;
@@ -5981,6 +6079,7 @@ export class TelegramAIBot {
     const chatId = String(ctx.chat?.id || '');
     const username = ctx.from?.username ? `@${ctx.from.username}` : '-';
     const isAdmin = this.isAdmin(ctx) ? 'yes' : 'no';
+    const isGroup = ['group', 'supergroup'].includes(String(ctx.chat?.type || '').toLowerCase());
 
     const text =
       isEnglishLocale(locale)
@@ -5988,23 +6087,17 @@ export class TelegramAIBot {
             '👤 Your Telegram info',
             '',
             `User ID: ${userId}`,
-            `Chat ID: ${chatId}`,
+            ...(isGroup ? [`Group ID: ${chatId}`] : []),
             `Username: ${username}`,
-            `Admin: ${isAdmin}`,
-            '',
-            'For Zeabur ADMIN_USER_IDS, use:',
-            userId
+            `Bot admin: ${isAdmin}`
           ].join('\n')
         : [
             '👤 你的 Telegram 信息',
             '',
             `用户 ID：${userId}`,
-            `聊天 ID：${chatId}`,
+            ...(isGroup ? [`群组 ID：${chatId}`] : []),
             `用户名：${username}`,
-            `管理员：${isAdmin}`,
-            '',
-            'Zeabur 的 ADMIN_USER_IDS 填这个：',
-            userId
+            `Bot 管理员：${isAdmin === 'yes' ? '是' : '否'}`
           ].join('\n');
 
     await sendTextReply(ctx, text, this.config.maxOutputChars, this.createWhoamiKeyboard(ctx, locale));
@@ -6012,34 +6105,33 @@ export class TelegramAIBot {
 
   async handleHelp(ctx) {
     const locale = this.getLocale(ctx);
+    const showWelcomeHelp = await this.canShowWelcomeHelp(ctx);
 
     if (this.config?.miniAppEnabled !== false) {
       const helpText = locale === 'en'
         ? [
             'Help',
             '',
-            'Send requests naturally; no feature buttons are required:',
-            ...this.buildHelpFeatureLines(locale),
-            '',
-            'Private chat: use the button below.',
-            'Your Telegram ID: /whoami',
-            'Provider/model, persona, language, history, and administration: open Console beside the message box.'
+            'Send text, photos, voice, files, or links and describe what you need.',
+            'I can chat, search, translate, summarize, understand media, and help with code or errors.',
+            'Open Console for models, settings, history, and credits. Use /whoami to view your Telegram ID.'
           ].join('\n')
         : [
             '使用帮助',
             '',
-            '直接描述需求即可，不需要功能按钮：',
-            ...this.buildHelpFeatureLines(locale),
-            '',
-            '隐私聊天：使用下方按钮。',
-            '查询 Telegram ID：/whoami',
-            'Provider/模型、人格、语言、聊天记录和管理：打开输入框旁的「控制台」。'
+            '直接发送文字、图片、语音、文件或链接，并说明你想做什么。',
+            '我可以聊天、搜索、翻译、总结、识别媒体，以及协助代码和报错。',
+            '模型、设置、记录和额度请打开「控制台」；查看 Telegram ID 使用 /whoami。'
           ].join('\n');
       await sendTextReply(
         ctx,
         helpText,
         this.config.maxOutputChars,
-        this.createSupportKeyboard(locale) || this.createBottomKeyboard(locale)
+        this.withWelcomeHelpButton(
+          this.createSupportKeyboard(locale) || this.createBottomKeyboard(locale),
+          locale,
+          showWelcomeHelp
+        )
       );
       return;
     }
@@ -6059,7 +6151,61 @@ export class TelegramAIBot {
             '需要更换模型、语言、记忆或人格，点「设置」。'
           ].join('\n');
 
-    await sendTextReply(ctx, helpText, this.config.maxOutputChars, this.createMenuKeyboard(locale));
+    await sendTextReply(
+      ctx,
+      helpText,
+      this.config.maxOutputChars,
+      this.withWelcomeHelpButton(this.createMenuKeyboard(locale), locale, showWelcomeHelp)
+    );
+  }
+
+  async handleWelcomeHelp(ctx) {
+    const locale = this.getLocale(ctx);
+    if (!(await this.canShowWelcomeHelp(ctx))) {
+      await ctx.answerCbQuery?.(
+        localText(locale, '只有 Bot 管理员或群管理员可以查看。', 'Only bot or group administrators can view this.')
+      );
+      return false;
+    }
+
+    const text = localText(
+      locale,
+      [
+        '👋 欢迎语设置方法',
+        '',
+        '请在目标群发送：',
+        '/welcome set 欢迎 {name} 加入 {chat}',
+        '',
+        '关闭欢迎语：/welcome off',
+        '恢复默认：/welcome reset',
+        '可用变量：{name}、{username}、{chat}'
+      ].join('\n'),
+      [
+        '👋 Welcome-message setup',
+        '',
+        'Send this in the target group:',
+        '/welcome set Welcome {name} to {chat}',
+        '',
+        'Disable: /welcome off',
+        'Reset: /welcome reset',
+        'Variables: {name}, {username}, {chat}'
+      ].join('\n')
+    );
+
+    if (['group', 'supergroup'].includes(String(ctx.chat?.type || '').toLowerCase())) {
+      const sent = await this.sendOrEditEphemeralResponse(ctx, { text });
+      if (!sent) {
+        await ctx.answerCbQuery?.(
+          localText(locale, '请私聊 Bot 查看设置方法。', 'Open the bot privately to view the setup steps.'),
+          this.botUsername ? { url: `https://t.me/${this.botUsername}?start=help` } : undefined
+        );
+      }
+      return Boolean(sent);
+    }
+
+    await ctx.answerCbQuery?.();
+    await ctx.reply(text);
+    return true;
   }
 
 

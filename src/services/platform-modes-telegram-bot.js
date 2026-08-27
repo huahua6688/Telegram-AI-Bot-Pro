@@ -105,29 +105,6 @@ function inlineMinimumChars(config = {}) {
   return Math.max(1, Number(config.inlineQueryMinChars) || 2);
 }
 
-function groupTriggerHelp(locale = 'zh', botUsername = '') {
-  const mention = botUsername ? `@${String(botUsername).replace(/^@/, '')}` : '@botusername';
-  return localText(
-    locale,
-    [
-      '群聊中如何叫我：',
-      `- 最可靠：直接回复我的上一条消息。`,
-      `- 普通提及：先写问题，再把 ${mention} 放在句末。`,
-      `- 无歧义命令：/ask${mention} 问题。`,
-      `- 如果输入框以 ${mention} 开头，Telegram 会进入 Inline Mode；这时需要从候选结果中选择一条发送。`,
-      '- BotFather 群隐私模式决定我能收到哪些群消息；项目内“隐私聊天”和 Guard Mode 不是同一功能。'
-    ].join('\n'),
-    [
-      'How to address me in groups:',
-      '- Most reliable: reply directly to my previous message.',
-      `- Normal mention: write the question first and put ${mention} at the end.`,
-      `- Unambiguous command: /ask${mention} question.`,
-      `- If the composer starts with ${mention}, Telegram opens Inline Mode; choose a result to send it.`,
-      '- BotFather group privacy controls which group messages I receive; Private Chat and Guard Mode are separate features.'
-    ].join('\n')
-  );
-}
-
 function safeText(value = '', maxChars = 3500) {
   return truncateText(String(value || '').replace(/\u0000/g, '').trim(), maxChars);
 }
@@ -613,8 +590,8 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
     return super.createWhoamiKeyboard(ctx, locale);
   }
 
-  createPlatformModesKeyboard(locale = 'zh') {
-    return this.withSupportButton(Markup.inlineKeyboard([
+  createPlatformModesKeyboard(locale = 'zh', showWelcomeHelp = false) {
+    const keyboard = this.withSupportButton(Markup.inlineKeyboard([
       [
         Markup.button.callback(PLATFORM_MODE_NAMES.inline, 'platform_mode:inline'),
         Markup.button.callback(PLATFORM_MODE_NAMES.guest, 'platform_mode:guest')
@@ -625,6 +602,7 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
       ],
       [Markup.button.callback(PLATFORM_MODE_NAMES.bot_to_bot, 'platform_mode:bot_to_bot')]
     ]), locale);
+    return this.withWelcomeHelpButton(keyboard, locale, showWelcomeHelp);
   }
 
   createPlatformModeDetailKeyboard(locale = 'zh', mode = '', ctx = null) {
@@ -672,14 +650,13 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
   async handleHelp(ctx) {
     if (this.config?.miniAppEnabled === false) return super.handleHelp(ctx);
     const locale = this.getLocale(ctx);
+    const showWelcomeHelp = await this.canShowWelcomeHelp(ctx);
     const text = [
       helpTelegramBotInternals.buildHiddenFeatureHelp(locale),
       '',
-      groupTriggerHelp(locale, this.botUsername),
-      '',
       localText(locale, 'Telegram 扩展模式：', 'Telegram platform modes:')
     ].join('\n');
-    await ctx.reply(text, this.createPlatformModesKeyboard(locale));
+    await ctx.reply(text, this.createPlatformModesKeyboard(locale, showWelcomeHelp));
   }
 
   getPlatformModeDetails(locale, mode) {
@@ -2299,7 +2276,6 @@ export const platformModesInternals = {
   buildInlineResponseResults,
   cleanInlineTranslationOutput,
   formatInlineNewsDigest,
-  groupTriggerHelp,
   inlineAiAttemptBudgetMs,
   inlineArticle,
   inlineDeadlineSafetyMs,

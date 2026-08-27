@@ -978,7 +978,7 @@ test('support bot ignores ordinary group messages before rate limiting or ticket
   assert.equal(fixture.bot.rateLimitHits.size, 0);
 });
 
-test('@support bot and /support in groups return only a private-chat entry', async () => {
+test('@support bot and /support stay completely silent in groups', async () => {
   const fixture = createFixture();
   await fixture.bot.init();
   const calls = [];
@@ -1012,15 +1012,7 @@ test('@support bot and /support in groups return only a private-chat entry', asy
   });
 
   assert.equal(replies.length, 0);
-  assert.equal(calls.length, 2);
-  assert.deepEqual(calls.map((call) => call.method), ['sendMessage', 'sendMessage']);
-  assert.deepEqual(calls.map((call) => call.payload.ephemeral_message_parameters.receiver_user_id), [42, 43]);
-  for (const call of calls) {
-    const button = call.payload.reply_markup.inline_keyboard[0][0];
-    assert.equal(button.text, '💬 联系客服');
-    assert.equal(button.url, 'https://t.me/SupportTestBot?start=support');
-    assert.doesNotMatch(JSON.stringify(call.payload), /工单|套餐|余额|Stars/);
-  }
+  assert.equal(calls.length, 0);
   assert.equal(fixture.bot.tickets.size, 0);
   assert.equal(fixture.bot.rateLimitHits.size, 0);
 });

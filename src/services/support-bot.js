@@ -1,8 +1,5 @@
 import crypto from 'node:crypto';
 import { Telegraf } from 'telegraf';
-import {
-  messageMentionsTelegramBot
-} from '../utils/telegram.js';
 import { retryTelegramStartupCall } from '../utils/telegram-startup.js';
 
 const SUPPORT_TICKET_PATTERN = /^\[support-ticket:user=(\d{1,20})\]/m;
@@ -191,20 +188,6 @@ function isSupportGroupContext(ctx = {}) {
 
 function isSupportChannelContext(ctx = {}) {
   return String(ctx.chat?.type || '').toLowerCase() === 'channel';
-}
-
-function isSupportGroupTrigger(message = {}, botUsername = '', botUserId = '') {
-  if (typeof message.text !== 'string') return false;
-  const command = String(message.text).trim().split(/\s+/, 1)[0];
-  const commandMatch = command.match(/^\/support(?:@([A-Za-z0-9_]+))?$/i);
-  const addressedUsername = String(commandMatch?.[1] || '').toLowerCase();
-  const normalizedBotUsername = String(botUsername || '').replace(/^@/, '').toLowerCase();
-  const isSupportCommand = Boolean(commandMatch) && (
-    !addressedUsername ||
-    (normalizedBotUsername && addressedUsername === normalizedBotUsername)
-  );
-  return isSupportCommand ||
-    messageMentionsTelegramBot(message, botUsername, botUserId);
 }
 
 export class SupportTelegramBot {
@@ -645,64 +628,12 @@ export class SupportTelegramBot {
     return true;
   }
 
-  getPrivateSupportUrl() {
-    const username = String(
-      this.botInfo?.username ||
-      this.config.supportBotUsername ||
-      ''
-    ).trim().replace(/^@/, '');
-    return username ? `https://t.me/${username}?start=support` : '';
-  }
-
-  async sendGroupSupportEntry(ctx) {
-    const english = isEnglishUser(ctx.from);
-    const url = this.getPrivateSupportUrl();
-    if (!url) return false;
-    const text = english
-      ? 'Open a private chat to contact support.'
-      : '请进入客服 Bot 私聊联系客服。';
-    const replyMarkup = inlineKeyboard([[
-      {
-        text: english ? '💬 Contact support' : '💬 联系客服',
-        url
-      }
-    ]]);
-
-    if (typeof ctx.telegram?.callApi === 'function') {
-      try {
-        await ctx.telegram.callApi('sendMessage', {
-          chat_id: ctx.chat.id,
-          text,
-          reply_markup: replyMarkup,
-          ephemeral_message_parameters: {
-            receiver_user_id: Number(ctx.from.id)
-          }
-        });
-        return true;
-      } catch (error) {
-        this.logger?.warn?.('Support group ephemeral entry unavailable; using public private-chat link', {
-          chatId: String(ctx.chat?.id || ''),
-          userId: String(ctx.from?.id || ''),
-          error: String(error?.message || error).slice(0, 200)
-        });
-      }
-    }
-
-    await ctx.reply(text, { reply_markup: replyMarkup });
-    return true;
-  }
   async handleMessage(ctx) {
     const message = ctx.message || {};
     const userId = String(ctx.from?.id || '');
     if (!userId || ctx.from?.is_bot) return;
 
-    if (isSupportChannelContext(ctx)) return false;
-    if (isSupportGroupContext(ctx)) {
-      if (isSupportGroupTrigger(message, this.botInfo?.username, this.botInfo?.id)) {
-        return this.sendGroupSupportEntry(ctx);
-      }
-      return false;
-    }
+    if (isSupportChannelContext(ctx) || isSupportGroupContext(ctx)) return false;
     if (!isPrivateSupportContext(ctx)) return false;
     if (/^\/start(?:@\w+)?(?:\s|$)/i.test(String(message.text || ''))) return;
 
@@ -1366,6 +1297,5 @@ export const supportBotInternals = {
   isPrivateSupportContext,
   isSupportGroupContext,
   isSupportChannelContext,
-  isSupportGroupTrigger,
   isCopyMessageUnsupportedError
 };
