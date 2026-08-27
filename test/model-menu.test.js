@@ -102,7 +102,7 @@ test('automatic model callback restores provider failover', async () => {
   });
 
   assert.deepEqual(storedPatch, {
-    providerId: 'auto',
+    providerId: '',
     modelId: '',
     fallbackEnabled: true
   });

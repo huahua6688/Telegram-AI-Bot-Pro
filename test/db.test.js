@@ -71,7 +71,7 @@ test('BotDatabase imports legacy JSON data into SQLite', async (t) => {
   assert.equal(db.findChat('200')?.triggerMode, 'mention');
   assert.deepEqual(db.getConversation('200:100:main'), [{ role: 'user', content: 'hello' }]);
   assert.equal(db.getStats().aiCalls, 4);
-  assert.equal(db.getMeta('schemaVersion'), '12');
+  assert.equal(db.getMeta('schemaVersion'), '13');
 });
 
 test('BotDatabase removes expired conversation content without deleting user accounts', async (t) => {
@@ -309,7 +309,7 @@ test('BotDatabase upgrades a v5 database through quota and Stars billing storage
 
   upgraded = new BotDatabase(databaseFile);
   await upgraded.init();
-  assert.equal(upgraded.getMeta('schemaVersion'), '12');
+  assert.equal(upgraded.getMeta('schemaVersion'), '13');
   assert.equal(upgraded.setUserDailyQuota(12, 9, 3)?.dailyQuota, 9);
   assert.equal(upgraded.findUser(12)?.dailyQuotaOverride, 9);
 });
@@ -343,6 +343,35 @@ test('BotDatabase persists per-user AI provider settings', async (t) => {
   assert.equal(settings.providerId, 'groq');
   assert.equal(settings.modelId, 'llama-current');
   assert.equal(settings.fallbackEnabled, false);
+});
+
+test('BotDatabase keeps global AI defaults and per-user AI calls isolated', async (t) => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'telegram-global-ai-settings-db-'));
+  const databaseFile = path.join(tempDir, 'bot-data.db');
+  const db = new BotDatabase(databaseFile);
+  t.after(() => {
+    db.close();
+    return fs.rm(tempDir, { recursive: true, force: true });
+  });
+  await db.init();
+  await db.upsertUser({ id: 41, username: 'first' });
+  await db.upsertUser({ id: 42, username: 'second' });
+
+  db.setGlobalAISettings({ providerId: 'openai-compatible', modelId: 'paid-model' });
+  await db.incrementStats('aiCalls', 2, 41);
+  await db.incrementStats('aiCalls', 1, 42);
+
+  assert.equal(db.getGlobalAISettings().providerId, 'openai-compatible');
+  assert.equal(db.getGlobalAISettings().modelId, 'paid-model');
+  assert.equal(db.getStats().aiCalls, 3);
+  assert.equal(db.getUserRuntimeSummary(41).aiCalls, 2);
+  assert.equal(db.getUserRuntimeSummary(42).aiCalls, 1);
+  assert.equal(db.getUserAISettings(41).modelId, '');
+  assert.equal(db.getUserAISettings(42).modelId, '');
+
+  db.resetGlobalAISettings();
+  assert.equal(db.getGlobalAISettings().providerId, '');
+  assert.equal(db.getGlobalAISettings().modelId, '');
 });
 
 test('BotDatabase persists isolated per-user news settings and supports inheritance reset', async (t) => {
@@ -408,7 +437,7 @@ test('BotDatabase upgrades a v8 database with per-user news settings storage', a
 
   upgraded = new BotDatabase(databaseFile);
   await upgraded.init();
-  assert.equal(upgraded.getMeta('schemaVersion'), '12');
+  assert.equal(upgraded.getMeta('schemaVersion'), '13');
   assert.equal(upgraded.setUserNewsSettings(33, { region: 'CN' })?.region, 'CN');
 });
 
@@ -434,7 +463,7 @@ test('BotDatabase installs admin lookup indexes for large user and session lists
   ]) {
     assert.equal(indexes.has(name), true, `missing index ${name}`);
   }
-  assert.equal(db.getMeta('schemaVersion'), '12');
+  assert.equal(db.getMeta('schemaVersion'), '13');
 });
 
 test('BotDatabase tracks assistant regenerate message versions', async (t) => {

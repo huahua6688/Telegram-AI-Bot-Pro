@@ -280,12 +280,14 @@ test('Mini App administrators can manage per-user daily quota and paid credit ba
 
   await db.upsertUser(targetUser);
   db.setUserDailyUsage(targetUser.id, 3);
+  await db.incrementStats('aiCalls', 2, targetUser.id);
 
   const config = {
     botToken,
     adminUserIds: new Set([String(adminUser.id)]),
     dailyQuota: 25,
     aiProvider: 'gemini',
+    geminiApiKey: 'test-key',
     defaultModel: 'gemini-2.5-flash',
     providerModels: { gemini: ['gemini-2.5-flash'] },
     aiProviderFallbackOrder: [],
@@ -319,6 +321,10 @@ test('Mini App administrators can manage per-user daily quota and paid credit ba
   assert.match(appHtml, /保存已购额度/);
   assert.match(appHtml, /不影响每日免费额度/);
   assert.match(appHtml, /购买暂未开放；每日免费额度和已有余额仍可使用/);
+  assert.match(appHtml, /全站已处理消息/);
+  assert.match(appHtml, /全站 AI 调用/);
+  assert.match(appHtml, /id="adminGlobalProvider"/);
+  assert.match(appHtml, /只影响使用“自动”模式的用户/);
 
   const forbidden = await fetch(`${base}/api/miniapp/admin/users`, {
     headers: userHeaders
@@ -358,6 +364,26 @@ test('Mini App administrators can manage per-user daily quota and paid credit ba
   const userDetail = await userDetailResponse.json();
   assert.equal(userDetail.user.id, String(targetUser.id));
   assert.equal(userDetail.user.username, targetUser.username);
+  assert.equal(userDetail.user.runtime.aiCalls, 2);
+
+  const globalSettingsResponse = await fetch(`${base}/api/miniapp/admin/global-ai-settings`, {
+    method: 'PUT',
+    headers: adminHeaders,
+    body: JSON.stringify({ providerId: 'gemini', modelId: 'gemini-2.5-flash' })
+  });
+  assert.equal(globalSettingsResponse.status, 200);
+  const globalSettings = await globalSettingsResponse.json();
+  assert.equal(globalSettings.globalAISettings.providerId, 'gemini');
+  assert.equal(globalSettings.globalAISettings.modelId, 'gemini-2.5-flash');
+  assert.equal(db.getUserAISettings(targetUser.id).modelId, '');
+
+  const resetGlobalResponse = await fetch(`${base}/api/miniapp/admin/global-ai-settings`, {
+    method: 'PUT',
+    headers: adminHeaders,
+    body: JSON.stringify({ reset: true })
+  });
+  assert.equal(resetGlobalResponse.status, 200);
+  assert.equal((await resetGlobalResponse.json()).globalAISettings.source, 'environment');
 
   const filteredUsersResponse = await fetch(
     `${base}/api/miniapp/admin/users?status=active&sort=usage&limit=1&offset=0`,

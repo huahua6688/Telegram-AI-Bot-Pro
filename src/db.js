@@ -25,7 +25,8 @@ import {
 // v10: Admin-console lookup and pagination indexes for larger deployments
 // v11: Metered AI costs, durable agent tasks, GitHub App connections, and approvals
 // v12: Refreshable GitHub App user access tokens
-const CURRENT_SCHEMA_VERSION = 12;
+// v13: Per-user AI call counters and persistent global AI defaults
+const CURRENT_SCHEMA_VERSION = 13;
 
 export const BILLING_CREDIT_TYPES = Object.freeze([
   'chat',
@@ -82,6 +83,7 @@ const userColumns = {
   dailyUsageDate: 'daily_usage_date',
   dailyUsageCount: 'daily_usage_count',
   totalMessages: 'total_messages',
+  aiCalls: 'ai_calls',
   lastSeenAt: 'last_seen_at',
   createdAt: 'created_at',
   updatedAt: 'updated_at'
@@ -277,6 +279,7 @@ function rowToUser(row) {
     dailyUsageCount: dailyUsageDate === currentUsageDate ? row.daily_usage_count || 0 : 0,
     dailyQuotaOverride: row.daily_quota_override == null ? null : Number(row.daily_quota_override),
     totalMessages: row.total_messages || 0,
+    aiCalls: row.ai_calls || 0,
     lastSeenAt: row.last_seen_at || '',
     createdAt: row.created_at || '',
     updatedAt: row.updated_at || ''
@@ -475,6 +478,9 @@ export class BotDatabase {
       }
       if (version === 12) {
         this.applySchemaV12();
+      }
+      if (version === 13) {
+        this.applySchemaV13();
       }
       this.setMeta('schemaVersion', String(version));
     }
@@ -1364,6 +1370,27 @@ export class BotDatabase {
     return this.getUserAISettings(userId);
   }
 
+  getGlobalAISettings() {
+    return {
+      providerId: this.getMeta('globalAIProviderId') || '',
+      modelId: this.getMeta('globalAIModelId') || '',
+      updatedAt: this.getMeta('globalAISettingsUpdatedAt') || ''
+    };
+  }
+
+  setGlobalAISettings({ providerId = '', modelId = '' } = {}) {
+    const timestamp = now();
+    this.setMeta('globalAIProviderId', String(providerId || '').trim());
+    this.setMeta('globalAIModelId', String(modelId || '').trim());
+    this.setMeta('globalAISettingsUpdatedAt', timestamp);
+    this.setMeta('updatedAt', timestamp);
+    return this.getGlobalAISettings();
+  }
+
+  resetGlobalAISettings() {
+    return this.setGlobalAISettings({ providerId: '', modelId: '' });
+  }
+
   ensureSessionFromId(sessionId, createdAt = now(), updatedAt = now()) {
     const identity = parseSessionIdentity(sessionId);
     const timestamp = updatedAt || now();
@@ -1559,6 +1586,23 @@ export class BotDatabase {
     if (!columns.has('refresh_token_encrypted')) {
       this.db.exec("ALTER TABLE github_connections ADD COLUMN refresh_token_encrypted TEXT NOT NULL DEFAULT ''");
     }
+  }
+
+  applySchemaV13() {
+    const columns = new Set(this.db.prepare('PRAGMA table_info(users)').all().map((column) => column.name));
+    if (!columns.has('ai_calls')) {
+      this.db.exec('ALTER TABLE users ADD COLUMN ai_calls INTEGER NOT NULL DEFAULT 0');
+    }
+
+    // Keep the historical portion that can be reconstructed from metered calls.
+    // Older free-provider calls were not recorded per user and cannot be recovered.
+    this.db.exec(`
+      UPDATE users
+      SET ai_calls = COALESCE((
+        SELECT COUNT(*) FROM provider_usage_costs WHERE provider_usage_costs.user_id = users.id
+      ), 0)
+      WHERE ai_calls = 0
+    `);
   }
 
   applySchemaV10() {
@@ -2746,7 +2790,7 @@ export class BotDatabase {
     }));
   }
 
-  async incrementStats(key, by = 1) {
+  async incrementStats(key, by = 1, userId = '') {
     const columns = {
       messagesHandled: 'messages_handled',
       aiCalls: 'ai_calls',
@@ -2759,7 +2803,38 @@ export class BotDatabase {
     if (!column) return;
     this.ensureStatsRow();
     this.db.prepare(`UPDATE stats SET ${column} = ${column} + ? WHERE id = 1`).run(by);
+    if (key === 'aiCalls' && String(userId || '').trim()) {
+      this.db.prepare('UPDATE users SET ai_calls = ai_calls + ?, updated_at = ? WHERE id = ?')
+        .run(by, now(), String(userId));
+    }
     await this.write();
+  }
+
+  getUserRuntimeSummary(userId) {
+    const normalizedUserId = String(userId || '');
+    const user = this.findUser(normalizedUserId);
+    const costs = this.db.prepare(
+      `SELECT COUNT(*) AS tracked_calls,
+              COALESCE(SUM(cost_usd_micros), 0) AS cost_usd_micros,
+              COALESCE(SUM(billed_credits), 0) AS billed_credits,
+              COALESCE(SUM(total_tokens), 0) AS total_tokens
+       FROM provider_usage_costs WHERE user_id = ?`
+    ).get(normalizedUserId);
+    const tasks = this.db.prepare(
+      `SELECT COUNT(*) AS total_tasks,
+              COALESCE(SUM(CASE WHEN status IN ('queued', 'running', 'waiting_approval', 'paused') THEN 1 ELSE 0 END), 0) AS active_tasks
+       FROM agent_tasks WHERE user_id = ?`
+    ).get(normalizedUserId);
+    return {
+      messagesHandled: Number(user?.totalMessages || 0),
+      aiCalls: Number(user?.aiCalls || 0),
+      trackedProviderCalls: Number(costs?.tracked_calls || 0),
+      providerCostUsd: Number(costs?.cost_usd_micros || 0) / 1_000_000,
+      billedCredits: Number(costs?.billed_credits || 0),
+      totalTokens: Number(costs?.total_tokens || 0),
+      agentTasks: Number(tasks?.total_tasks || 0),
+      activeAgentTasks: Number(tasks?.active_tasks || 0)
+    };
   }
 
   getStats() {

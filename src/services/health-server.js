@@ -1226,11 +1226,11 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         <span class="badge" id="statusBadge">检查中</span>
       </div>
       <div class="status-row">
-        <span class="label">AI Provider</span>
+        <span class="label">我的 AI 平台</span>
         <span class="value" id="provider">—</span>
       </div>
       <div class="status-row">
-        <span class="label">默认模型</span>
+        <span class="label">我的当前模型</span>
         <span class="value" id="model">—</span>
       </div>
       <div class="status-row">
@@ -1238,11 +1238,11 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         <span class="value" id="uptime">—</span>
       </div>
       <div class="status-row">
-        <span class="label">已处理消息</span>
+        <span class="label">我的已处理消息</span>
         <span class="value" id="messages">—</span>
       </div>
       <div class="status-row">
-        <span class="label">AI 调用</span>
+        <span class="label">我的 AI 调用</span>
         <span class="value" id="aiCalls">—</span>
       </div>
     </section>
@@ -1419,11 +1419,11 @@ const MINI_APP_HTML = String.raw`<!doctype html>
           <strong id="adminDailyQuota">—</strong>
         </div>
         <div class="stat-box">
-          <span>已处理消息</span>
+          <span>全站已处理消息</span>
           <strong id="adminMessages">—</strong>
         </div>
         <div class="stat-box">
-          <span>AI 调用</span>
+          <span>全站 AI 调用</span>
           <strong id="adminAiCalls">—</strong>
         </div>
       </div>
@@ -1435,6 +1435,21 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       </div>
 
       <div class="admin-pane active" data-admin-pane="overview">
+        <details class="admin-section" open>
+          <summary>全局默认模型</summary>
+          <div class="admin-section-body">
+            <p class="small" style="text-align:left;margin-top:0">只影响使用“自动”模式的用户，不覆盖任何用户手动选择的模型。</p>
+            <div class="field-grid">
+              <label>默认平台<select id="adminGlobalProvider"></select></label>
+              <label>默认模型<select id="adminGlobalModel"></select></label>
+            </div>
+            <p class="small" id="adminGlobalModelSource" style="text-align:left"></p>
+            <div class="actions">
+              <button class="primary compact-button" id="adminGlobalModelSave" type="button">保存全局默认值</button>
+              <button class="secondary compact-button" id="adminGlobalModelReset" type="button">恢复环境变量</button>
+            </div>
+          </div>
+        </details>
         <details class="admin-section">
           <summary>AI 平台状态</summary>
           <div class="admin-section-body"><div class="provider-list" id="adminProviderList"></div></div>
@@ -1559,6 +1574,8 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       adminSessionPageSize: 20,
       adminUserRequestId: 0,
       adminSessionRequestId: 0,
+      adminProviders: [],
+      adminGlobalAISettings: null,
       supportUrl: ''
     };
     let adminUserSearchTimer = null;
@@ -1619,6 +1636,11 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       adminDailyQuota: document.getElementById('adminDailyQuota'),
       adminMessages: document.getElementById('adminMessages'),
       adminAiCalls: document.getElementById('adminAiCalls'),
+      adminGlobalProvider: document.getElementById('adminGlobalProvider'),
+      adminGlobalModel: document.getElementById('adminGlobalModel'),
+      adminGlobalModelSource: document.getElementById('adminGlobalModelSource'),
+      adminGlobalModelSave: document.getElementById('adminGlobalModelSave'),
+      adminGlobalModelReset: document.getElementById('adminGlobalModelReset'),
       adminProviderList: document.getElementById('adminProviderList'),
       adminTabs: Array.from(document.querySelectorAll('[data-admin-pane-target]')),
       adminPanes: Array.from(document.querySelectorAll('[data-admin-pane]')),
@@ -1863,7 +1885,15 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       elements.syncModelsButton.classList.toggle('hidden', !state.profile.isAdmin);
       renderBilling(data.billing || {});
 
+      const runtime = data.runtime || {};
+      elements.messages.textContent = String(runtime.messagesHandled ?? 0);
+      elements.aiCalls.textContent = String(runtime.aiCalls ?? 0);
+
       const providerId = state.settings.providerId || 'auto';
+      elements.provider.textContent = providerId === 'auto'
+        ? (state.routing.defaultProvider || '自动') + '（自动）'
+        : providerId;
+      elements.model.textContent = state.settings.modelId || state.routing.defaultModel || '自动路由';
       buildOptions(
         elements.providerSelect,
         state.catalog.map(function (item) {
@@ -1948,15 +1978,11 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         if (!response.ok) throw new Error('HTTP ' + response.status);
 
         const data = await response.json();
-        const stats = data.stats || {};
-
         elements.statusBadge.textContent = data.ok ? '在线' : '异常';
         elements.statusBadge.className = data.ok ? 'badge' : 'badge error';
         elements.provider.textContent = data.provider || '未配置';
         elements.model.textContent = data.model || '未配置';
         elements.uptime.textContent = formatUptime(data.uptime);
-        elements.messages.textContent = String(stats.messagesHandled ?? 0);
-        elements.aiCalls.textContent = String(stats.aiCalls ?? 0);
       } catch (error) {
         elements.statusBadge.textContent = '连接失败';
         elements.statusBadge.className = 'badge error';
@@ -2328,6 +2354,64 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       }
     }
 
+    function renderAdminGlobalModels(settings) {
+      state.adminGlobalAISettings = settings || {};
+      elements.adminGlobalProvider.innerHTML = '';
+      state.adminProviders.filter(function (provider) { return provider.configured; }).forEach(function (provider) {
+        const option = document.createElement('option');
+        option.value = provider.id;
+        option.textContent = provider.label || provider.id;
+        elements.adminGlobalProvider.appendChild(option);
+      });
+      elements.adminGlobalProvider.value = settings.providerId || '';
+      renderAdminGlobalModelOptions(settings.modelId || '');
+      elements.adminGlobalModelSource.textContent = settings.source === 'database'
+        ? '当前值保存在 SQLite，服务重启后仍然有效。'
+        : '当前沿用 Zeabur 环境变量。';
+    }
+
+    function renderAdminGlobalModelOptions(selectedModel) {
+      const providerId = elements.adminGlobalProvider.value;
+      const provider = state.adminProviders.find(function (item) { return item.id === providerId; });
+      const models = provider && Array.isArray(provider.models) ? provider.models : [];
+      elements.adminGlobalModel.innerHTML = '';
+      models.forEach(function (model) {
+        const option = document.createElement('option');
+        option.value = model;
+        option.textContent = model;
+        elements.adminGlobalModel.appendChild(option);
+      });
+      if (selectedModel && models.includes(selectedModel)) elements.adminGlobalModel.value = selectedModel;
+      elements.adminGlobalModel.disabled = models.length === 0;
+      elements.adminGlobalModelSave.disabled = !providerId || models.length === 0;
+    }
+
+    async function saveAdminGlobalModels(reset) {
+      const accepted = await askConfirmation(reset
+        ? '确定恢复 Zeabur 环境变量中的默认模型吗？'
+        : '确定修改所有“自动模式”用户的全局默认模型吗？');
+      if (!accepted) return;
+      showAdminNotice(reset ? '正在恢复环境变量…' : '正在保存全局默认模型…', '');
+      try {
+        const response = await fetch('/api/miniapp/admin/global-ai-settings', {
+          method: 'PUT',
+          headers: authHeaders({ 'Content-Type': 'application/json' }),
+          body: JSON.stringify(reset ? { reset: true } : {
+            providerId: elements.adminGlobalProvider.value,
+            modelId: elements.adminGlobalModel.value
+          })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || data.error || '保存失败');
+        state.adminProviders = data.providers || state.adminProviders;
+        renderAdminGlobalModels(data.globalAISettings || {});
+        renderProviderStatus(state.adminProviders);
+        showAdminNotice(reset ? '已恢复环境变量默认值。' : '全局默认模型已保存。', 'success');
+      } catch (error) {
+        showAdminNotice(error.message || '全局默认模型保存失败。', 'failure');
+      }
+    }
+
     function userDisplayName(user) {
       const fullName = [user.firstName, user.lastName].filter(Boolean).join(' ');
       if (fullName) return fullName;
@@ -2340,16 +2424,28 @@ const MINI_APP_HTML = String.raw`<!doctype html>
     }
 
     function appendAdminUserEditor(container, user) {
+      const runtime = user.runtime || {};
       const meta = document.createElement('div');
       meta.className = 'user-meta';
       meta.textContent = [
         'ID ' + user.id,
         user.username ? '@' + user.username : '',
         '今日免费聊天 ' + Number(user.dailyUsageCount || 0) + ' / ' + quotaDisplayValue(user.dailyQuota),
-        '累计请求 ' + Number(user.totalMessages || 0),
+        '个人已处理消息 ' + Number(runtime.messagesHandled ?? user.totalMessages ?? 0),
+        '个人 AI 调用 ' + Number(runtime.aiCalls || 0),
         '最近活跃 ' + formatDateTime(user.lastSeenAt)
       ].filter(Boolean).join(' · ');
       container.appendChild(meta);
+
+      const aiScope = document.createElement('div');
+      aiScope.className = 'notice';
+      aiScope.textContent = [
+        '模型：' + (user.usesAutomaticModel ? '自动（继承全局）' : '用户手动选择'),
+        (user.effectiveAIProvider || 'auto') + ' / ' + (user.effectiveAIModel || '自动路由'),
+        '已记录平台成本：$' + Number(runtime.providerCostUsd || 0).toFixed(4),
+        'Agent 任务：' + Number(runtime.agentTasks || 0) + '（运行中 ' + Number(runtime.activeAgentTasks || 0) + '）'
+      ].join(' · ');
+      container.appendChild(aiScope);
 
       const actions = document.createElement('div');
       actions.className = 'user-actions';
@@ -2493,7 +2589,13 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         name.textContent = userDisplayName(user);
         const meta = document.createElement('div');
         meta.className = 'user-meta';
-        meta.textContent = ['ID ' + user.id, '今日 ' + Number(user.dailyUsageCount || 0), '累计 ' + Number(user.totalMessages || 0), formatDateTime(user.lastSeenAt)].join(' · ');
+        meta.textContent = [
+          'ID ' + user.id,
+          '今日 ' + Number(user.dailyUsageCount || 0),
+          '消息 ' + Number(user.runtime?.messagesHandled ?? user.totalMessages ?? 0),
+          'AI ' + Number(user.runtime?.aiCalls || 0),
+          formatDateTime(user.lastSeenAt)
+        ].join(' · ');
         const pill = document.createElement('span');
         pill.className = user.isBlocked ? 'status-pill blocked' : user.isAdmin ? 'status-pill' : 'status-pill muted';
         pill.textContent = user.isBlocked ? '已封禁' : user.isAdmin ? '管理员' : '正常';
@@ -2583,7 +2685,9 @@ const MINI_APP_HTML = String.raw`<!doctype html>
         elements.adminDailyQuota.textContent = quotaDisplayValue(data.dailyQuota);
         elements.adminMessages.textContent = String(stats.messagesHandled ?? 0);
         elements.adminAiCalls.textContent = String(stats.aiCalls ?? 0);
-        renderProviderStatus(data.providers || []);
+        state.adminProviders = data.providers || [];
+        renderProviderStatus(state.adminProviders);
+        renderAdminGlobalModels(data.globalAISettings || {});
         state.adminLoaded = true;
         hideAdminNotice();
       } catch (error) {
@@ -2962,6 +3066,16 @@ const MINI_APP_HTML = String.raw`<!doctype html>
       });
     });
 
+    elements.adminGlobalProvider.addEventListener('change', function () {
+      renderAdminGlobalModelOptions('');
+    });
+    elements.adminGlobalModelSave.addEventListener('click', function () {
+      saveAdminGlobalModels(false);
+    });
+    elements.adminGlobalModelReset.addEventListener('click', function () {
+      saveAdminGlobalModels(true);
+    });
+
     elements.adminSearchButton.addEventListener('click', function () {
       fetchAdminUsers({ resetPage: true }).catch(function (error) {
         showAdminNotice(error.message || '搜索失败。', 'failure');
@@ -3245,6 +3359,29 @@ function buildProviderCatalog(config, providerManager = null) {
     });
 }
 
+function resolveGlobalAISettings(db, config, providerManager = null) {
+  const stored = db?.getGlobalAISettings?.() || {};
+  const providerId = String(
+    stored.providerId || config.defaultAIProvider || config.aiProvider || 'auto'
+  ).trim();
+  const models = providerId === 'auto'
+    ? []
+    : providerManager?.getProviderModels?.(providerId) || config.providerModels?.[providerId] || [];
+  const storedModel = String(stored.modelId || '').trim();
+  const configuredModel = providerId === String(config.aiProvider || '')
+    ? String(config.defaultModel || '').trim()
+    : '';
+  const modelId = storedModel && (models.length === 0 || models.includes(storedModel))
+    ? storedModel
+    : models[0] || configuredModel;
+  return {
+    providerId,
+    modelId,
+    source: stored.providerId || stored.modelId ? 'database' : 'environment',
+    updatedAt: stored.updatedAt || ''
+  };
+}
+
 function verifyTelegramInitData(initData, botToken, maxAgeSeconds = TELEGRAM_AUTH_MAX_AGE_SECONDS) {
   if (!initData || !botToken) {
     throw new Error('TELEGRAM_AUTH_REQUIRED');
@@ -3404,6 +3541,7 @@ function withInheritedNewsOption(options, currentValue, effectiveValue, inherite
 function serializeSettingsResponse({ db, config, providerManager = null, userId, telegramLanguageCode = '' }) {
   const user = db.findUser(userId);
   const settings = db.getUserAISettings(userId);
+  const globalAISettings = resolveGlobalAISettings(db, config, providerManager);
   const news = db.getUserNewsSettings?.(userId) || {
     region: '',
     language: '',
@@ -3442,8 +3580,8 @@ function serializeSettingsResponse({ db, config, providerManager = null, userId,
       updatedAt: settings.updatedAt || ''
     },
     routing: {
-      defaultProvider: String(config.defaultAIProvider || config.aiProvider || 'auto'),
-      defaultModel: String(config.defaultModel || ''),
+      defaultProvider: globalAISettings.providerId,
+      defaultModel: globalAISettings.modelId,
       fallbackOrder: Array.isArray(config.aiProviderFallbackOrder) ? config.aiProviderFallbackOrder : [],
       smartRoutingEnabled: config.smartRoutingEnabled === true,
       modelSelectionRequired: config.modelSelectionRequired === true
@@ -3460,6 +3598,9 @@ function serializeSettingsResponse({ db, config, providerManager = null, userId,
       }
     },
     billing,
+    runtime: typeof db.getUserRuntimeSummary === 'function'
+      ? db.getUserRuntimeSummary(userId)
+      : { messagesHandled: Number(user?.totalMessages || 0), aiCalls: Number(user?.aiCalls || 0) },
     support: {
       enabled: Boolean(supportUrl),
       url: supportUrl
@@ -3573,17 +3714,24 @@ function authErrorResponse(error) {
   };
 }
 
-function buildAdminProviderStatus(config) {
+function buildAdminProviderStatus(config, providerManager = null, globalAISettings = null) {
   return PROVIDER_ORDER
     .filter((providerId) => providerId !== 'auto')
     .map((providerId) => ({
       id: providerId,
       label: PROVIDER_LABELS[providerId] || providerId,
       configured: hasProviderCredential(config, providerId),
-      current: String(config.aiProvider || '') === providerId,
-      modelCount: Array.isArray(config.providerModels?.[providerId])
-        ? config.providerModels[providerId].length
-        : 0
+      current: String(globalAISettings?.providerId || config.aiProvider || '') === providerId,
+      models: Array.from(new Set([
+        ...(providerManager?.getProviderModels?.(providerId) || []),
+        ...(config.providerModels?.[providerId] || []),
+        providerId === String(config.aiProvider || '') ? config.defaultModel : ''
+      ].map((item) => String(item || '').trim()).filter(Boolean))),
+      modelCount: Array.from(new Set([
+        ...(providerManager?.getProviderModels?.(providerId) || []),
+        ...(config.providerModels?.[providerId] || []),
+        providerId === String(config.aiProvider || '') ? config.defaultModel : ''
+      ].map((item) => String(item || '').trim()).filter(Boolean))).length
     }));
 }
 
@@ -3876,16 +4024,60 @@ async function handleMiniAppAdminApi(req, res, context, url) {
 
   if (pathname === '/api/miniapp/admin/overview' && req.method === 'GET') {
     const billingCatalog = buildBillingCatalog(context.config);
+    const globalAISettings = resolveGlobalAISettings(context.db, context.config, context.providerManager);
     sendJson(res, 200, {
       ok: true,
       totalUsers: context.db.countUsers(),
       dailyQuota: Number(billingCatalog.freeQuota.chat || 0),
       billingCatalog,
       stats: context.db.getStats(),
-      currentProvider: context.config.aiProvider || '',
-      currentModel: context.config.defaultModel || '',
-      providers: buildAdminProviderStatus(context.config)
+      currentProvider: globalAISettings.providerId,
+      currentModel: globalAISettings.modelId,
+      globalAISettings,
+      providers: buildAdminProviderStatus(context.config, context.providerManager, globalAISettings)
     });
+    return;
+  }
+
+  if (pathname === '/api/miniapp/admin/global-ai-settings' && req.method === 'PUT') {
+    try {
+      const payload = await readJsonBody(req);
+      if (payload.reset === true) {
+        context.db.resetGlobalAISettings();
+      } else {
+        const providerId = String(payload.providerId || '').trim();
+        const modelId = String(payload.modelId || '').trim();
+        const providers = buildAdminProviderStatus(context.config, context.providerManager);
+        const provider = providers.find((item) => item.id === providerId && item.configured);
+        if (!provider) throw new Error('GLOBAL_AI_PROVIDER_INVALID');
+        if (!modelId || !provider.models.includes(modelId)) throw new Error('GLOBAL_AI_MODEL_INVALID');
+        context.db.setGlobalAISettings({ providerId, modelId });
+      }
+      const globalAISettings = resolveGlobalAISettings(context.db, context.config, context.providerManager);
+      logMiniAppAdminAction(context, {
+        actorId: auth.telegramUser.id,
+        action: payload.reset === true ? 'global_ai_settings.reset' : 'global_ai_settings.update',
+        targetId: 'global',
+        details: globalAISettings,
+        req
+      });
+      sendJson(res, 200, {
+        ok: true,
+        globalAISettings,
+        providers: buildAdminProviderStatus(context.config, context.providerManager, globalAISettings)
+      });
+    } catch (error) {
+      const code = String(error?.message || 'GLOBAL_AI_SETTINGS_UPDATE_FAILED');
+      sendJson(res, 400, {
+        ok: false,
+        error: code,
+        message: code === 'GLOBAL_AI_PROVIDER_INVALID'
+          ? '这个 AI 平台未配置或不可用。'
+          : code === 'GLOBAL_AI_MODEL_INVALID'
+            ? '这个模型不在当前平台的可用列表中。'
+            : '全局默认模型保存失败。'
+      });
+    }
     return;
   }
 

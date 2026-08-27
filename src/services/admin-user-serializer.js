@@ -65,6 +65,24 @@ export function serializeAdminUser(dbOrOptions, userArg, configArg = {}) {
   const defaultQuota = getDefaultChatFreeQuota(config);
   const quota = resolveAdminUserQuota(db, user.id, defaultQuota);
   const creditBalances = readCreditBalances(db, user.id);
+  const globalAISettings = typeof db.getGlobalAISettings === 'function' ? db.getGlobalAISettings() : {};
+  const runtime = typeof db.getUserRuntimeSummary === 'function'
+    ? db.getUserRuntimeSummary(user.id)
+    : {
+        messagesHandled: Number(user.totalMessages || 0),
+        aiCalls: Number(user.aiCalls || 0),
+        trackedProviderCalls: 0,
+        providerCostUsd: 0,
+        billedCredits: 0,
+        totalTokens: 0,
+        agentTasks: 0,
+        activeAgentTasks: 0
+      };
+  const storedProviderId = String(aiSettings.providerId || '');
+  const usesAutomaticModel = (!storedProviderId || storedProviderId === 'auto') && !aiSettings.modelId;
+  const effectiveAIProvider = usesAutomaticModel
+    ? globalAISettings.providerId || config.defaultAIProvider || config.aiProvider || 'auto'
+    : storedProviderId;
 
   return {
     id: String(user.id),
@@ -85,6 +103,10 @@ export function serializeAdminUser(dbOrOptions, userArg, configArg = {}) {
     lastSeenAt: user.lastSeenAt || '',
     aiProvider: aiSettings.providerId || 'auto',
     aiModel: aiSettings.modelId || '',
+    effectiveAIProvider,
+    effectiveAIModel: aiSettings.modelId || globalAISettings.modelId || config.defaultModel || '',
+    usesAutomaticModel,
+    runtime,
     creditBalances
   };
 }

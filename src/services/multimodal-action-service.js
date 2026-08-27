@@ -42,6 +42,7 @@ export class MultimodalActionService {
     prompt,
     imageBuffer,
     mimeType,
+    userId = '',
     aiClient = null,
     capabilities = null,
     providerName = ''
@@ -59,7 +60,7 @@ export class MultimodalActionService {
         };
       }
       const response = await activeClient.generateImage({ prompt });
-      await this.db.incrementStats('aiCalls');
+      await this.db.incrementStats('aiCalls', 1, userId);
       await this.db.incrementStats('imageGenerations');
       return { ok: true, mode, response };
     }
@@ -73,7 +74,7 @@ export class MultimodalActionService {
         };
       }
       const response = await activeClient.editImage({ prompt, imageBuffer, mimeType });
-      await this.db.incrementStats('aiCalls');
+      await this.db.incrementStats('aiCalls', 1, userId);
       await this.db.incrementStats('imageGenerations');
       return { ok: true, mode, response };
     }
@@ -93,4 +94,3 @@ export class MultimodalActionService {
     return null;
   }
 }
-
