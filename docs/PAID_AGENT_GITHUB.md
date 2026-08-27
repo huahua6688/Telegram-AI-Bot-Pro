@@ -2,7 +2,7 @@
 
 ## 1. 先启用安全计费
 
-系统将模型分为 `free` 和 `paid`。明确列入 `FREE_MODEL_PATTERNS` 或平台模型目录明确标记免费的模型，才可使用每日免费次数；付费和价格未知的模型一律只能使用购买余额。
+系统将 Provider/模型分为 `free` 和 `paid`。默认将承载 Zeabur AI Hub 的 `openai-compatible` 整个平台设为付费；其他已经支持的 Provider 可继续使用每日免费次数，但平台目录明确标记为付费的模型仍然优先按付费处理。付费和价格未知的模型一律只能使用购买余额。
 
 ```env
 BILLING_USD_PER_CHAT_CREDIT=0.01
@@ -16,6 +16,8 @@ BILLING_MAX_REQUEST_USD=2
 AI_MAX_OUTPUT_TOKENS=2048
 FREE_MODEL_PATTERNS=:free,gemini-2.5-flash-lite
 PAID_MODEL_PATTERNS=claude-opus,claude-sonnet,gpt-5
+FREE_PROVIDER_PATTERNS=gemini,gemini-live,groq,openrouter,github-models,huggingface,mistral,openai,anthropic,deepseek,qwen,grok,glm,doubao
+PAID_PROVIDER_PATTERNS=openai-compatible
 ```
 
 上面的金额只是换算示例，不是建议售价。应根据 Stars 实收、退款、平台费用和目标利润重新计算。某能力的换算值留空时，该能力的付费/未知成本模型会安全关闭。

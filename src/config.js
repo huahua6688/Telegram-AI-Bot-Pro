@@ -484,6 +484,11 @@ export function loadConfig() {
     }),
     billingCostMarkup: Math.max(1, parsePositiveNumber(process.env.BILLING_COST_MARKUP, 1.25)),
     billingMaxRequestUsd: parsePositiveNumber(process.env.BILLING_MAX_REQUEST_USD, 2),
+    freeProviderPatterns: parseList(
+      process.env.FREE_PROVIDER_PATTERNS ||
+      'gemini,gemini-live,groq,openrouter,github-models,huggingface,mistral,openai,anthropic,deepseek,qwen,grok,glm,doubao'
+    ),
+    paidProviderPatterns: parseList(process.env.PAID_PROVIDER_PATTERNS || 'openai-compatible'),
     freeModelPatterns: parseList(process.env.FREE_MODEL_PATTERNS || ':free,gemini-2.5-flash-lite'),
     paidModelPatterns: parseList(process.env.PAID_MODEL_PATTERNS),
     agentEnabled: parseBoolean(process.env.AGENT_ENABLED, false),

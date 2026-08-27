@@ -27,6 +27,26 @@ test('unknown and explicitly paid models cannot use free quota', () => {
   assert.equal(classifyModelBilling({ providerId: 'gemini', model: 'gemini-2.5-flash-lite', config }), 'free');
 });
 
+test('provider policy keeps the Zeabur-compatible gateway paid and other providers free', () => {
+  const config = {
+    freeProviderPatterns: ['gemini', 'groq', 'openrouter'],
+    paidProviderPatterns: ['openai-compatible'],
+    freeModelPatterns: [':free'],
+    paidModelPatterns: ['claude-opus']
+  };
+
+  assert.equal(classifyModelBilling({ providerId: 'openai-compatible', model: 'cheap-model', config }), 'paid');
+  assert.equal(classifyModelBilling({ providerId: 'gemini', model: 'gemini-flash', config }), 'free');
+  assert.equal(classifyModelBilling({ providerId: 'openrouter', model: 'vendor/free', config }), 'free');
+  assert.equal(classifyModelBilling({
+    providerId: 'openrouter',
+    model: 'vendor/premium',
+    catalogEntry: { pricingTier: 'paid' },
+    config
+  }), 'paid');
+  assert.equal(classifyModelBilling({ providerId: 'new-provider', model: 'unknown', config }), 'paid');
+});
+
 test('Zeabur header and OpenRouter body cost are normalized', () => {
   const zeabur = extractProviderCost({ id: 'z1', usage: { prompt_tokens: 10, completion_tokens: 5 } }, new Headers({ 'x-litellm-response-cost': '0.1234' }));
   const openrouter = extractProviderCost({ id: 'o1', usage: { cost: 0.25, total_tokens: 20 } });

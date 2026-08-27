@@ -11,11 +11,18 @@ function matches(value, patterns = []) {
 }
 
 export function classifyModelBilling({ providerId = '', model = '', catalogEntry = null, config = {} } = {}) {
-  const qualified = `${normalize(providerId)}/${normalize(model)}`;
+  const normalizedProvider = normalize(providerId);
+  const qualified = `${normalizedProvider}/${normalize(model)}`;
+  // An operator can make an entire paid gateway ineligible for daily free
+  // quota, regardless of the model name exposed by that gateway.
+  if (matches(normalizedProvider, config.paidProviderPatterns)) return 'paid';
   if (matches(qualified, config.paidModelPatterns)) return 'paid';
-  if (matches(qualified, config.freeModelPatterns)) return 'free';
-  if (catalogEntry?.pricingTier === 'free') return 'free';
+  // Explicit catalog pricing overrides a broadly free provider. This keeps a
+  // paid OpenRouter (or similar) model from becoming free by accident.
   if (catalogEntry?.pricingTier === 'paid') return 'paid';
+  if (matches(qualified, config.freeModelPatterns)) return 'free';
+  if (matches(normalizedProvider, config.freeProviderPatterns)) return 'free';
+  if (catalogEntry?.pricingTier === 'free') return 'free';
   // Unknown pricing is never treated as free. This is the fail-closed rule
   // that prevents a newly discovered premium model from consuming free quota.
   return 'paid';
