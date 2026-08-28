@@ -60,14 +60,14 @@ Provider、Agent、GitHub 和计费是独立模块。以后替换模型平台，
 PUBLIC_BASE_URL=https://你的域名
 GITHUB_APP_CLIENT_ID=...
 GITHUB_APP_CLIENT_SECRET=...
-GITHUB_TOKEN_ENCRYPTION_KEY=至少32位随机字符串
+GITHUB_TOKEN_ENCRYPTION_KEY=至少32位、且不能与聊天加密密钥相同的随机字符串
 ```
 
 用户发送 `/github connect` 完成授权，`/github repos` 查看可访问仓库，`/github disconnect` 删除本地连接。令牌使用 AES-256-GCM 加密，并与 Telegram 用户 ID 绑定；系统不共用管理员的 GitHub Token。
 
 ## 4. 部署独立 Agent Worker
 
-不要把陌生用户的命令放在 Bot 容器中执行。`agent-worker/` 是独立服务，收到 HMAC 签名请求后，再为每次命令启动一个无网络、只读根文件系统、限 CPU/内存/PID、删除全部 capabilities 的临时 Docker 容器。
+不要把陌生用户的命令放在 Bot 容器中执行。`agent-worker/` 是独立服务，收到 HMAC 签名请求后，再为每次命令启动一个无网络、只读根文件系统、限 CPU/内存/PID/文件描述符、删除全部 capabilities 的临时 Docker 容器。Shell 默认禁用；只有明确设置 `SANDBOX_ALLOW_SHELL=true` 并把 shell 加入 `SANDBOX_ALLOWED_COMMANDS` 才会开放。
 
 在独立 VPS 上：
 

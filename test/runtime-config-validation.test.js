@@ -10,6 +10,10 @@ function validConfig(overrides = {}) {
     defaultModel: 'gemini-2.5-flash',
     adminApiEnabled: false,
     adminApiToken: '',
+    productionMode: false,
+    chatEncryptionRequired: false,
+    chatEncryptionKey: '',
+    logPrivacyKey: '',
     ...overrides
   };
 }
@@ -48,11 +52,42 @@ test('runtime config accepts enabled Admin API with token', () => {
   const errors = getRuntimeConfigErrors(
     validConfig({
       adminApiEnabled: true,
-      adminApiToken: 'strong-admin-token'
+      adminApiToken: 'A7!admin-token-with-32-random-characters#9'
     })
   );
 
   assert.deepEqual(errors, []);
+});
+
+test('runtime config rejects short, common, or low-diversity Admin API secrets', () => {
+  for (const adminApiToken of ['short-token', 'replace-me-with-a-longer-admin-token', 'a'.repeat(64)]) {
+    const errors = getRuntimeConfigErrors(validConfig({ adminApiEnabled: true, adminApiToken }));
+    assert.ok(errors.some((item) => item.includes('ADMIN_API_TOKEN')));
+  }
+});
+
+test('runtime config fails closed on production encryption and audit pseudonymization', () => {
+  const errors = getRuntimeConfigErrors(validConfig({ productionMode: true }));
+  assert.ok(errors.some((item) => item.includes('CHAT_ENCRYPTION_REQUIRED')));
+  assert.ok(errors.some((item) => item.includes('LOG_PRIVACY_KEY')));
+
+  assert.deepEqual(getRuntimeConfigErrors(validConfig({
+    productionMode: true,
+    chatEncryptionRequired: true,
+    chatEncryptionKey: 'Chat-Encryption-Key-32+Unique-Characters!1',
+    logPrivacyKey: 'Log-Privacy-Key-32+Different-Characters!2'
+  })), []);
+});
+
+test('runtime config requires a dedicated GitHub token encryption key', () => {
+  const shared = 'Shared-Encryption-Key-32+Unique-Characters!';
+  const errors = getRuntimeConfigErrors(validConfig({
+    githubAppClientId: 'client-id',
+    githubAppClientSecret: 'client-secret',
+    githubTokenEncryptionKey: shared,
+    chatEncryptionKey: shared
+  }));
+  assert.ok(errors.some((item) => item.includes('must be different')));
 });
 
 test('runtime config fails closed when Agent isolation or billing secrets are incomplete', () => {

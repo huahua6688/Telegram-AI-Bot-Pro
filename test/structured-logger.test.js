@@ -67,3 +67,27 @@ test('structured logger keeps only safe error metadata and stays serializable', 
   assert.equal(payload.meta.self, '[TRUNCATED]');
   assert.doesNotMatch(outputs[0], /private-token|private message body|private provider response|203\.0\.113\.20|private-session/);
 });
+
+test('structured logger keeps pseudonyms stable with LOG_PRIVACY_KEY and redacts more credential formats', () => {
+  const originalWarn = console.warn;
+  const outputs = [];
+  console.warn = (value) => outputs.push(JSON.parse(String(value)));
+  const privacyKey = 'Stable-Log-Privacy-Key-32+Unique-Characters!';
+  try {
+    createStructuredLogger({ privacyKey }).warn('request api_key=plain-secret-value', {
+      userId: '99887766',
+      note: `github_pat_${'a'.repeat(30)}`,
+      callback: `https://example.test/cb?access_token=${'b'.repeat(30)}&mode=ok`
+    });
+    createStructuredLogger({ privacyKey }).warn('second', { userId: '99887766' });
+    createStructuredLogger({ privacyKey: `${privacyKey}-different` }).warn('third', { userId: '99887766' });
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  assert.equal(outputs[0].meta.userId, outputs[1].meta.userId);
+  assert.notEqual(outputs[0].meta.userId, outputs[2].meta.userId);
+  const serialized = JSON.stringify(outputs[0]);
+  assert.doesNotMatch(serialized, /plain-secret-value|github_pat_|bbbbbbbb/);
+  assert.match(serialized, /REDACTED/);
+});

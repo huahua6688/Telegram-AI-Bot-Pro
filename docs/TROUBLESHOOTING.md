@@ -11,7 +11,9 @@
     BOT_TOKEN 没填
     GEMINI_API_KEY 没填
     DEFAULT_AI_MODEL 配置错误或对应 Provider 没有可用模型
-    ADMIN_API_ENABLED=true 但 ADMIN_API_TOKEN 没填
+    ADMIN_API_ENABLED=true 但 ADMIN_API_TOKEN 少于32位或仍是占位值
+    生产环境没有 CHAT_ENCRYPTION_KEY / LOG_PRIVACY_KEY
+    GitHub App 复用了 CHAT_ENCRYPTION_KEY
 
 新启动诊断会在 BackOff 前打印稳定错误码：
 

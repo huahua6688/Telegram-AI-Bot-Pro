@@ -545,6 +545,24 @@ test('loadConfig exposes the current free-credit and support defaults', () => {
   assert.equal(config.miniAppShowUserMessages, false);
 });
 
+test('loadConfig defaults production encryption to fail closed and never reuses the chat key for GitHub', () => {
+  resetEnv();
+  process.env.NODE_ENV = 'production';
+  process.env.CHAT_ENCRYPTION_KEY = 'chat-only-key';
+  delete process.env.CHAT_ENCRYPTION_REQUIRED;
+  delete process.env.GITHUB_TOKEN_ENCRYPTION_KEY;
+  const config = loadConfig();
+  assert.equal(config.productionMode, true);
+  assert.equal(config.chatEncryptionRequired, true);
+  assert.equal(config.chatEncryptionKey, 'chat-only-key');
+  assert.equal(config.githubTokenEncryptionKey, '');
+
+  resetEnv();
+  delete process.env.NODE_ENV;
+  process.env.ZEABUR_SERVICE_ID = 'service-id';
+  assert.equal(loadConfig().productionMode, true);
+});
+
 test('loadConfig bounds the process-wide tool concurrency limit', () => {
   resetEnv();
   process.env.TOOL_MAX_CONCURRENT_CALLS = '0';

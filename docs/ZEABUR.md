@@ -89,4 +89,12 @@ Telegram Mini App 入口为 `/app`。菜单按钮和网址由 BotFather 管理�
 只有做后台管理面板时才开启：
 
     ADMIN_API_ENABLED=true
-    ADMIN_API_TOKEN=一串很长的随机密码
+    ADMIN_API_TOKEN=至少32位随机值
+
+生产环境还必须在 Zeabur Secret 变量中配置以下设置，其中两个随机密钥必须不同：
+
+    CHAT_ENCRYPTION_REQUIRED=true
+    CHAT_ENCRYPTION_KEY=运行 openssl rand -base64 48 生成
+    LOG_PRIVACY_KEY=再次生成
+
+启用 GitHub App 时另行设置 `GITHUB_TOKEN_ENCRYPTION_KEY`，不得复用上面两个值。

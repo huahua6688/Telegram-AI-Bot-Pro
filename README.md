@@ -158,6 +158,9 @@ STARS_PRODUCTS_JSON=[{"id":"starter","title":"入门额度包","titleEn":"Starte
 # Storage / Zeabur
 DATABASE_FILE=/data/bot-data.db
 DATA_FILE=/data/bot-data.json
+CHAT_ENCRYPTION_REQUIRED=true
+CHAT_ENCRYPTION_KEY=使用 openssl rand -base64 48 生成
+LOG_PRIVACY_KEY=再生成一个不同的随机值
 CONVERSATION_RETENTION_DAYS=30
 PRIVACY_SWEEP_INTERVAL_HOURS=24
 MINI_APP_SHOW_USER_MESSAGES=false
@@ -182,7 +185,8 @@ AI_FALLBACK_MODELS=
 - `/health` 返回不含密钥的运行状态、版本、Provider、启动时间和部署信息；`HEALTH_CHECK_ENABLED=false` 时关闭公开的 `/health`，`/ready` 仍可供平台探针使用。管理员“版本信息”由 `SHOW_VERSION_INFO` 控制。
 - 客服 Bot 必须使用独立的 BotFather Token。配置 `SUPPORT_CONTACT_URL` 时优先打开该地址，否则使用 `SUPPORT_BOT_USERNAME`；客服管理员通过回复转发消息答复用户，不会暴露管理员账号。
 - 客服正文和管理员回复关系只保存在内存；工单关闭、超时或重启即清除。Mini App 默认不返回用户输入，对话默认保留 30 天后自动删除。
-- 运行日志默认移除正文、提示词、用户名、IP、User-Agent、异常正文/堆栈和密钥，并把用户关联 ID 转换为进程内匿名标识，避免服务器日志成为另一份用户数据副本。
+- 运行日志默认移除正文、提示词、用户名、IP、User-Agent、异常正文/堆栈和常见密钥格式。生产环境必须设置独立 `LOG_PRIVACY_KEY`，同一用户的匿名审计 ID 才能跨重启保持一致。
+- 生产环境会强制 `CHAT_ENCRYPTION_REQUIRED=true`，缺少强 `CHAT_ENCRYPTION_KEY` 会拒绝启动；GitHub App 还必须使用不同的 `GITHUB_TOKEN_ENCRYPTION_KEY`。这些值应在 Zeabur 中标记为 Secret，绝不能写入仓库、截图或日志。
 - Admin API 的 JSON 请求体限制为 64 KB，响应默认禁止缓存；服务器内部异常只返回稳定错误码，审计记录不保存 URL 查询参数或异常正文。
 - 网页读取拒绝内网、云元数据和不安全重定向；Telegram 文件采用超时与流式大小限制，避免一次性载入超大内容。
 - 每日免费额度和三档 Stars 商品由 `STARS_FREE_*` 与 `STARS_PRODUCTS_JSON` 统一提供给主 Bot、Mini App 和管理员页面，不再分别维护旧数值。详细支付说明见 [Telegram Stars 文档](docs/STARS_PAYMENTS.md)。
@@ -198,7 +202,8 @@ AI_FALLBACK_MODELS=
 | `GROQ_API_KEY` | 可选 | 有 Groq Key 就填，没有就留空 |
 | `GEMINI_LIVE_API_KEY` | 可选 | 暂时不用实时语音就留空 |
 | `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`, `AI_FALLBACK_MODELS` | 留空 | 这是旧配置兼容位，留空可以避免干扰 `DEFAULT_AI_PROVIDER=auto` |
-| `ADMIN_API_TOKEN` | 通常留空 | 只有 `ADMIN_API_ENABLED=true` 时才需要填 |
+| `CHAT_ENCRYPTION_KEY`, `LOG_PRIVACY_KEY` | 生产必填 | 分别运行 `openssl rand -base64 48` 生成，两个值不能相同 |
+| `ADMIN_API_TOKEN` | 通常留空 | 只有 `ADMIN_API_ENABLED=true` 时才需要填；开启时使用至少 32 位随机值 |
 | `IMAGE_MODEL` | 先留空 | 没有图片生成额度就不要填 |
 | Claude / OpenAI / DeepSeek / Qwen / Grok / GLM / Doubao 等 Key | 先不要填 | 没确认账号额度前都留空，否则后台测试会出现一堆失败 |
 
@@ -496,6 +501,9 @@ STARS_PRODUCTS_JSON=[{"id":"starter","title":"入门额度包","titleEn":"Starte
 # Storage / Zeabur
 DATABASE_FILE=/data/bot-data.db
 DATA_FILE=/data/bot-data.json
+CHAT_ENCRYPTION_REQUIRED=true
+CHAT_ENCRYPTION_KEY=generate with openssl rand -base64 48
+LOG_PRIVACY_KEY=generate a different random value
 PORT=8080
 HEALTH_PORT=8080
 
@@ -517,6 +525,7 @@ AI_FALLBACK_MODELS=
 - `/health` exposes only safe status/version/provider/timestamp data. Set `HEALTH_CHECK_ENABLED=false` to disable the public endpoint while keeping `/ready` available for platform probes. `SHOW_VERSION_INFO` controls the administrator version view.
 - The support Bot requires a separate BotFather token. `SUPPORT_CONTACT_URL` takes priority over `SUPPORT_BOT_USERNAME`; administrators answer users by replying to copied tickets without exposing their own identity.
 - Main Bot, Mini App, and administrator views read daily free limits and all three Stars packages from the same `STARS_FREE_*` and `STARS_PRODUCTS_JSON` configuration. See [Telegram Stars billing](docs/STARS_PAYMENTS.md).
+- Production fails closed without chat encryption and a stable `LOG_PRIVACY_KEY`. Store all credentials as Zeabur secrets; GitHub App tokens require a separate `GITHUB_TOKEN_ENCRYPTION_KEY`.
 
 ## What To Fill
 
@@ -529,7 +538,8 @@ AI_FALLBACK_MODELS=
 | `GROQ_API_KEY` | Optional | Fill it only if you have a Groq key |
 | `GEMINI_LIVE_API_KEY` | Optional | Leave blank unless you use live audio |
 | `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`, `AI_FALLBACK_MODELS` | Leave blank | Legacy compatibility fields; blank avoids overriding `DEFAULT_AI_PROVIDER=auto` |
-| `ADMIN_API_TOKEN` | Usually blank | Required only when `ADMIN_API_ENABLED=true` |
+| `CHAT_ENCRYPTION_KEY`, `LOG_PRIVACY_KEY` | Required in production | Generate two different values with `openssl rand -base64 48` |
+| `ADMIN_API_TOKEN` | Usually blank | When enabled, use a random value of at least 32 characters |
 | `IMAGE_MODEL` | Leave blank first | Fill only when you have image generation quota |
 | Claude / OpenAI / DeepSeek / Qwen / Grok / GLM / Doubao keys | Leave blank first | Configure only after confirming account quota |
 

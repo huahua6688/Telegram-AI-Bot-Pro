@@ -196,6 +196,10 @@ function compactList(...values) {
 }
 
 export function loadConfig() {
+  const runtimeEnvironment = String(process.env.NODE_ENV || '').trim().toLowerCase();
+  const productionMode = runtimeEnvironment === 'production' || Boolean(
+    process.env.ZEABUR_SERVICE_ID || process.env.ZEABUR_PROJECT_ID || process.env.ZEABUR_ENVIRONMENT_ID
+  );
   const aiProvider = normalizeProvider(
     process.env.DEFAULT_AI_PROVIDER || process.env.AI_PROVIDER || 'auto'
   );
@@ -300,6 +304,8 @@ export function loadConfig() {
   const legacyDataFile = path.resolve(process.cwd(), process.env.DATA_FILE || './data/bot-data.json');
 
   return {
+    runtimeEnvironment,
+    productionMode,
     botToken: process.env.BOT_TOKEN || '',
     telegramStartupMaxRetries: Math.max(0, Math.min(20, parseInteger(process.env.TELEGRAM_STARTUP_MAX_RETRIES, 6))),
     telegramStartupRetryBaseMs: Math.max(100, parseInteger(process.env.TELEGRAM_STARTUP_RETRY_BASE_MS, 1000)),
@@ -501,7 +507,10 @@ export function loadConfig() {
     githubAppClientSecret: process.env.GITHUB_APP_CLIENT_SECRET || '',
     githubAppSlug: process.env.GITHUB_APP_SLUG || '',
     githubAppCallbackPath: process.env.GITHUB_APP_CALLBACK_PATH || '/auth/github/callback',
-    githubTokenEncryptionKey: process.env.GITHUB_TOKEN_ENCRYPTION_KEY || process.env.CHAT_ENCRYPTION_KEY || '',
+    githubTokenEncryptionKey: process.env.GITHUB_TOKEN_ENCRYPTION_KEY || '',
+    chatEncryptionKey: process.env.CHAT_ENCRYPTION_KEY || '',
+    chatEncryptionRequired: parseBoolean(process.env.CHAT_ENCRYPTION_REQUIRED, productionMode),
+    logPrivacyKey: process.env.LOG_PRIVACY_KEY || '',
     healthPort: parseInteger(process.env.HEALTH_PORT || process.env.PORT, 3000),
     adminApiPort: parseInteger(process.env.ADMIN_API_PORT, 3001),
     adminApiPrefix: process.env.ADMIN_API_PREFIX || '/admin/api/v1',

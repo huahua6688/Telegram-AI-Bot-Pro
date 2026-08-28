@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadConfig } from '../src/config.js';
 import {
+  containsSensitiveMemoryData,
   MemoryManager,
   isSafeLongTermMemory,
   rankMemoryItems
@@ -71,6 +72,8 @@ test('long-term memory rejects credentials and ranks relevant preferences first'
     isSafeLongTermMemory({ key: 'reply_style', value: 'Prefer concise Chinese replies.' }),
     true
   );
+  assert.equal(containsSensitiveMemoryData(`github_pat_${'a'.repeat(40)}`), true);
+  assert.equal(containsSensitiveMemoryData('password: hunter2'), true);
 
   const ranked = rankMemoryItems(
     [
@@ -227,6 +230,53 @@ test('structured private replies use Telegram rich messages with safe regular fa
 
   ctx.telegram.callApi = async () => { throw new Error('method unavailable'); };
   assert.equal(await TelegramAIBot.prototype.trySendRichAssistantReply.call(fakeBot, ctx, markdown), null);
+});
+
+test('topic memory omits sensitive user text and purges unsafe stored memory', () => {
+  const topicWrites = [];
+  const deleted = [];
+  const manager = new MemoryManager({
+    db: {
+      getActiveContext() { return { activeTopicId: 'general' }; },
+      getTopicState() {
+        return { topicId: 'general', title: 'API key: sk-secret-value-123456789', summary: 'password: hunter2' };
+      },
+      listRecentTopicStates() { return []; },
+      getMemoryItems() {
+        return [{ id: 'unsafe-memory', topicId: 'general', key: 'access_token', value: 'github_pat_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }];
+      },
+      upsertTopicState(value) { topicWrites.push(value); },
+      deleteMemoryItemById(id) { deleted.push(id); }
+    }
+  });
+
+  const context = manager.getMemoryContext({ userId: '1', chatId: '2', text: 'hello' });
+  assert.doesNotMatch(context.text, /hunter2|sk-secret|github_pat/);
+  assert.deepEqual(deleted, ['unsafe-memory']);
+  assert.equal(topicWrites[0].summary, '');
+
+  manager.touchTopic({ userId: '1', chatId: '2', userText: 'password: never-store-this' });
+  assert.equal(topicWrites.at(-1).summary, '');
+});
+
+test('memory summarizer never receives sensitive conversation text', async () => {
+  let memoryPrompt = '';
+  const manager = new MemoryManager({
+    db: { getTopicState() { return null; }, upsertTopicState() {} },
+    config: { enableMemorySummary: true, memorySummaryInterval: 1, defaultModel: 'test' },
+    logger: logger(),
+    aiClient: {
+      async completeWithTools({ messages }) {
+        memoryPrompt = messages[1].content;
+        return { text: JSON.stringify({ summary: 'password: leaked-by-model', importantMemory: [] }) };
+      }
+    }
+  });
+  await manager.updateAfterAssistantReply({
+    userId: '1', chatId: '2', memoryContext: { topicId: 'general' },
+    userText: 'api_key=super-private-user-value', assistantText: 'Bearer very-private-assistant-value'
+  });
+  assert.doesNotMatch(memoryPrompt, /super-private-user-value|very-private-assistant-value/);
 });
 
 test('recent Rich Message text is restored from private in-memory context when Telegram omits it in a reply', async () => {

@@ -5,6 +5,7 @@ services:
     environment:
       PORT: "8080"
       AGENT_WORKER_SECRET: "replace-with-at-least-32-random-characters"
+      SANDBOX_ALLOW_SHELL: "false"
       SANDBOX_IMAGE: "node:22-alpine"
       SANDBOX_GIT_IMAGE: "alpine/git:v2.47.2"
       SANDBOX_MAX_CONCURRENT_RUNS: "2"
