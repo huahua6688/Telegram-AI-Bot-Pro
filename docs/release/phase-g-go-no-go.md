@@ -17,9 +17,17 @@
   - [ ] CodeQL 无高危阻断项
   - [ ] 管理 API 鉴权与 RBAC 校验通过
   - [ ] Secrets 扫描无泄漏
+  - [ ] 生产聊天加密、日志隐私和 GitHub Token 使用不同强密钥
+  - [ ] Agent Worker 独立部署、shell 关闭且没有生产密钥注入沙箱
 - [ ] **文档完整度**
   - [ ] 部署主流程、平台差异、回滚、备份、故障排查齐备
   - [ ] 最小可用/生产推荐两档模板与环境变量规范一致
+  - [ ] `.env.example`、`.env.zeabur.example` 与 `docs/ENVIRONMENT.md` 一致
+- [ ] **Telegram 实机**
+  - [ ] 单消息流式、停止生成、格式/引用回退通过
+  - [ ] 群购买、`/help`、`/whoami` 不泄露且无 fan-out
+  - [ ] 客服 Bot 群/频道完全静默，私聊工单类型通过
+  - [ ] 未完成的手机实测明确标记 BLOCKED
 
 ## 2) 发布决策
 

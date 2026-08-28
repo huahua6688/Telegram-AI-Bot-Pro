@@ -4310,6 +4310,14 @@ export class BotDatabase {
     return result.changes || 0;
   }
 
+  deleteMemoryItemById(id = '') {
+    const resolvedId = String(id || '');
+    if (!resolvedId) return 0;
+    const result = this.db.prepare('DELETE FROM memory_items WHERE id = ?').run(resolvedId);
+    if (result.changes) this.setMeta('updatedAt', now());
+    return result.changes || 0;
+  }
+
   settleMeteredUsage(idOrRequestKey, {
     billedCredits,
     providerId = '',

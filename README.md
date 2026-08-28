@@ -2,13 +2,25 @@
 
 中文 | [English](#english)
 
+这是一个以 Telegram 为主要控制台的多 Provider AI Bot，包含用户独立模型/状态、流式与 Rich Message、图片/文档/语音、搜索工具、Stars 计费、独立客服 Bot、Mini App、GitHub App 和可选的独立 Agent Worker。
+
+- [项目功能、架构、数据流、安全边界与实现状态](docs/PROJECT_OVERVIEW.md)
+- [全部环境变量、默认值、必填条件与升级说明](docs/ENVIRONMENT.md)
+- [Zeabur 部署指南](docs/ZEABUR.md)
+- [Telegram Stars 与付费模型](docs/STARS_PAYMENTS.md)
+- [Agent Worker 与 GitHub App](docs/PAID_AGENT_GITHUB.md)
+
+当前明确未完整交付的外部验证：Telegram Bot API 10.3 手机实机、真实付费 Provider、真实 GitHub OAuth 与 Docker Worker 生产端到端。视频模型处理链尚未实现，视频额度不会出售。
+
 ## 一键复制 Zeabur 环境变量
 
-先把下面整段复制到 Zeabur 的 Environment Variables。最少只需要改 3 个值：
+新部署优先直接复制 `.env.zeabur.example` 到 Zeabur Environment Variables。至少需要完成以下配置：
 
 - `BOT_TOKEN`: 从 Telegram [BotFather](https://t.me/BotFather) 获取
 - `ADMIN_USER_IDS`: 给机器人发送 `/whoami` 后复制你的数字 ID
-- `GEMINI_API_KEY`: 从 [Google AI Studio](https://aistudio.google.com/app/apikey) 获取
+- 至少一个可用 AI Provider 的 Key、Base URL（需要时）和模型 ID
+- `CHAT_ENCRYPTION_KEY`: 新部署生成一次；已有部署必须保留原值
+- `LOG_PRIVACY_KEY`: 生成一个与聊天密钥不同的新值
 
 `OPENROUTER_API_KEY` 推荐填写。OpenRouter 免费模型通常带 `:free` 后缀，当前可用模型会变化；下面模板先放当前模型 API 里能看到的免费模型。`GROQ_API_KEY` 可选；Groq 官方页面列的是 Developer Plan 限额和价格，不是 `:free` 模型名。没有额度的平台先留空，不要乱填 Key。
 
@@ -18,6 +30,7 @@
 
 ```env
 # Required
+NODE_ENV=production
 BOT_TOKEN=
 ADMIN_USER_IDS=
 
@@ -31,6 +44,8 @@ SUPPORT_BOT_TOKEN=
 SUPPORT_BOT_USERNAME=
 SUPPORT_CONTACT_URL=
 SUPPORT_ADMIN_IDS=
+SUPPORT_SUPER_ADMIN_IDS=
+SUPPORT_TICKET_AUTO_CLOSE_MINUTES=1440
 
 # Default AI behavior
 DEFAULT_AI_PROVIDER=auto
@@ -51,6 +66,13 @@ MODEL_DISCOVERY_ENABLED=true
 ENABLE_RICH_MESSAGES=true
 RICH_MESSAGE_MIN_CHARS=600
 ENABLE_STREAMING_REPLIES=true
+ENABLE_NATIVE_DRAFT_STREAMING=false
+STREAMING_EDIT_INTERVAL_MS=350
+MODEL_DISCOVERY_ENABLED=true
+ENABLE_RICH_MESSAGES=true
+RICH_MESSAGE_MIN_CHARS=600
+ENABLE_STREAMING_REPLIES=true
+ENABLE_NATIVE_DRAFT_STREAMING=false
 STREAMING_EDIT_INTERVAL_MS=350
 
 # Google Gemini free-tier first
@@ -134,7 +156,6 @@ ENABLE_TOOL_CALLS=true
 ENABLE_WEB_SEARCH=true
 ENABLE_GEMINI_GOOGLE_SEARCH=true
 ENABLE_URL_FETCH=true
-ENABLE_STREAMING_REPLIES=true
 TELEGRAM_FILE_MAX_BYTES=10485760
 TELEGRAM_FILE_DOWNLOAD_TIMEOUT_MS=20000
 # 稳定实时搜索建议配置；无 Key 的搜索回退只提供尽力而为的结果
@@ -152,11 +173,14 @@ STARS_FREE_IMAGE_DAILY=1
 STARS_FREE_TTS_DAILY=2
 STARS_FREE_LIVE_VOICE_DAILY=2
 STARS_FREE_VIDEO_DAILY=0
-STARS_PRODUCTS_JSON=[{"id":"starter","title":"入门额度包","titleEn":"Starter credits","description":"适合轻量聊天、图片和语音使用","descriptionEn":"Starter credits for chat, images and voice","price":50,"credits":{"chat":200,"vision":20,"image_generation":5,"tts":20,"live_voice":10,"video":0}},{"id":"standard","title":"标准额度包","titleEn":"Standard credits","description":"适合日常聊天、识图、画图和语音","descriptionEn":"Balanced credits for regular AI use","price":150,"credits":{"chat":800,"vision":80,"image_generation":20,"tts":80,"live_voice":40,"video":0}},{"id":"pro","title":"高级额度包","titleEn":"Pro credits","description":"适合高频使用全部已开放能力","descriptionEn":"Larger credits for frequent AI use","price":500,"credits":{"chat":3000,"vision":300,"image_generation":75,"tts":300,"live_voice":150,"video":0}}]
+STARS_PRODUCTS_JSON=[{"id":"starter","title":"入门额度包","titleEn":"Starter credits","description":"包含约2次高成本AI Hub请求及免费平台扩展额度","descriptionEn":"Includes about 2 high-cost AI Hub requests plus free-provider credits","price":300,"credits":{"chat":30,"vision":20,"image_generation":5,"tts":20,"live_voice":10,"video":0}},{"id":"standard","title":"标准额度包","titleEn":"Standard credits","description":"包含约6次高成本AI Hub请求及日常功能额度","descriptionEn":"Includes about 6 high-cost AI Hub requests plus regular feature credits","price":800,"credits":{"chat":90,"vision":80,"image_generation":20,"tts":80,"live_voice":40,"video":0}},{"id":"pro","title":"高级额度包","titleEn":"Pro credits","description":"包含约16次高成本AI Hub请求及高频功能额度","descriptionEn":"Includes about 16 high-cost AI Hub requests plus high-volume feature credits","price":2000,"credits":{"chat":240,"vision":300,"image_generation":75,"tts":300,"live_voice":150,"video":0}}]
 
 # Storage / Zeabur
 DATABASE_FILE=/data/bot-data.db
 DATA_FILE=/data/bot-data.json
+CHAT_ENCRYPTION_REQUIRED=true
+CHAT_ENCRYPTION_KEY=
+LOG_PRIVACY_KEY=
 CONVERSATION_RETENTION_DAYS=30
 PRIVACY_SWEEP_INTERVAL_HOURS=24
 MINI_APP_SHOW_USER_MESSAGES=false
@@ -181,7 +205,8 @@ AI_FALLBACK_MODELS=
 - `/health` 返回不含密钥的运行状态、版本、Provider、启动时间和部署信息；`HEALTH_CHECK_ENABLED=false` 时关闭公开的 `/health`，`/ready` 仍可供平台探针使用。管理员“版本信息”由 `SHOW_VERSION_INFO` 控制。
 - 客服 Bot 必须使用独立的 BotFather Token。配置 `SUPPORT_CONTACT_URL` 时优先打开该地址，否则使用 `SUPPORT_BOT_USERNAME`；客服管理员通过回复转发消息答复用户，不会暴露管理员账号。
 - 客服正文和管理员回复关系只保存在内存；工单关闭、超时或重启即清除。Mini App 默认不返回用户输入，对话默认保留 30 天后自动删除。
-- 运行日志默认移除正文、提示词、用户名、IP、User-Agent、异常正文/堆栈和密钥，并把用户关联 ID 转换为进程内匿名标识，避免服务器日志成为另一份用户数据副本。
+- 运行日志默认移除正文、提示词、用户名、IP、User-Agent、异常正文/堆栈和常见密钥格式。生产环境必须设置独立 `LOG_PRIVACY_KEY`，同一用户的匿名审计 ID 才能跨重启保持一致。
+- 生产环境会强制 `CHAT_ENCRYPTION_REQUIRED=true`，缺少强 `CHAT_ENCRYPTION_KEY` 会拒绝启动；GitHub App 还必须使用不同的 `GITHUB_TOKEN_ENCRYPTION_KEY`。这些值应在 Zeabur 中标记为 Secret，绝不能写入仓库、截图或日志。
 - Admin API 的 JSON 请求体限制为 64 KB，响应默认禁止缓存；服务器内部异常只返回稳定错误码，审计记录不保存 URL 查询参数或异常正文。
 - 网页读取拒绝内网、云元数据和不安全重定向；Telegram 文件采用超时与流式大小限制，避免一次性载入超大内容。
 - 每日免费额度和三档 Stars 商品由 `STARS_FREE_*` 与 `STARS_PRODUCTS_JSON` 统一提供给主 Bot、Mini App 和管理员页面，不再分别维护旧数值。详细支付说明见 [Telegram Stars 文档](docs/STARS_PAYMENTS.md)。
@@ -192,12 +217,14 @@ AI_FALLBACK_MODELS=
 | --- | --- | --- |
 | `BOT_TOKEN` | 必填 | 填 BotFather 给你的 Telegram Bot Token |
 | `ADMIN_USER_IDS` | 建议填 | 给机器人发 `/whoami`，复制数字 ID；多个管理员用英文逗号分隔 |
-| `GEMINI_API_KEY` | 必填 | 填 Google AI Studio 的 API Key |
+| `GEMINI_API_KEY` | 按需 | 选择 Gemini 时填写；使用 AI Hub 等其他平台时可留空 |
 | `OPENROUTER_API_KEY` | 强烈建议 | 填 OpenRouter Key，用来走 `openrouter/free` 动态免费路由 |
 | `GROQ_API_KEY` | 可选 | 有 Groq Key 就填，没有就留空 |
 | `GEMINI_LIVE_API_KEY` | 可选 | 暂时不用实时语音就留空 |
-| `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`, `AI_FALLBACK_MODELS` | 留空 | 这是旧配置兼容位，留空可以避免干扰 `DEFAULT_AI_PROVIDER=auto` |
-| `ADMIN_API_TOKEN` | 通常留空 | 只有 `ADMIN_API_ENABLED=true` 时才需要填 |
+| `AI_PROVIDER` | 留空 | 旧默认 Provider 兼容位；新部署使用 `DEFAULT_AI_PROVIDER` |
+| `AI_API_KEY`, `AI_BASE_URL`, `AI_MODEL`, `AI_FALLBACK_MODELS` | 按需 | Zeabur AI Hub 或其他 `openai-compatible` 网关的正式配置 |
+| `CHAT_ENCRYPTION_KEY`, `LOG_PRIVACY_KEY` | 生产必填 | 新部署分别生成且不能相同；已有 `CHAT_ENCRYPTION_KEY` 绝对不要更换 |
+| `ADMIN_API_TOKEN` | 通常留空 | 只有 `ADMIN_API_ENABLED=true` 时才需要填；开启时使用至少 32 位随机值 |
 | `IMAGE_MODEL` | 先留空 | 没有图片生成额度就不要填 |
 | Claude / OpenAI / DeepSeek / Qwen / Grok / GLM / Doubao 等 Key | 先不要填 | 没确认账号额度前都留空，否则后台测试会出现一堆失败 |
 
@@ -273,7 +300,7 @@ Zeabur AI Hub 按标准 OpenAI-compatible Provider 使用：设置 `DEFAULT_AI_P
 
 若 AI Hub 是收费平台，建议使用 `DEFAULT_AI_PROVIDER=auto`，并把 `openai-compatible` 放在 `AI_PROVIDER_FALLBACK_ORDER` 最后。系统会优先尝试前面的免费平台；免费额度不足、限流或模型不可用时，才使用 AI Hub 动态发现的聊天模型兜底，这一步可能产生费用。不接受自动付费兜底时，请从回退顺序移除 `openai-compatible` 或关闭 Provider fallback。把 AI Hub 固定为当前 Provider 时，价格未知的模型仍要求在 Mini App 手动选择。模型只有在平台明确返回零价格或 ID 明确标记免费时才显示“免费”。
 
-Telegram Rich Messages 默认开启。模型会自行选择适合答案的表达方式：普通回答使用普通消息；代码块、公式、表格或足够长的标题/列表结构才使用 Rich Message。为改善手机体验，系统会提示模型默认优先使用正文和纵向列表，只有用户要求表格或多字段对比确实更清楚时才使用表格。发送前会清理表格单元格中的 `<br>`、重复来源和异常链接结尾；宽表会在发送前直接变成纵向字段，紧凑表仅在 Telegram 拒绝后重试纵向布局，最终普通文本降级也不会泄露 `|`、分隔线或 HTML 标签。新闻和联网答案会把检索结果编号转换成 Telegram 原生引用标记；点击正文旁的小链条会打开“来源”弹层，相邻多个来源会合并显示数量。只有无法可靠对应到具体句子时，才显示普通来源列表，避免制造错误引用。开启 `ENABLE_STREAMING_REPLIES=true` 后，Gemini 和 OpenAI-compatible 类平台会直接请求 SSE 流；私聊优先通过 `sendRichMessageDraft` 流式显示 Markdown 结构，并在富草稿不可用时自动降级到 `sendMessageDraft`。完成后再根据模型最终采用的结构决定保存为普通消息还是 Rich Message。群组使用消息编辑模拟流式，平台或 Telegram 不支持流式时会自动降级为普通完整回复。`STREAMING_EDIT_INTERVAL_MS` 限制草稿刷新频率，避免触发 Telegram 429。
+Telegram Rich Messages 默认开启。模型会自行选择适合答案的表达方式：普通回答使用普通消息；代码块、公式、表格或足够长的标题/列表结构才使用 Rich Message。为改善手机体验，系统会提示模型默认优先使用正文和纵向列表，只有用户要求表格或多字段对比确实更清楚时才使用表格。发送前会清理表格单元格中的 `<br>`、重复来源和异常链接结尾；宽表会在发送前直接变成纵向字段，紧凑表仅在 Telegram 拒绝后重试纵向布局，最终普通文本降级也不会泄露 `|`、分隔线或 HTML 标签。新闻和联网答案会把检索结果编号转换成 Telegram 原生引用标记；点击正文旁的小链条会打开“来源”弹层，相邻多个来源会合并显示数量。只有无法可靠对应到具体句子时，才显示普通来源列表，避免制造错误引用。开启 `ENABLE_STREAMING_REPLIES=true` 后，Gemini 和 OpenAI-compatible 类平台会直接请求 SSE 流；私聊默认只创建一条持久消息，并持续编辑同一个 `message_id`，完成时不会再发送第二条答案。Rich Message 片段也通过同一持久消息的 `editMessageText.rich_message` 更新，失败才在原消息上降级为普通文本。流式消息上的停止按钮只会终止对应用户的当前请求。`ENABLE_NATIVE_DRAFT_STREAMING=true` 可显式恢复 Telegram 临时草稿模式，但原生草稿完成后会消失，最终答案仍需另发持久消息，因此默认关闭。Telegram 拒绝 Rich Message、HTML 实体或引用参数时会安全降级为普通文本或无引用回复。
 
 Gemini Live 只支持 Google 官方 Gemini Live API，必须使用独立的 `GEMINI_LIVE_API_KEY` 和兼容 Live 模型；不要把第三方 OpenAI-compatible / AI Hub 地址当作 `gemini-live`。
 
@@ -348,11 +375,13 @@ Inline Query 会在用户输入变化时不断产生 Telegram 更新。程序默
 
 ## One-Copy Zeabur Environment Variables
 
-Copy this whole block into Zeabur Environment Variables. At minimum, fill:
+For new deployments, copy `.env.zeabur.example` into Zeabur Environment Variables. At minimum, configure:
 
 - `BOT_TOKEN`: from Telegram [BotFather](https://t.me/BotFather)
 - `ADMIN_USER_IDS`: send `/whoami` to the bot and copy your numeric ID
-- `GEMINI_API_KEY`: from [Google AI Studio](https://aistudio.google.com/app/apikey)
+- one usable AI provider key, base URL when required, and model ID
+- `CHAT_ENCRYPTION_KEY`: generate once for a new database; preserve an existing value
+- `LOG_PRIVACY_KEY`: generate a separate value
 
 `OPENROUTER_API_KEY` is recommended. OpenRouter free models usually have a `:free` suffix, and availability changes over time. The template below uses free model IDs currently visible in the OpenRouter models API. `GROQ_API_KEY` is optional. Leave other provider keys blank unless you know your account has quota.
 
@@ -362,6 +391,7 @@ On the GitHub repository homepage, the code block below has a built-in **Copy** 
 
 ```env
 # Required
+NODE_ENV=production
 BOT_TOKEN=
 ADMIN_USER_IDS=
 
@@ -375,6 +405,8 @@ SUPPORT_BOT_TOKEN=
 SUPPORT_BOT_USERNAME=
 SUPPORT_CONTACT_URL=
 SUPPORT_ADMIN_IDS=
+SUPPORT_SUPER_ADMIN_IDS=
+SUPPORT_TICKET_AUTO_CLOSE_MINUTES=1440
 
 # Default AI behavior
 DEFAULT_AI_PROVIDER=auto
@@ -474,7 +506,6 @@ ENABLE_WEB_SEARCH=true
 ENABLE_GEMINI_GOOGLE_SEARCH=true
 ENABLE_URL_FETCH=true
 TOOL_MAX_CONCURRENT_CALLS=8
-ENABLE_STREAMING_REPLIES=true
 # Recommended for stable search; keyless fallback is best-effort only
 BRAVE_SEARCH_API_KEY=
 
@@ -490,11 +521,14 @@ STARS_FREE_IMAGE_DAILY=1
 STARS_FREE_TTS_DAILY=2
 STARS_FREE_LIVE_VOICE_DAILY=2
 STARS_FREE_VIDEO_DAILY=0
-STARS_PRODUCTS_JSON=[{"id":"starter","title":"入门额度包","titleEn":"Starter credits","description":"适合轻量聊天、图片和语音使用","descriptionEn":"Starter credits for chat, images and voice","price":50,"credits":{"chat":200,"vision":20,"image_generation":5,"tts":20,"live_voice":10,"video":0}},{"id":"standard","title":"标准额度包","titleEn":"Standard credits","description":"适合日常聊天、识图、画图和语音","descriptionEn":"Balanced credits for regular AI use","price":150,"credits":{"chat":800,"vision":80,"image_generation":20,"tts":80,"live_voice":40,"video":0}},{"id":"pro","title":"高级额度包","titleEn":"Pro credits","description":"适合高频使用全部已开放能力","descriptionEn":"Larger credits for frequent AI use","price":500,"credits":{"chat":3000,"vision":300,"image_generation":75,"tts":300,"live_voice":150,"video":0}}]
+STARS_PRODUCTS_JSON=[{"id":"starter","title":"入门额度包","titleEn":"Starter credits","description":"包含约2次高成本AI Hub请求及免费平台扩展额度","descriptionEn":"Includes about 2 high-cost AI Hub requests plus free-provider credits","price":300,"credits":{"chat":30,"vision":20,"image_generation":5,"tts":20,"live_voice":10,"video":0}},{"id":"standard","title":"标准额度包","titleEn":"Standard credits","description":"包含约6次高成本AI Hub请求及日常功能额度","descriptionEn":"Includes about 6 high-cost AI Hub requests plus regular feature credits","price":800,"credits":{"chat":90,"vision":80,"image_generation":20,"tts":80,"live_voice":40,"video":0}},{"id":"pro","title":"高级额度包","titleEn":"Pro credits","description":"包含约16次高成本AI Hub请求及高频功能额度","descriptionEn":"Includes about 16 high-cost AI Hub requests plus high-volume feature credits","price":2000,"credits":{"chat":240,"vision":300,"image_generation":75,"tts":300,"live_voice":150,"video":0}}]
 
 # Storage / Zeabur
 DATABASE_FILE=/data/bot-data.db
 DATA_FILE=/data/bot-data.json
+CHAT_ENCRYPTION_REQUIRED=true
+CHAT_ENCRYPTION_KEY=
+LOG_PRIVACY_KEY=
 PORT=8080
 HEALTH_PORT=8080
 
@@ -516,6 +550,7 @@ AI_FALLBACK_MODELS=
 - `/health` exposes only safe status/version/provider/timestamp data. Set `HEALTH_CHECK_ENABLED=false` to disable the public endpoint while keeping `/ready` available for platform probes. `SHOW_VERSION_INFO` controls the administrator version view.
 - The support Bot requires a separate BotFather token. `SUPPORT_CONTACT_URL` takes priority over `SUPPORT_BOT_USERNAME`; administrators answer users by replying to copied tickets without exposing their own identity.
 - Main Bot, Mini App, and administrator views read daily free limits and all three Stars packages from the same `STARS_FREE_*` and `STARS_PRODUCTS_JSON` configuration. See [Telegram Stars billing](docs/STARS_PAYMENTS.md).
+- Production fails closed without chat encryption and a stable `LOG_PRIVACY_KEY`. Store all credentials as Zeabur secrets; GitHub App tokens require a separate `GITHUB_TOKEN_ENCRYPTION_KEY`.
 
 ## What To Fill
 
@@ -523,12 +558,14 @@ AI_FALLBACK_MODELS=
 | --- | --- | --- |
 | `BOT_TOKEN` | Required | Your Telegram BotFather token |
 | `ADMIN_USER_IDS` | Recommended | Send `/whoami` to the bot and copy the numeric ID; separate multiple IDs with commas |
-| `GEMINI_API_KEY` | Required | Your Google AI Studio API key |
+| `GEMINI_API_KEY` | As needed | Required only when Gemini is configured |
 | `OPENROUTER_API_KEY` | Strongly recommended | Your OpenRouter key for the `openrouter/free` dynamic free router |
 | `GROQ_API_KEY` | Optional | Fill it only if you have a Groq key |
 | `GEMINI_LIVE_API_KEY` | Optional | Leave blank unless you use live audio |
-| `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`, `AI_FALLBACK_MODELS` | Leave blank | Legacy compatibility fields; blank avoids overriding `DEFAULT_AI_PROVIDER=auto` |
-| `ADMIN_API_TOKEN` | Usually blank | Required only when `ADMIN_API_ENABLED=true` |
+| `AI_PROVIDER` | Leave blank | Legacy default-provider alias; use `DEFAULT_AI_PROVIDER` |
+| `AI_API_KEY`, `AI_BASE_URL`, `AI_MODEL`, `AI_FALLBACK_MODELS` | As needed | Active settings for Zeabur AI Hub or another OpenAI-compatible gateway |
+| `CHAT_ENCRYPTION_KEY`, `LOG_PRIVACY_KEY` | Required in production | Generate different values for a new deployment; never replace an existing chat-encryption key |
+| `ADMIN_API_TOKEN` | Usually blank | When enabled, use a random value of at least 32 characters |
 | `IMAGE_MODEL` | Leave blank first | Fill only when you have image generation quota |
 | Claude / OpenAI / DeepSeek / Qwen / Grok / GLM / Doubao keys | Leave blank first | Configure only after confirming account quota |
 
@@ -584,12 +621,19 @@ Gemini Live remains official-only: use Google’s Gemini Live API with a separat
 - Never paste API keys into Telegram chats
 - Keep unused paid providers blank
 - Verify current model IDs in provider dashboards before deployment
+- Keep an existing `CHAT_ENCRYPTION_KEY`; never rotate it without a controlled data migration
+- Use separate values for `CHAT_ENCRYPTION_KEY`, `LOG_PRIVACY_KEY`, and `GITHUB_TOKEN_ENCRYPTION_KEY`
+- Keep `ADMIN_API_ENABLED=false` unless a protected external administration service is required
+- Run the Agent Worker on a dedicated Docker host, never inside the main Bot container
 
 
 ## 客服工单隐私与协作
 
+- 客服 Bot 只接受 private chat；群组、超级群组和频道中的普通消息、媒体、提及和命令全部静默忽略。
 - 新工单先向全部客服发送不含用户身份和正文的摘要。
 - 接单后只有当前负责客服收到完整历史消息和后续消息。
+- 私聊普通消息通过 `copyMessage` 转发，支持文字、图片、语音、文件、视频、圆形视频、音频、GIF、贴纸、位置、地点、联系人、投票和骰子等可安全复制类型。
+- 付款、invoice、paid media、giveaway、Bot 消息和系统事件不进入工单。
 - 支持重复转交、退回待接单和关闭；非负责客服的回复不会发给用户。
 - 工单状态只保存在单实例进程内存中，不保存正文或附件；重新部署后旧工单失效。
 - 客服消息启用 Telegram 内容保护，但无法阻止已获授权客服截图。

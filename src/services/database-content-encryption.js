@@ -146,6 +146,10 @@ function conversationAad(sessionId) {
   return `conversations:${String(sessionId)}:messages_json`;
 }
 
+function recordFieldAad(table, id, field) {
+  return `${String(table)}:${String(id)}:${String(field)}`;
+}
+
 function assertCanDecryptExisting(database, key) {
   const message = database
     .prepare("SELECT id, content_json FROM message_versions WHERE content_json LIKE 'enc:v1:%' LIMIT 1")
@@ -160,6 +164,22 @@ function assertCanDecryptExisting(database, key) {
     .get();
   if (conversation) {
     decryptText(conversation.messages_json, key, conversationAad(conversation.session_id));
+    return;
+  }
+
+  const memory = database
+    .prepare("SELECT id, value FROM memory_items WHERE value LIKE 'enc:v1:%' LIMIT 1")
+    .get();
+  if (memory) {
+    decryptText(memory.value, key, recordFieldAad('memory_items', memory.id, 'value'));
+    return;
+  }
+
+  const topic = database
+    .prepare("SELECT id, summary FROM topic_states WHERE summary LIKE 'enc:v1:%' LIMIT 1")
+    .get();
+  if (topic) {
+    decryptText(topic.summary, key, recordFieldAad('topic_states', topic.id, 'summary'));
   }
 }
 
@@ -167,6 +187,8 @@ function migrateExistingContent(db, key) {
   const database = db.db;
   let encryptedMessages = 0;
   let encryptedConversations = 0;
+  let encryptedMemoryItems = 0;
+  let encryptedTopicFields = 0;
 
   database.exec('BEGIN IMMEDIATE');
   try {
@@ -202,13 +224,105 @@ function migrateExistingContent(db, key) {
       encryptedConversations += 1;
     }
 
+    const memoryRows = database.prepare('SELECT id, value FROM memory_items').all();
+    const updateMemory = database.prepare('UPDATE memory_items SET value = ? WHERE id = ?');
+    for (const row of memoryRows) {
+      if (isEncrypted(row.value)) continue;
+      updateMemory.run(
+        encryptText(String(row.value || ''), key, recordFieldAad('memory_items', row.id, 'value')),
+        String(row.id)
+      );
+      encryptedMemoryItems += 1;
+    }
+
+    const topicFields = ['title', 'summary', 'current_goal', 'last_step', 'next_step'];
+    const topicRows = database
+      .prepare(`SELECT id, ${topicFields.join(', ')} FROM topic_states`)
+      .all();
+    const updateTopic = database.prepare(
+      `UPDATE topic_states SET ${topicFields.map((field) => `${field} = ?`).join(', ')} WHERE id = ?`
+    );
+    for (const row of topicRows) {
+      const values = topicFields.map((field) => {
+        if (isEncrypted(row[field])) return row[field];
+        encryptedTopicFields += 1;
+        return encryptText(
+          String(row[field] || ''),
+          key,
+          recordFieldAad('topic_states', row.id, field)
+        );
+      });
+      updateTopic.run(...values, String(row.id));
+    }
+
     database.exec('COMMIT');
   } catch (error) {
     database.exec('ROLLBACK');
     throw error;
   }
 
-  return { encryptedMessages, encryptedConversations };
+  return { encryptedMessages, encryptedConversations, encryptedMemoryItems, encryptedTopicFields };
+}
+
+function installEncryptedMemoryMethods(db, key) {
+  const originalGetMemoryItems = db.getMemoryItems.bind(db);
+  const originalUpsertMemoryItem = db.upsertMemoryItem.bind(db);
+  db.getMemoryItems = function getMemoryItemsEncrypted(options = {}) {
+    return originalGetMemoryItems(options).map((item) => ({
+      ...item,
+      value: decryptText(item.value, key, recordFieldAad('memory_items', item.id, 'value'))
+    }));
+  };
+  db.upsertMemoryItem = function upsertMemoryItemEncrypted(item = {}) {
+    const resolvedId = item.id || `mem:${String(item.userId || 'global')}:${String(item.chatId || 'global')}:${String(item.topicId || 'global')}:${String(item.key || crypto.randomUUID())}`;
+    return originalUpsertMemoryItem({
+      ...item,
+      id: resolvedId,
+      value: encryptText(String(item.value || ''), key, recordFieldAad('memory_items', resolvedId, 'value'))
+    });
+  };
+
+  const topicFields = {
+    title: 'title',
+    summary: 'summary',
+    currentGoal: 'current_goal',
+    lastStep: 'last_step',
+    nextStep: 'next_step'
+  };
+  const decryptTopic = (topic) => {
+    if (!topic) return null;
+    const output = { ...topic };
+    for (const [property, column] of Object.entries(topicFields)) {
+      output[property] = decryptText(
+        topic[property],
+        key,
+        recordFieldAad('topic_states', topic.id, column)
+      );
+    }
+    return output;
+  };
+  const originalGetTopicState = db.getTopicState.bind(db);
+  const originalListRecentTopicStates = db.listRecentTopicStates.bind(db);
+  const originalUpsertTopicState = db.upsertTopicState.bind(db);
+  db.getTopicState = function getTopicStateEncrypted(options = {}) {
+    return decryptTopic(originalGetTopicState(options));
+  };
+  db.listRecentTopicStates = function listRecentTopicStatesEncrypted(options = {}) {
+    return originalListRecentTopicStates(options).map(decryptTopic);
+  };
+  db.upsertTopicState = function upsertTopicStateEncrypted(item = {}) {
+    const topicId = String(item.topicId || 'general');
+    const resolvedId = `topic:${String(item.userId || 'global')}:${String(item.chatId || 'global')}:${topicId}`;
+    const encrypted = { ...item, topicId };
+    for (const [property, column] of Object.entries(topicFields)) {
+      encrypted[property] = encryptText(
+        String(item[property] || ''),
+        key,
+        recordFieldAad('topic_states', resolvedId, column)
+      );
+    }
+    return originalUpsertTopicState(encrypted);
+  };
 }
 
 function installEncryptedConversationMethods(db, key) {
@@ -553,7 +667,7 @@ export function installDatabaseContentEncryption(
       enabled: false,
       version: '',
       fingerprint: '',
-      migrated: { encryptedMessages: 0, encryptedConversations: 0 }
+      migrated: { encryptedMessages: 0, encryptedConversations: 0, encryptedMemoryItems: 0, encryptedTopicFields: 0 }
     };
     return db.chatEncryption;
   }
@@ -584,6 +698,7 @@ export function installDatabaseContentEncryption(
 
   const migrated = migrateExistingContent(db, key);
   installEncryptedConversationMethods(db, key);
+  installEncryptedMemoryMethods(db, key);
 
   db.setMeta(KEY_FINGERPRINT_META, fingerprint);
   db.setMeta(ENCRYPTION_VERSION_META, 'v1:aes-256-gcm');

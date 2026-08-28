@@ -10,7 +10,7 @@ const ALLOWED_MEMORY_TYPES = new Set(['fact', 'preference', 'project', 'task']);
 const SENSITIVE_MEMORY_KEY =
   /(?:password|passcode|passwd|api[_ -]?key|access[_ -]?token|refresh[_ -]?token|secret|private[_ -]?key|seed[_ -]?phrase|mnemonic|otp|pin|credit[_ -]?card|bank[_ -]?account|身份证|身分證|护照|護照|银行卡|銀行卡|密码|密碼|口令|令牌|密钥|密鑰|验证码|驗證碼)/i;
 const SENSITIVE_MEMORY_VALUE =
-  /(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\b(?:sk|ghp|github_pat|xox[baprs])[-_][A-Za-z0-9_-]{12,}\b|\b\d{6,12}:[A-Za-z0-9_-]{20,}\b|\bBearer\s+[A-Za-z0-9._~+/-]{16,}=*\b|(?:password|passcode|api[_ -]?key|access[_ -]?token|secret|密码|密碼|验证码|驗證碼)\s*[:=：]\s*\S+)/i;
+  /(?:-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|\b(?:sk|gsk|AIza|ghp|gho|ghu|ghs|ghr|github_pat|xox[baprs])[-_A-Za-z0-9]{12,}\b|\bAKIA[A-Z0-9]{16}\b|\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b|\b\d{6,12}:[A-Za-z0-9_-]{20,}\b|\b(?:Bearer|Basic)\s+[A-Za-z0-9._~+/-]{12,}=*\b|(?:password|passcode|passwd|api[_ -]?key|access[_ -]?token|refresh[_ -]?token|client[_ -]?secret|private[_ -]?key|seed[_ -]?phrase|mnemonic|otp|pin|密码|密碼|验证码|驗證碼|密钥|密鑰)\s*[:=：]\s*\S+)/i;
 
 function truncate(value = '', max = 500) {
   const text = String(value || '').trim();
@@ -39,6 +39,33 @@ export function isSafeLongTermMemory(item = {}) {
   if (key.length > 120 || value.length > 1000) return false;
   if (SENSITIVE_MEMORY_KEY.test(key) || SENSITIVE_MEMORY_VALUE.test(value)) return false;
   return true;
+}
+
+export function containsSensitiveMemoryData(value = '') {
+  return SENSITIVE_MEMORY_VALUE.test(String(value || ''));
+}
+
+function safeMemoryText(value = '', fallback = '', max = 500) {
+  const candidate = truncate(value, max);
+  if (candidate && !containsSensitiveMemoryData(candidate)) return candidate;
+  const safeFallback = truncate(fallback, max);
+  return safeFallback && !containsSensitiveMemoryData(safeFallback) ? safeFallback : '';
+}
+
+function sanitizeTopicState(state = {}, topicId = DEFAULT_TOPIC) {
+  return {
+    ...state,
+    title: safeMemoryText(state.title, topicId, 160) || topicId,
+    summary: safeMemoryText(state.summary, '', 1000),
+    currentGoal: safeMemoryText(state.currentGoal, '', 500),
+    lastStep: safeMemoryText(state.lastStep, '', 500),
+    nextStep: safeMemoryText(state.nextStep, '', 500)
+  };
+}
+
+function topicStateWasSanitized(original = {}, sanitized = {}) {
+  return ['title', 'summary', 'currentGoal', 'lastStep', 'nextStep']
+    .some((key) => String(original[key] || '') !== String(sanitized[key] || ''));
 }
 
 export function rankMemoryItems(items = [], query = '', topicId = DEFAULT_TOPIC) {
@@ -95,19 +122,30 @@ export class MemoryManager {
     });
 
     const topicId = detected.topicId || DEFAULT_TOPIC;
-    const topicState =
+    const rawTopicState =
       this.db.getTopicState?.({
         userId,
         chatId,
         topicId
       }) || null;
+    const topicState = rawTopicState ? sanitizeTopicState(rawTopicState, topicId) : null;
+    if (rawTopicState && topicStateWasSanitized(rawTopicState, topicState)) {
+      this.db.upsertTopicState?.({ ...topicState, userId, chatId, topicId });
+    }
 
-    const recentTopics =
+    const rawRecentTopics =
       this.db.listRecentTopicStates?.({
         userId,
         chatId,
         limit: 5
       }) || [];
+    const recentTopics = rawRecentTopics.map((topic) => {
+      const sanitized = sanitizeTopicState(topic, topic.topicId || DEFAULT_TOPIC);
+      if (topicStateWasSanitized(topic, sanitized)) {
+        this.db.upsertTopicState?.({ ...sanitized, userId, chatId, topicId: topic.topicId });
+      }
+      return sanitized;
+    });
 
     const topicMemories =
       this.db.getMemoryItems?.({
@@ -125,13 +163,17 @@ export class MemoryManager {
           limit: 4
         }) || []
     );
-    const memories = rankMemoryItems(Array.from(
+    const uniqueMemories = Array.from(
       new Map(
         [...topicMemories, ...crossTopicMemories]
           .filter((item) => item.source !== 'system_seed')
           .map((item) => [item.id || `${item.topicId}:${item.key}:${item.value}`, item])
       ).values()
-    ), text, topicId).slice(0, 8);
+    );
+    for (const item of uniqueMemories) {
+      if (!isSafeLongTermMemory(item) && item.id) this.db.deleteMemoryItemById?.(item.id);
+    }
+    const memories = rankMemoryItems(uniqueMemories, text, topicId).slice(0, 8);
 
     const lines = [];
 
@@ -175,16 +217,17 @@ export class MemoryManager {
 
   touchTopic({ userId = '', chatId = '', topicId = DEFAULT_TOPIC, title = '', userText = '' } = {}) {
     const existing = this.db.getTopicState?.({ userId, chatId, topicId });
+    const safeExisting = sanitizeTopicState(existing || {}, topicId);
 
     this.db.upsertTopicState?.({
       userId,
       chatId,
       topicId,
-      title: title || existing?.title || topicId,
-      summary: existing?.summary || truncate(userText, 260),
-      currentGoal: existing?.currentGoal || '',
-      lastStep: existing?.lastStep || '',
-      nextStep: existing?.nextStep || '',
+      title: safeMemoryText(title, safeExisting.title || topicId, 160) || topicId,
+      summary: safeExisting.summary || safeMemoryText(userText, '', 260),
+      currentGoal: safeExisting.currentGoal,
+      lastStep: safeExisting.lastStep,
+      nextStep: safeExisting.nextStep,
       status: 'active'
     });
   }
@@ -227,8 +270,12 @@ export class MemoryManager {
   } = {}) {
     if (!this.aiClient) return null;
 
-    const sourceUserText = truncate(userText, 1200);
-    const sourceAssistantText = truncate(assistantText, 1600);
+    const sourceUserText = containsSensitiveMemoryData(userText)
+      ? '[Sensitive content omitted from memory processing]'
+      : truncate(userText, 1200);
+    const sourceAssistantText = containsSensitiveMemoryData(assistantText)
+      ? '[Sensitive content omitted from memory processing]'
+      : truncate(assistantText, 1600);
 
     if (!sourceUserText && !sourceAssistantText) return null;
 
@@ -291,11 +338,11 @@ export class MemoryManager {
       if (!parsed || typeof parsed !== 'object') return null;
 
       return {
-        title: String(parsed.title || title || previousState?.title || topicId).trim(),
-        summary: String(parsed.summary || previousState?.summary || '').trim(),
-        currentGoal: String(parsed.currentGoal || previousState?.currentGoal || '').trim(),
-        lastStep: String(parsed.lastStep || previousState?.lastStep || '').trim(),
-        nextStep: String(parsed.nextStep || previousState?.nextStep || '').trim(),
+        title: safeMemoryText(parsed.title, title || previousState?.title || topicId, 160) || topicId,
+        summary: safeMemoryText(parsed.summary, previousState?.summary || '', 1000),
+        currentGoal: safeMemoryText(parsed.currentGoal, previousState?.currentGoal || '', 500),
+        lastStep: safeMemoryText(parsed.lastStep, previousState?.lastStep || '', 500),
+        nextStep: safeMemoryText(parsed.nextStep, previousState?.nextStep || '', 500),
         importantMemory: Array.isArray(parsed.importantMemory) ? parsed.importantMemory : []
       };
     } catch (error) {

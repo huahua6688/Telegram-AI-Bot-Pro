@@ -122,6 +122,16 @@ process.stdout.write('sandbox-ok');
   assert.match(dockerCalls, /"--read-only"/);
   assert.match(dockerCalls, /"--cap-drop","ALL"/);
   assert.match(dockerCalls, /"no-new-privileges"/);
+  assert.match(dockerCalls, /"--ulimit","nofile=256:256"/);
+
+  await assert.rejects(
+    client.run({ taskId, command: ['sh', '-c', 'echo unsafe'] }),
+    /SHELL_COMMAND_DISABLED/
+  );
+  await assert.rejects(
+    client.run({ taskId, command: ['node', 'bad\u0000argument'] }),
+    /INVALID_COMMAND_ARGUMENT/
+  );
 
   await client.cleanup({ taskId });
   await assert.rejects(fs.access(path.join(workspaces, taskId)));

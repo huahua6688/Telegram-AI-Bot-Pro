@@ -17,11 +17,15 @@ const allowedImages = new Set(
     .filter(Boolean)
 );
 const allowedCommands = new Set(
-  String(process.env.SANDBOX_ALLOWED_COMMANDS || 'node,npm,npx,python,python3,pytest,sh')
+  String(process.env.SANDBOX_ALLOWED_COMMANDS || 'node,npm,npx,python,python3,pytest')
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean)
 );
+const allowShellCommands = ['1', 'true', 'yes', 'on'].includes(
+  String(process.env.SANDBOX_ALLOW_SHELL || 'false').trim().toLowerCase()
+);
+const shellCommands = new Set(['sh', 'ash', 'bash', 'dash', 'zsh']);
 const maxBodyBytes = Math.max(64 * 1024, Number(process.env.WORKER_MAX_BODY_BYTES || 4 * 1024 * 1024));
 const maxWorkspaceBytes = Math.max(10 * 1024 * 1024, Number(process.env.SANDBOX_MAX_WORKSPACE_BYTES || 512 * 1024 * 1024));
 const maxConcurrentRuns = Math.max(1, Math.min(16, Number(process.env.SANDBOX_MAX_CONCURRENT_RUNS || 2)));
@@ -166,10 +170,31 @@ async function spawnDocker(args, { timeoutMs = runTimeoutMs, secrets = [] } = {}
 
 function baseDockerArgs({ network = 'none', memory = '512m', cpus = '1', pids = '128' } = {}) {
   return [
-    'run', '--rm', '--network', network, '--read-only', '--cap-drop', 'ALL',
+    'run', '--rm', '--init', '--network', network, '--read-only', '--cap-drop', 'ALL',
     '--security-opt', 'no-new-privileges', '--memory', memory, '--cpus', cpus, '--pids-limit', pids,
+    '--ulimit', 'nofile=256:256', '--ulimit', 'nproc=128:128',
     '--tmpfs', '/tmp:rw,noexec,nosuid,size=128m'
   ];
+}
+
+function safeSandboxCommand(value) {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 32) throw new Error('INVALID_COMMAND');
+  const command = value.map((item) => String(item));
+  const executable = command[0];
+  if (!executable || executable !== path.posix.basename(executable) || executable.length > 64) {
+    throw new Error('INVALID_EXECUTABLE');
+  }
+  if (shellCommands.has(executable) && !allowShellCommands) throw new Error('SHELL_COMMAND_DISABLED');
+  if (!allowedCommands.has(executable)) throw new Error('COMMAND_NOT_ALLOWED');
+  let totalBytes = 0;
+  for (const argument of command) {
+    const bytes = Buffer.byteLength(argument);
+    totalBytes += bytes;
+    if (bytes > 8192 || totalBytes > 32768 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(argument)) {
+      throw new Error('INVALID_COMMAND_ARGUMENT');
+    }
+  }
+  return command;
 }
 
 async function prepareRepository(payload) {
@@ -232,10 +257,7 @@ async function prepareRepository(payload) {
 
 async function runInWorkspace(payload) {
   const taskId = safeTaskId(payload.taskId);
-  const command = payload.command;
-  if (!Array.isArray(command) || command.length === 0 || command.length > 32) throw new Error('INVALID_COMMAND');
-  const executable = path.posix.basename(String(command[0] || ''));
-  if (!allowedCommands.has(executable)) throw new Error('COMMAND_NOT_ALLOWED');
+  const command = safeSandboxCommand(payload.command);
   if (!allowedImages.has(sandboxImage)) throw new Error('IMAGE_NOT_ALLOWED');
   const paths = workspacePaths(taskId);
   await fs.access(paths.containerPath);
@@ -243,7 +265,7 @@ async function runInWorkspace(payload) {
   return spawnDocker([
     ...baseDockerArgs(),
     '-v', `${paths.hostPath}:/workspace:rw`, '-w', '/workspace', sandboxImage,
-    ...command.map(String)
+    ...command
   ]);
 }
 

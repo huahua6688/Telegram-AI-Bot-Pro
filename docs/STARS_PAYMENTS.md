@@ -2,6 +2,8 @@
 
 机器人内的数字服务统一使用 Telegram Stars。发票币种固定为 `XTR`，不需要第三方支付商 Token。
 
+`STARS_PRODUCTS_JSON` 只决定用户买多少 Stars、获得多少内部额度；`BILLING_*` 决定付费模型一次实际扣多少内部额度。两者必须一起按照真实 Provider 账单核算。模板中的套餐是保守起步示例，不保证在所有 Telegram 结算汇率、退款率或昂贵模型价格下持续盈利。
+
 ## 1. 配置商品包
 
 在 Zeabur 或服务器环境变量中设置 `STARS_PRODUCTS_JSON`。它必须是一行 JSON 数组，价格和额度都由环境变量决定，代码内没有付费价格默认值。
@@ -18,6 +20,8 @@ STARS_PRODUCTS_JSON=[{"id":"starter","title":"入门额度包","titleEn":"Starte
 - `description` / `descriptionEn`：中英文发票说明，最多 255 个字符。
 - `price`：整数 Telegram Stars 数量。
 - `credits`：六类独立额度：`chat`、`vision`、`image_generation`、`tts`、`live_voice`、`video`。
+
+当前 `live_voice` 实际用于语音转写；视频模型链尚未实现，程序会强制把商品中的 `video` 额度归零，即使 JSON 误填了大于 0 的数字也不会出售。
 
 修改商品价格不会影响已经创建的订单；每张订单会保存当时的价格和赠送额度快照。
 
@@ -41,7 +45,35 @@ ENABLE_VIDEO=false
 
 普通用户先消费当天免费额度，免费额度用完后才扣已购余额。管理员请求会记录为管理员用量，但不会扣免费额度或已购余额。视频拥有独立余额，功能默认关闭；关闭时发送视频不会扣额度。
 
-## 3. 用户入口
+上述“先用免费额度”只适用于被明确判定为免费的 Provider/模型。`PAID_PROVIDER_PATTERNS`、付费模型规则、模型目录明确价格或未知价格的模型不会使用每日免费额度，必须有购买余额。
+
+## 3. 配置付费模型换算
+
+```env
+BILLING_USD_PER_CHAT_CREDIT=0.10
+BILLING_USD_PER_VISION_CREDIT=
+BILLING_USD_PER_IMAGE_CREDIT=
+BILLING_USD_PER_TTS_CREDIT=
+BILLING_USD_PER_LIVE_VOICE_CREDIT=
+BILLING_USD_PER_VIDEO_CREDIT=
+BILLING_COST_MARKUP=1.50
+BILLING_MAX_REQUEST_USD=2
+AI_MAX_OUTPUT_TOKENS=2048
+PAID_PROVIDER_PATTERNS=openai-compatible
+FREE_MODEL_PATTERNS=:free,gemini-2.5-flash-lite
+PAID_MODEL_PATTERNS=claude-opus,claude-sonnet,gpt-5
+```
+
+- `BILLING_USD_PER_*_CREDIT`：一个内部额度代表多少美元模型成本。某能力留空/为 0 时，该能力的付费或未知价格模型安全关闭。
+- `BILLING_COST_MARKUP`：成本加成倍数，不能小于 1。
+- `BILLING_MAX_REQUEST_USD`：请求前预冻结的最大美元预算，不是上游网络层的硬停损。
+- `AI_MAX_OUTPUT_TOKENS`：兼容 Provider 的单次输出上限。
+
+Zeabur AI Hub/LiteLLM 的 `x-litellm-response-cost`、OpenRouter 的 `usage.cost` 和兼容费用字段会统一记录。费用已知时按实际成本乘加成结算并退回剩余额度；某次 fallback 之前的失败请求如果已经产生费用，也会累计。费用字段不可靠时按冻结上限扣费。
+
+单个 Provider 请求发出后，Bot 无法保证在上游费用刚达到阈值时立刻切断。因此上线前要按最昂贵模型的最大输入、最大输出、重试和 fallback 评估风险。
+
+## 4. 用户入口
 
 用户通过主菜单或输入框下方的“购买额度”“我的余额”按钮使用支付功能，不需要记 Slash 指令。付款流程为：
 
@@ -52,7 +84,9 @@ ENABLE_VIDEO=false
 
 `/terms` 和 `/paysupport` 是支付合规辅助入口，不会加入主要命令菜单。
 
-## 4. 退款
+在群组中点击“购买额度”时，Bot 优先使用 Telegram 只对点击用户可见的临时/私密界面。接口不可用时直接打开主 Bot 私聊购买页。群时间线不得公开套餐、余额、订单或付款信息。
+
+## 5. 退款
 
 管理员可以使用：
 
@@ -64,7 +98,7 @@ ENABLE_VIDEO=false
 
 如果服务在 Telegram 已退款、SQLite 尚未确认之间重启，退款记录会保留为 `pending`，额度不会被错误恢复。管理员重新执行同一个 `/refundstars telegram_payment_charge_id` 即可幂等完成对账，不会重复退款。
 
-## 5. 数据与排错
+## 6. 数据与排错
 
 订单、六类余额、每日免费用量、消费记录和退款记录都保存在 `DATABASE_FILE` 指向的 SQLite 数据库。部署时必须为数据库目录挂载持久化存储。
 
@@ -76,3 +110,5 @@ Mini App 的管理员用户列表中可以按账号查看并保存六类“已�
 `PATCH` 支持完整覆盖六类余额的 `set`，以及安全增减的 `adjust`；余额不会允许变成负数。
 
 如果用户 Stars 已扣除但额度未到账，让用户打开“支付支持”，并使用其 Telegram ID、付款时间和日志中的 charge ID 核对。不要要求用户提供密码、验证码或 API Key。
+
+真实上线前至少用测试账号验证一次：创建发票、预结账、成功付款、重复回调、余额到账、使用结算和退款。自动化 Mock 通过不能称为真实 Telegram Stars 付款通过。

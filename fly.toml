@@ -9,9 +9,11 @@ primary_region = "sin"
   dockerfile = "Dockerfile"
 
 [env]
-  AI_PROVIDER = "openai-compatible"
+  NODE_ENV = "production"
+  DEFAULT_AI_PROVIDER = "openai-compatible"
   HEALTH_PORT = "3000"
   ADMIN_API_PORT = "3001"
+  ADMIN_API_ENABLED = "false"
   DATABASE_FILE = "/data/bot-data.db"
   DATA_FILE = "/data/bot-data.json"
   AI_BASE_URL = "https://api.openai.com/v1"
@@ -27,21 +29,29 @@ primary_region = "sin"
   ENABLE_TOOL_CALLS = "true"
   ENABLE_WEB_SEARCH = "true"
   ENABLE_URL_FETCH = "true"
+  ENABLE_STREAMING_REPLIES = "true"
+  ENABLE_NATIVE_DRAFT_STREAMING = "false"
+  ENABLE_RICH_MESSAGES = "true"
+  CHAT_ENCRYPTION_REQUIRED = "true"
   MAX_HISTORY_MESSAGES = "16"
   MAX_INPUT_CHARS = "12000"
   MAX_OUTPUT_CHARS = "3500"
   REQUEST_TIMEOUT_MS = "120000"
   RATE_LIMIT_WINDOW_MS = "60000"
   RATE_LIMIT_MAX_REQUESTS = "12"
-  DAILY_QUOTA = "200"
+  DAILY_QUOTA = "20"
+  STARS_FREE_CHAT_DAILY = "20"
   GROUP_TRIGGER_MODE = "smart"
   GROUP_TRIGGER_KEYWORD = "ai"
 
 # Secrets (set with `fly secrets set`):
 #   BOT_TOKEN=<your telegram bot token>
 #   AI_API_KEY=<your ai api key>
-#   ADMIN_API_TOKEN=<strong random token>
 #   ADMIN_USER_IDS=<comma-separated admin user IDs>
+#   CHAT_ENCRYPTION_KEY=<stable random key; never replace for an existing database>
+#   LOG_PRIVACY_KEY=<different stable random key>
+# Optional only when ADMIN_API_ENABLED=true:
+#   ADMIN_API_TOKEN=<strong random token of at least 32 characters>
 
 [[mounts]]
   source = "bot_data"
@@ -49,8 +59,8 @@ primary_region = "sin"
 
 [http_service]
   internal_port = 3000
-  force_https = false
-  auto_stop_machines = "stop"
+  force_https = true
+  auto_stop_machines = "off"
   auto_start_machines = true
   min_machines_running = 1
 

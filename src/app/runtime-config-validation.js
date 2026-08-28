@@ -7,6 +7,14 @@ function normalizeConfiguredIds(value) {
   return source.map((item) => String(item || '').trim()).filter(Boolean);
 }
 
+const OBVIOUS_SECRET_PATTERN = /(?:replace[-_ ]?me|change[-_ ]?me|your[-_ ]|example|placeholder|test[-_ ]?token|secret123|password)/i;
+
+export function isStrongRuntimeSecret(value, minimumLength = 32) {
+  const secret = String(value || '');
+  if (secret.length < minimumLength || /\s/.test(secret) || OBVIOUS_SECRET_PATTERN.test(secret)) return false;
+  return new Set(secret).size >= 10;
+}
+
 export function getRuntimeConfigErrors(config = {}) {
   const errors = [];
 
@@ -19,8 +27,18 @@ export function getRuntimeConfigErrors(config = {}) {
     errors.push('AI_MODEL is missing.');
   }
 
-  if (config.adminApiEnabled && !String(config.adminApiToken || '').trim()) {
-    errors.push('ADMIN_API_ENABLED=true requires ADMIN_API_TOKEN.');
+  if (config.adminApiEnabled && !isStrongRuntimeSecret(config.adminApiToken)) {
+    errors.push('ADMIN_API_ENABLED=true requires a random ADMIN_API_TOKEN with at least 32 characters.');
+  }
+
+  if (config.productionMode && config.chatEncryptionRequired !== true) {
+    errors.push('Production requires CHAT_ENCRYPTION_REQUIRED=true.');
+  }
+  if (config.chatEncryptionRequired && !isStrongRuntimeSecret(config.chatEncryptionKey)) {
+    errors.push('CHAT_ENCRYPTION_REQUIRED=true requires a strong CHAT_ENCRYPTION_KEY with at least 32 characters.');
+  }
+  if (config.productionMode && !isStrongRuntimeSecret(config.logPrivacyKey)) {
+    errors.push('Production requires a strong LOG_PRIVACY_KEY with at least 32 characters for stable pseudonymous audit logs.');
   }
 
   if (config.agentEnabled) {
@@ -31,17 +49,32 @@ export function getRuntimeConfigErrors(config = {}) {
     if (!/^https:\/\//i.test(workerUrl) && !/^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/i.test(workerUrl)) {
       errors.push('AGENT_ENABLED=true requires an HTTPS AGENT_WORKER_URL (localhost HTTP is allowed for development).');
     }
-    if (String(config.agentWorkerSecret || '').length < 32) {
+    if (!isStrongRuntimeSecret(config.agentWorkerSecret)) {
       errors.push('AGENT_ENABLED=true requires AGENT_WORKER_SECRET with at least 32 characters.');
     }
     if (!/^https:\/\//i.test(String(config.publicBaseUrl || ''))) {
       errors.push('AGENT_ENABLED=true requires an HTTPS PUBLIC_BASE_URL.');
     }
-    if (!String(config.githubAppClientId || '') || !String(config.githubAppClientSecret || '')) {
-      errors.push('AGENT_ENABLED=true requires GITHUB_APP_CLIENT_ID and GITHUB_APP_CLIENT_SECRET.');
+  }
+
+  const githubConfigured = Boolean(
+    String(config.githubAppClientId || '').trim() ||
+    String(config.githubAppClientSecret || '').trim() ||
+    String(config.githubAppSlug || '').trim() ||
+    String(config.githubTokenEncryptionKey || '').trim()
+  );
+  if (config.agentEnabled || githubConfigured) {
+    if (!String(config.githubAppClientId || '').trim() || !String(config.githubAppClientSecret || '').trim()) {
+      errors.push('GitHub App integration requires GITHUB_APP_CLIENT_ID and GITHUB_APP_CLIENT_SECRET.');
     }
-    if (String(config.githubTokenEncryptionKey || '').length < 32) {
-      errors.push('AGENT_ENABLED=true requires GITHUB_TOKEN_ENCRYPTION_KEY (or CHAT_ENCRYPTION_KEY) with at least 32 characters.');
+    if (!isStrongRuntimeSecret(config.githubTokenEncryptionKey)) {
+      errors.push('GitHub App integration requires a dedicated GITHUB_TOKEN_ENCRYPTION_KEY with at least 32 characters.');
+    }
+    if (
+      String(config.githubTokenEncryptionKey || '') &&
+      String(config.githubTokenEncryptionKey || '') === String(config.chatEncryptionKey || '')
+    ) {
+      errors.push('GITHUB_TOKEN_ENCRYPTION_KEY must be different from CHAT_ENCRYPTION_KEY.');
     }
   }
 

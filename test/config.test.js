@@ -382,11 +382,13 @@ test('loadConfig defaults to SQLite storage and streaming replies', () => {
   delete process.env.DATABASE_FILE;
   delete process.env.DATA_FILE;
   delete process.env.ENABLE_STREAMING_REPLIES;
+  delete process.env.ENABLE_NATIVE_DRAFT_STREAMING;
   delete process.env.ENABLE_RICH_MESSAGES;
   const config = loadConfig();
   assert.match(config.databaseFile, /bot-data\.db$/);
   assert.match(config.legacyDataFile, /bot-data\.json$/);
   assert.equal(config.enableStreamingReplies, true);
+  assert.equal(config.enableNativeDraftStreaming, false);
   assert.equal(config.enableRichMessages, true);
 });
 
@@ -541,6 +543,24 @@ test('loadConfig exposes the current free-credit and support defaults', () => {
   assert.equal(config.conversationRetentionDays, 30);
   assert.equal(config.privacySweepIntervalHours, 24);
   assert.equal(config.miniAppShowUserMessages, false);
+});
+
+test('loadConfig defaults production encryption to fail closed and never reuses the chat key for GitHub', () => {
+  resetEnv();
+  process.env.NODE_ENV = 'production';
+  process.env.CHAT_ENCRYPTION_KEY = 'chat-only-key';
+  delete process.env.CHAT_ENCRYPTION_REQUIRED;
+  delete process.env.GITHUB_TOKEN_ENCRYPTION_KEY;
+  const config = loadConfig();
+  assert.equal(config.productionMode, true);
+  assert.equal(config.chatEncryptionRequired, true);
+  assert.equal(config.chatEncryptionKey, 'chat-only-key');
+  assert.equal(config.githubTokenEncryptionKey, '');
+
+  resetEnv();
+  delete process.env.NODE_ENV;
+  process.env.ZEABUR_SERVICE_ID = 'service-id';
+  assert.equal(loadConfig().productionMode, true);
 });
 
 test('loadConfig bounds the process-wide tool concurrency limit', () => {

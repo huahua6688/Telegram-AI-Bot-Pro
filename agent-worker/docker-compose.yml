@@ -4,10 +4,17 @@ services:
     restart: unless-stopped
     environment:
       PORT: "8080"
-      AGENT_WORKER_SECRET: "replace-with-at-least-32-random-characters"
+      AGENT_WORKER_SECRET: "${AGENT_WORKER_SECRET:?set AGENT_WORKER_SECRET to at least 32 random characters}"
+      SANDBOX_ALLOW_SHELL: "false"
       SANDBOX_IMAGE: "node:22-alpine"
       SANDBOX_GIT_IMAGE: "alpine/git:v2.47.2"
+      SANDBOX_ALLOWED_IMAGES: "node:22-alpine,python:3.13-alpine"
+      SANDBOX_ALLOWED_COMMANDS: "node,npm,npx,python,python3,pytest"
       SANDBOX_MAX_CONCURRENT_RUNS: "2"
+      SANDBOX_MAX_WORKSPACE_BYTES: "536870912"
+      SANDBOX_RUN_TIMEOUT_MS: "120000"
+      SANDBOX_PREPARE_TIMEOUT_MS: "300000"
+      WORKER_MAX_BODY_BYTES: "4194304"
       WORKSPACE_ROOT: "/workspaces"
       WORKSPACE_HOST_ROOT: "/var/lib/telegram-agent-worker"
     ports:

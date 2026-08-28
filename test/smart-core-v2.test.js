@@ -2,12 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadConfig } from '../src/config.js';
 import {
+  containsSensitiveMemoryData,
   MemoryManager,
   isSafeLongTermMemory,
   rankMemoryItems
 } from '../src/services/memory-manager.js';
 import { ToolRegistry } from '../src/services/tool-registry.js';
 import {
+  buildTelegramReplyParameters,
   TelegramAIBot,
   cleanBotOutput,
   formatNewsRichMarkdown,
@@ -70,6 +72,8 @@ test('long-term memory rejects credentials and ranks relevant preferences first'
     isSafeLongTermMemory({ key: 'reply_style', value: 'Prefer concise Chinese replies.' }),
     true
   );
+  assert.equal(containsSensitiveMemoryData(`github_pat_${'a'.repeat(40)}`), true);
+  assert.equal(containsSensitiveMemoryData('password: hunter2'), true);
 
   const ranked = rankMemoryItems(
     [
@@ -228,6 +232,53 @@ test('structured private replies use Telegram rich messages with safe regular fa
   assert.equal(await TelegramAIBot.prototype.trySendRichAssistantReply.call(fakeBot, ctx, markdown), null);
 });
 
+test('topic memory omits sensitive user text and purges unsafe stored memory', () => {
+  const topicWrites = [];
+  const deleted = [];
+  const manager = new MemoryManager({
+    db: {
+      getActiveContext() { return { activeTopicId: 'general' }; },
+      getTopicState() {
+        return { topicId: 'general', title: 'API key: sk-secret-value-123456789', summary: 'password: hunter2' };
+      },
+      listRecentTopicStates() { return []; },
+      getMemoryItems() {
+        return [{ id: 'unsafe-memory', topicId: 'general', key: 'access_token', value: 'github_pat_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }];
+      },
+      upsertTopicState(value) { topicWrites.push(value); },
+      deleteMemoryItemById(id) { deleted.push(id); }
+    }
+  });
+
+  const context = manager.getMemoryContext({ userId: '1', chatId: '2', text: 'hello' });
+  assert.doesNotMatch(context.text, /hunter2|sk-secret|github_pat/);
+  assert.deepEqual(deleted, ['unsafe-memory']);
+  assert.equal(topicWrites[0].summary, '');
+
+  manager.touchTopic({ userId: '1', chatId: '2', userText: 'password: never-store-this' });
+  assert.equal(topicWrites.at(-1).summary, '');
+});
+
+test('memory summarizer never receives sensitive conversation text', async () => {
+  let memoryPrompt = '';
+  const manager = new MemoryManager({
+    db: { getTopicState() { return null; }, upsertTopicState() {} },
+    config: { enableMemorySummary: true, memorySummaryInterval: 1, defaultModel: 'test' },
+    logger: logger(),
+    aiClient: {
+      async completeWithTools({ messages }) {
+        memoryPrompt = messages[1].content;
+        return { text: JSON.stringify({ summary: 'password: leaked-by-model', importantMemory: [] }) };
+      }
+    }
+  });
+  await manager.updateAfterAssistantReply({
+    userId: '1', chatId: '2', memoryContext: { topicId: 'general' },
+    userText: 'api_key=super-private-user-value', assistantText: 'Bearer very-private-assistant-value'
+  });
+  assert.doesNotMatch(memoryPrompt, /super-private-user-value|very-private-assistant-value/);
+});
+
 test('recent Rich Message text is restored from private in-memory context when Telegram omits it in a reply', async () => {
   const bot = Object.create(TelegramAIBot.prototype);
   bot.config = {
@@ -273,12 +324,14 @@ test('provider fragments use one throttled rich draft and let final model struct
   const fakeBot = {
     config: {
       enableStreamingReplies: true,
+      enableNativeDraftStreaming: true,
       enableRichMessages: true,
       streamingEditIntervalMs: 350,
       maxOutputChars: 4096,
       richMessageMinChars: 600
     },
     logger: logger(),
+    createNativeAssistantDraftStreamer: TelegramAIBot.prototype.createNativeAssistantDraftStreamer,
     trySendRichAssistantReply: TelegramAIBot.prototype.trySendRichAssistantReply,
     getLocale() { return 'en'; },
     t() { return 'No reply.'; }
@@ -329,11 +382,13 @@ test('rich draft failures fall back to the existing plain Telegram draft', async
   const fakeBot = {
     config: {
       enableStreamingReplies: true,
+      enableNativeDraftStreaming: true,
       enableRichMessages: true,
       streamingEditIntervalMs: 350,
       maxOutputChars: 4096
     },
-    logger: { warn(message) { warnings.push(message); } }
+    logger: { warn(message) { warnings.push(message); } },
+    createNativeAssistantDraftStreamer: TelegramAIBot.prototype.createNativeAssistantDraftStreamer
   };
   const ctx = {
     chat: { id: 77, type: 'private' },
@@ -365,11 +420,13 @@ test('Telegram stop-generation updates abort the matching provider request', asy
   const fakeBot = {
     config: {
       enableStreamingReplies: true,
+      enableNativeDraftStreaming: true,
       enableRichMessages: true,
       streamingEditIntervalMs: 350,
       maxOutputChars: 4096
     },
     logger: logger(),
+    createNativeAssistantDraftStreamer: TelegramAIBot.prototype.createNativeAssistantDraftStreamer,
     activeDrafts: new Map()
   };
   const ctx = {
@@ -391,6 +448,221 @@ test('Telegram stop-generation updates abort the matching provider request', asy
   assert.equal(fakeBot.activeDrafts.size, 0);
   assert.deepEqual(calls.map((item) => item.method), ['sendRichMessageDraft', 'sendMessage']);
   assert.equal(calls[1].payload.text, 'Partial answer to preserve');
+});
+
+test('private streaming edits one persistent reply and does not send a second final answer', async () => {
+  const replies = [];
+  const edits = [];
+  const apiCalls = [];
+  const fakeBot = {
+    config: {
+      enableStreamingReplies: true,
+      enableNativeDraftStreaming: false,
+      enableRichMessages: false,
+      streamingEditIntervalMs: 250,
+      maxOutputChars: 4096
+    },
+    logger: logger(),
+    activeDrafts: new Map(),
+    createPersistentAssistantStreamer: TelegramAIBot.prototype.createPersistentAssistantStreamer,
+    tryEditStreamingMessage: TelegramAIBot.prototype.tryEditStreamingMessage,
+    getLocale() { return 'zh'; },
+    t() { return 'No reply.'; }
+  };
+  const ctx = {
+    chat: { id: 77, type: 'private' },
+    from: { id: 88 },
+    message: { message_id: 42 },
+    telegram: {
+      async callApi(method, payload) { apiCalls.push({ method, payload }); return true; },
+      async editMessageText(chatId, messageId, _inlineId, text, extra) {
+        edits.push({ chatId, messageId, text, extra });
+        return true;
+      },
+      async editMessageReplyMarkup() { return true; },
+      async deleteMessage() { throw new Error('should not delete'); }
+    },
+    async reply(text, extra) {
+      replies.push({ text, extra });
+      return { message_id: 91 };
+    }
+  };
+
+  const streamer = TelegramAIBot.prototype.createAssistantDraftStreamer.call(fakeBot, ctx);
+  await streamer.onTextDelta('first fragment', 'first fragment of answer');
+  const result = await TelegramAIBot.prototype.sendAssistantReply.call(
+    fakeBot,
+    ctx,
+    'complete final answer',
+    {},
+    { streamer }
+  );
+  await streamer.finalize();
+
+  assert.equal(result.lastMessageId, 91);
+  assert.equal(replies.length, 1);
+  assert.equal(replies[0].extra.reply_parameters.message_id, 42);
+  assert.equal(replies[0].extra.reply_parameters.allow_sending_without_reply, true);
+  assert.equal(edits.at(-1).text, 'complete final answer');
+  assert.deepEqual(edits.at(-1).extra.reply_markup, undefined);
+  assert.equal(apiCalls.some((call) => /MessageDraft$/.test(call.method)), false);
+  assert.equal(fakeBot.activeDrafts.size, 0);
+});
+
+test('persistent streaming preserves Rich Message output on the same message id', async () => {
+  const calls = [];
+  const fakeBot = {
+    config: {
+      enableStreamingReplies: true,
+      enableNativeDraftStreaming: false,
+      enableRichMessages: true,
+      richMessageMinChars: 200,
+      streamingEditIntervalMs: 250,
+      maxOutputChars: 4096
+    },
+    logger: logger(),
+    activeDrafts: new Map(),
+    richReplyContexts: new Map(),
+    createPersistentAssistantStreamer: TelegramAIBot.prototype.createPersistentAssistantStreamer,
+    tryEditStreamingMessage: TelegramAIBot.prototype.tryEditStreamingMessage,
+    tryEditStreamingRichMessage: TelegramAIBot.prototype.tryEditStreamingRichMessage,
+    rememberRichReplyContext: TelegramAIBot.prototype.rememberRichReplyContext,
+    getLocale() { return 'en'; },
+    t() { return 'No reply.'; }
+  };
+  const ctx = {
+    chat: { id: 77, type: 'private' },
+    from: { id: 88 },
+    message: { message_id: 42 },
+    telegram: {
+      async callApi(method, payload) {
+        calls.push({ method, payload });
+        return method === 'sendRichMessage' ? { message_id: 91 } : true;
+      },
+      async editMessageText() { assert.fail('structured output should stay rich'); },
+      async editMessageReplyMarkup() { return true; }
+    },
+    async reply() { assert.fail('Rich Message streaming should not create a plain duplicate'); }
+  };
+  const markdown = `# Report\n\n${'- useful item\n'.repeat(25)}`;
+  const streamer = TelegramAIBot.prototype.createAssistantDraftStreamer.call(fakeBot, ctx);
+  await streamer.onTextDelta('', '# Report\n\n- partial item');
+  const result = await TelegramAIBot.prototype.sendAssistantReply.call(
+    fakeBot,
+    ctx,
+    markdown,
+    {},
+    { streamer }
+  );
+
+  assert.equal(result.lastMessageId, 91);
+  assert.equal(result.rich, true);
+  assert.deepEqual(calls.map((call) => call.method), ['sendRichMessage', 'editMessageText']);
+  assert.equal(calls[1].payload.message_id, 91);
+  assert.equal(calls[1].payload.rich_message.markdown, markdown.trim());
+  assert.equal(fakeBot.richReplyContexts.has('77:91'), true);
+});
+
+test('persistent stream stop state stays isolated between users', async () => {
+  let nextMessageId = 100;
+  const edits = [];
+  const fakeBot = {
+    config: {
+      enableStreamingReplies: true,
+      enableNativeDraftStreaming: false,
+      streamingEditIntervalMs: 250,
+      maxOutputChars: 4096
+    },
+    logger: logger(),
+    activeDrafts: new Map(),
+    createPersistentAssistantStreamer: TelegramAIBot.prototype.createPersistentAssistantStreamer,
+    tryEditStreamingMessage: TelegramAIBot.prototype.tryEditStreamingMessage,
+    getLocale() { return 'en'; }
+  };
+  const telegram = {
+    async callApi() { return true; },
+    async editMessageText(chatId, messageId, _inlineId, text) {
+      edits.push({ chatId, messageId, text });
+      return true;
+    },
+    async editMessageReplyMarkup() { return true; }
+  };
+  const makeContext = (chatId, userId) => ({
+    chat: { id: chatId, type: 'private' },
+    from: { id: userId },
+    message: { message_id: userId },
+    telegram,
+    async reply() { nextMessageId += 1; return { message_id: nextMessageId }; }
+  });
+  const firstContext = makeContext(11, 11);
+  const secondContext = makeContext(22, 22);
+  const first = TelegramAIBot.prototype.createAssistantDraftStreamer.call(fakeBot, firstContext);
+  const second = TelegramAIBot.prototype.createAssistantDraftStreamer.call(fakeBot, secondContext);
+  await first.onTextDelta('', 'first user partial answer');
+  await second.onTextDelta('', 'second user partial answer');
+
+  let callbackAnswer = '';
+  const stopped = await TelegramAIBot.prototype.handlePersistentStreamStop.call(fakeBot, {
+    match: [null, first.token],
+    chat: firstContext.chat,
+    from: firstContext.from,
+    telegram,
+    async answerCbQuery(text) { callbackAnswer = text; }
+  });
+
+  assert.equal(stopped, true);
+  assert.equal(first.signal.aborted, true);
+  assert.equal(second.signal.aborted, false);
+  assert.equal(fakeBot.activeDrafts.has(`stream:${first.token}`), false);
+  assert.equal(fakeBot.activeDrafts.has(`stream:${second.token}`), true);
+  assert.equal(callbackAnswer, 'Stopped');
+  assert.match(edits.at(-1).text, /Generation stopped/);
+  await second.discard();
+});
+
+test('reply errors retry once without quote or reply parameters', async () => {
+  const calls = [];
+  const fakeBot = {
+    config: { enableStreamingReplies: false, enableRichMessages: false, maxOutputChars: 4096 },
+    getLocale() { return 'en'; },
+    t() { return 'No reply.'; }
+  };
+  const ctx = {
+    message: { message_id: 42 },
+    async reply(text, extra) {
+      calls.push({ text, extra });
+      if (calls.length === 1) {
+        const error = new Error('Bad Request: message to be replied not found');
+        error.response = { error_code: 400, description: error.message };
+        throw error;
+      }
+      return { message_id: 92 };
+    }
+  };
+
+  const result = await TelegramAIBot.prototype.sendAssistantReply.call(fakeBot, ctx, 'safe answer');
+  assert.equal(result.lastMessageId, 92);
+  assert.deepEqual(calls[0].extra.reply_parameters, buildTelegramReplyParameters(ctx));
+  assert.equal('reply_parameters' in calls[1].extra, false);
+});
+
+test('native Telegram text entities are accepted as plain model input', async () => {
+  const ctx = {
+    message: {
+      text: '粗体、斜体与引用',
+      entities: [
+        { type: 'bold', offset: 0, length: 2 },
+        { type: 'italic', offset: 3, length: 2 },
+        { type: 'blockquote', offset: 6, length: 2 }
+      ]
+    }
+  };
+  const prepared = await TelegramAIBot.prototype.prepareUserMessage.call({
+    config: { maxInputChars: 4000 },
+    getLocale() { return 'zh'; },
+    t() { return 'Continue.'; }
+  }, ctx);
+  assert.deepEqual(prepared, { message: { role: 'user', content: '粗体、斜体与引用' } });
 });
 
 test('short code selected by the model still uses rich rendering without forcing ordinary replies', async () => {

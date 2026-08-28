@@ -4,6 +4,7 @@ services:
     env_file:
       - .env
     environment:
+      NODE_ENV: development
       HEALTH_PORT: 3000
       ADMIN_API_PORT: 3001
       DATABASE_FILE: /app/data/bot-data.db
