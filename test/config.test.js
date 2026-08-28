@@ -382,11 +382,13 @@ test('loadConfig defaults to SQLite storage and streaming replies', () => {
   delete process.env.DATABASE_FILE;
   delete process.env.DATA_FILE;
   delete process.env.ENABLE_STREAMING_REPLIES;
+  delete process.env.ENABLE_NATIVE_DRAFT_STREAMING;
   delete process.env.ENABLE_RICH_MESSAGES;
   const config = loadConfig();
   assert.match(config.databaseFile, /bot-data\.db$/);
   assert.match(config.legacyDataFile, /bot-data\.json$/);
   assert.equal(config.enableStreamingReplies, true);
+  assert.equal(config.enableNativeDraftStreaming, false);
   assert.equal(config.enableRichMessages, true);
 });
 

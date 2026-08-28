@@ -910,9 +910,9 @@ async function sendTextReply(ctx, text, maxLength, extra = {}) {
   const cleaned = cleanBotOutput(text);
   const chunks = splitMessage(cleaned, maxLength);
   for (const chunk of chunks) {
-    await ctx.reply(chunk, {
+    await replyWithReplyFallback(ctx, chunk, {
       ...extra,
-      reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined
+      reply_parameters: buildTelegramReplyParameters(ctx)
     });
   }
 }
@@ -1082,10 +1082,10 @@ async function sendSearchReply(ctx, text, maxLength, locale = 'zh') {
   const truncated = truncateText(String(text || ''), Math.max(500, maxLength - 200));
   const html = formatSearchReplyHtml(truncated, locale);
   try {
-    await ctx.reply(html, {
+    await replyWithReplyFallback(ctx, html, {
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
-      reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined
+      reply_parameters: buildTelegramReplyParameters(ctx)
     });
   } catch {
     await sendTextReply(ctx, text, maxLength);
@@ -1095,12 +1095,23 @@ async function sendSearchReply(ctx, text, maxLength, locale = 'zh') {
 async function sendHtmlReply(ctx, text, maxLength, extra = {}) {
   const chunks = splitMessage(String(text || '').trim(), maxLength);
   for (const chunk of chunks) {
-    await ctx.reply(chunk, {
+    const options = {
       ...extra,
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
-      reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined
-    });
+      reply_parameters: buildTelegramReplyParameters(ctx)
+    };
+    try {
+      await replyWithReplyFallback(ctx, chunk, options);
+    } catch (error) {
+      if (!/parse entities|can't parse|unsupported start tag|entity/i.test(String(error?.message || error?.response?.description || ''))) {
+        throw error;
+      }
+      await replyWithReplyFallback(ctx, cleanBotOutput(chunk), {
+        ...withoutReplyParameters(extra),
+        reply_parameters: buildTelegramReplyParameters(ctx)
+      });
+    }
   }
 }
 
@@ -1166,6 +1177,48 @@ function chunkItems(items, size) {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export function buildTelegramReplyParameters(ctx) {
+  const messageId = Number(ctx?.message?.message_id);
+  if (!Number.isSafeInteger(messageId) || messageId <= 0) return undefined;
+  return {
+    message_id: messageId,
+    allow_sending_without_reply: true
+  };
+}
+
+export function isTelegramReplyParametersError(error) {
+  const description = String(
+    error?.response?.description || error?.description || error?.message || ''
+  ).toLowerCase();
+  const code = Number(error?.response?.error_code || error?.code || 0);
+  if (code && code !== 400) return false;
+  return /reply(?:_| )parameters|message to be replied|replied message|quote.*(?:not found|invalid)|reply message not found/.test(description);
+}
+
+function withoutReplyParameters(extra = {}) {
+  const fallback = { ...(extra || {}) };
+  delete fallback.reply_parameters;
+  return fallback;
+}
+
+export async function replyWithReplyFallback(ctx, text, extra = {}) {
+  try {
+    return await ctx.reply(text, extra);
+  } catch (error) {
+    if (!extra?.reply_parameters || !isTelegramReplyParametersError(error)) throw error;
+    return ctx.reply(text, withoutReplyParameters(extra));
+  }
+}
+
+export async function callApiWithReplyFallback(telegram, method, payload = {}) {
+  try {
+    return await telegram.callApi(method, payload);
+  } catch (error) {
+    if (!payload?.reply_parameters || !isTelegramReplyParametersError(error)) throw error;
+    return telegram.callApi(method, withoutReplyParameters(payload));
+  }
 }
 
 function createStreamingFrames(text, minLength) {
@@ -1270,6 +1323,7 @@ export class TelegramAIBot {
     this.bot.action(/^stars_pkg:([a-z0-9][a-z0-9_-]{0,39})$/, (ctx) => this.handleStarsProductCallback(ctx));
     this.bot.action(/^agent_approval:([0-9a-f-]{36}):(yes|no)$/, (ctx) => this.handleAgentApproval(ctx));
     this.bot.action(/^agent_task:([0-9a-f-]{36}):(status|pause|resume|cancel)$/, (ctx) => this.handleAgentTaskAction(ctx));
+    this.bot.action(/^stream_stop:([0-9a-f-]{36})$/, (ctx) => this.handlePersistentStreamStop(ctx));
     this.agentTaskService?.setNotifier?.((task) => this.sendAgentTaskNotification(task));
     this.documentParser = new DocumentParser(config, logger);
     this.multimodalActions = new MultimodalActionService({
@@ -9609,6 +9663,8 @@ export class TelegramAIBot {
 
       if (!result.text) {
         await this.refundQuotaForContext(ctx);
+        await draftStreamer?.discard?.();
+        await draftStreamer?.finalize?.();
         await ctx.reply(this.t(locale, 'noReply'));
         return;
       }
@@ -9653,9 +9709,9 @@ export class TelegramAIBot {
       }
 
       const reply = await this.sendAssistantReply(ctx, visibleAssistantText, {}, {
-        skipSimulatedStreaming: Boolean(draftStreamer?.sent)
+        streamer: draftStreamer
       });
-      draftStreamer?.finalize?.();
+      await draftStreamer?.finalize?.();
       assistantDelivered = true;
       if (reply?.lastMessageId && this.config?.miniAppEnabled === false) {
         const state = this.createAssistantActionState({
@@ -9687,7 +9743,7 @@ export class TelegramAIBot {
       const generationStopped = Boolean(draftStreamer?.stopped || (
         draftStreamer?.signal?.aborted && /abort|stop/i.test(String(error?.name || error?.message || ''))
       ));
-      draftStreamer?.finalize?.();
+      await draftStreamer?.finalize?.();
       if (generationStopped) {
         const reservation = this.getPendingUsageReservation(ctx.from?.id, messageCreditType);
         if (reservation?.metered) {
@@ -9714,6 +9770,7 @@ export class TelegramAIBot {
       }
 
       this.logger.error('Failed to handle message', { error: this.formatLogError(error) });
+      await draftStreamer?.discard?.();
       await this.replyWithSupport(ctx, this.formatUserFacingError(error, locale), undefined, locale);
     }
   }
@@ -9894,6 +9951,178 @@ export class TelegramAIBot {
     if (!this.config.enableStreamingReplies) return null;
     if (ctx.chat?.type !== 'private' || typeof ctx.telegram?.callApi !== 'function') return null;
 
+    if (!this.config.enableNativeDraftStreaming) {
+      return this.createPersistentAssistantStreamer(ctx);
+    }
+
+    return this.createNativeAssistantDraftStreamer(ctx);
+  }
+
+  createPersistentAssistantStreamer(ctx) {
+    const intervalMs = Math.max(250, Number(this.config.streamingEditIntervalMs) || 350);
+    const controller = new AbortController();
+    const token = randomUUID();
+    const key = `stream:${token}`;
+    let lastUpdateAt = 0;
+    let lastText = '';
+    let messageId = null;
+    let stopped = false;
+    let completed = false;
+    let disabled = false;
+
+    const stopKeyboard = {
+      inline_keyboard: [[{
+        text: this.getLocale(ctx).startsWith('en') ? '⏹ Stop' : '⏹ 停止生成',
+        callback_data: `stream_stop:${token}`,
+        style: 'danger'
+      }]]
+    };
+    const state = {
+      controller,
+      userId: String(ctx.from?.id || ''),
+      chatId: String(ctx.chat?.id || ''),
+      stop() {
+        stopped = true;
+      },
+      get stopped() {
+        return stopped;
+      },
+      get lastText() {
+        return lastText;
+      },
+      get messageId() {
+        return messageId;
+      }
+    };
+    this.activeDrafts?.set?.(key, state);
+
+    const edit = async (text, replyMarkup = stopKeyboard) => {
+      if (!messageId) return false;
+      return this.tryEditStreamingMessage(ctx, messageId, text, {
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {})
+      });
+    };
+
+    const onTextDelta = async (_delta, fullText) => {
+      if (disabled || stopped || completed) return;
+      const cleaned = truncateText(
+        cleanBotOutput(fullText),
+        Math.min(4096, Math.max(500, Number(this.config.maxOutputChars) || 4096))
+      );
+      if (!cleaned || cleaned.length < 12 || cleaned === lastText) return;
+      const now = Date.now();
+      if (lastUpdateAt && now - lastUpdateAt < intervalMs) return;
+
+      if (!messageId) {
+        try {
+          const sent = await replyWithReplyFallback(ctx, cleaned, {
+            reply_parameters: buildTelegramReplyParameters(ctx),
+            reply_markup: stopKeyboard
+          });
+          messageId = sent?.message_id || null;
+          if (!messageId) {
+            disabled = true;
+            return;
+          }
+        } catch (error) {
+          disabled = true;
+          this.logger?.warn?.('Persistent Telegram streaming unavailable; using final reply only', {
+            chatId: ctx.chat?.id,
+            error: error.message
+          });
+          return;
+        }
+      } else if (!(await edit(cleaned))) {
+        disabled = true;
+        return;
+      }
+
+      lastText = cleaned;
+      lastUpdateAt = Date.now();
+    };
+
+    const complete = async (text, extra = {}) => {
+      if (!messageId || stopped) return null;
+      const locale = typeof this.getLocale === 'function' ? this.getLocale(ctx) : 'zh';
+      const fallbackText = typeof this.t === 'function' ? this.t(locale, 'noReply') : 'No reply.';
+      const chunks = splitMessage(cleanBotOutput(text) || fallbackText, this.config.maxOutputChars);
+      const firstChunk = chunks.shift() || fallbackText;
+      const updated = await edit(firstChunk, extra?.reply_markup || null);
+      if (!updated) {
+        // Never add a second full answer beside a stale partial stream. If the
+        // partial can be removed safely, a fresh final reply is allowed.
+        try {
+          await ctx.telegram.deleteMessage(ctx.chat.id, messageId);
+          messageId = null;
+        } catch (error) {
+          this.logger?.warn?.('Final streaming edit failed; retained the single partial message', {
+            chatId: ctx.chat?.id,
+            messageId,
+            error: error.message
+          });
+          completed = true;
+          return { lastMessageId: messageId, partial: true };
+        }
+        const replacement = await replyWithReplyFallback(ctx, firstChunk, {
+          ...extra,
+          reply_parameters: buildTelegramReplyParameters(ctx)
+        });
+        messageId = replacement?.message_id || null;
+      }
+
+      let lastMessageId = messageId;
+      for (const chunk of chunks) {
+        const sent = await replyWithReplyFallback(ctx, chunk, withoutReplyParameters(extra));
+        lastMessageId = sent?.message_id || lastMessageId;
+      }
+      lastText = firstChunk;
+      completed = true;
+      return { lastMessageId };
+    };
+
+    const finalize = async () => {
+      this.activeDrafts?.delete?.(key);
+      if (!messageId || completed || stopped) return;
+      try {
+        await ctx.telegram.editMessageReplyMarkup(ctx.chat.id, messageId, undefined, { inline_keyboard: [] });
+      } catch {
+        // The answer itself is already visible; stale control cleanup is best-effort.
+      }
+    };
+
+    const discard = async () => {
+      this.activeDrafts?.delete?.(key);
+      if (!messageId) return;
+      try {
+        await ctx.telegram.deleteMessage(ctx.chat.id, messageId);
+        messageId = null;
+      } catch {
+        await finalize();
+      }
+    };
+
+    return {
+      onTextDelta,
+      signal: controller.signal,
+      token,
+      persistent: true,
+      complete,
+      finalize,
+      discard,
+      get sent() {
+        return Boolean(messageId);
+      },
+      get stopped() {
+        return stopped;
+      },
+      get lastText() {
+        return lastText;
+      }
+    };
+  }
+
+  createNativeAssistantDraftStreamer(ctx) {
+
     this.richDraftSequence = ((Number(this.richDraftSequence) || 0) + 1) % 100000;
     const draftId = ((Date.now() % 2_000_000_000) + this.richDraftSequence) || 1;
     const intervalMs = Math.max(250, Number(this.config.streamingEditIntervalMs) || 350);
@@ -10008,6 +10237,30 @@ export class TelegramAIBot {
     };
   }
 
+  async handlePersistentStreamStop(ctx) {
+    const token = String(ctx.match?.[1] || ctx.callbackQuery?.data || '').replace(/^stream_stop:/, '');
+    const key = `stream:${token}`;
+    const stream = this.activeDrafts?.get?.(key);
+    const sameUser = String(ctx.from?.id || '') === String(stream?.userId || '');
+    const sameChat = String(ctx.chat?.id || '') === String(stream?.chatId || '');
+    if (!stream || !sameUser || !sameChat) {
+      await ctx.answerCbQuery?.('This generation is no longer active.');
+      return false;
+    }
+
+    stream.stop?.();
+    stream.controller?.abort?.(new DOMException('Telegram user stopped generation', 'AbortError'));
+    this.activeDrafts.delete(key);
+    if (stream.messageId && stream.lastText) {
+      const stoppedText = `${stream.lastText}\n\n${this.getLocale(ctx).startsWith('en') ? '⏹ Generation stopped.' : '⏹ 已停止生成。'}`;
+      await this.tryEditStreamingMessage(ctx, stream.messageId, stoppedText, {
+        reply_markup: { inline_keyboard: [] }
+      });
+    }
+    await ctx.answerCbQuery?.(this.getLocale(ctx).startsWith('en') ? 'Stopped' : '已停止');
+    return true;
+  }
+
   async handleStoppedMessageGeneration(ctx) {
     const update = ctx.update?.stopped_message_generation || ctx.stoppedMessageGeneration || {};
     const key = `${update.chat?.id || ctx.chat?.id || ''}:${update.draft_id || ''}`;
@@ -10033,6 +10286,10 @@ export class TelegramAIBot {
   }
 
   async sendAssistantReply(ctx, text, extra = {}, options = {}) {
+    if (options.streamer?.persistent && options.streamer.sent) {
+      const streamedReply = await options.streamer.complete(text, extra);
+      if (streamedReply) return streamedReply;
+    }
     const locale = typeof this.getLocale === 'function' ? this.getLocale(ctx) : 'zh';
     const fallbackText = typeof this.t === 'function' ? this.t(locale, 'noReply') : 'No reply.';
     const richReply = typeof this.trySendRichAssistantReply === 'function'
@@ -10042,10 +10299,10 @@ export class TelegramAIBot {
     const chunks = splitMessage(cleanBotOutput(text) || fallbackText, this.config.maxOutputChars);
     let lastMessageId = null;
     for (const chunk of chunks) {
-      if (!this.config.enableStreamingReplies || options.skipSimulatedStreaming) {
-        const sent = await ctx.reply(chunk, {
+      if (!this.config.enableStreamingReplies || options.streamer || options.skipSimulatedStreaming) {
+        const sent = await replyWithReplyFallback(ctx, chunk, {
           ...extra,
-          reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined
+          reply_parameters: buildTelegramReplyParameters(ctx)
         });
         lastMessageId = sent?.message_id || lastMessageId;
         continue;
@@ -10053,17 +10310,17 @@ export class TelegramAIBot {
 
       const frames = createStreamingFrames(chunk, this.config.streamingMinLength);
       if (frames.length <= 1) {
-        const sent = await ctx.reply(chunk, {
+        const sent = await replyWithReplyFallback(ctx, chunk, {
           ...extra,
-          reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined
+          reply_parameters: buildTelegramReplyParameters(ctx)
         });
         lastMessageId = sent?.message_id || lastMessageId;
         continue;
       }
 
-      const sent = await ctx.reply(this.t(this.getLocale(ctx), 'streamingPlaceholder'), {
+      const sent = await replyWithReplyFallback(ctx, this.t(this.getLocale(ctx), 'streamingPlaceholder'), {
         ...extra,
-        reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined
+        reply_parameters: buildTelegramReplyParameters(ctx)
       });
       lastMessageId = sent?.message_id || lastMessageId;
 
@@ -10085,9 +10342,17 @@ export class TelegramAIBot {
       }
 
       if (streamFailed && lastFrame !== chunk) {
-        const fallback = await ctx.reply(chunk, {
+        let removed = false;
+        try {
+          await ctx.telegram.deleteMessage(ctx.chat.id, sent.message_id);
+          removed = true;
+        } catch {
+          // Keep the single partial message rather than duplicating the answer.
+        }
+        if (!removed) continue;
+        const fallback = await replyWithReplyFallback(ctx, chunk, {
           ...extra,
-          reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined
+          reply_parameters: buildTelegramReplyParameters(ctx)
         });
         lastMessageId = fallback?.message_id || lastMessageId;
       }
@@ -10111,10 +10376,10 @@ export class TelegramAIBot {
       : markdown;
 
     try {
-      const sent = await ctx.telegram.callApi('sendRichMessage', {
+      const sent = await callApiWithReplyFallback(ctx.telegram, 'sendRichMessage', {
         chat_id: ctx.chat.id,
         rich_message: { markdown: deliveryMarkdown },
-        reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined,
+        reply_parameters: buildTelegramReplyParameters(ctx),
         reply_markup: extra?.reply_markup
       });
       this.rememberRichReplyContext?.(ctx, sent?.message_id, deliveryMarkdown);
@@ -10132,10 +10397,10 @@ export class TelegramAIBot {
       if (!useVerticalTableLayout && hasSpecialRichBlock && /(?:^|\n)\|[^\n]+\|\s*\n\|(?:\s*:?-+:?\s*\|)+/m.test(markdown)) {
         const verticalMarkdown = convertMarkdownTables(markdown, { rich: true });
         try {
-          const sent = await ctx.telegram.callApi('sendRichMessage', {
+          const sent = await callApiWithReplyFallback(ctx.telegram, 'sendRichMessage', {
             chat_id: ctx.chat.id,
             rich_message: { markdown: verticalMarkdown },
-            reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined,
+            reply_parameters: buildTelegramReplyParameters(ctx),
             reply_markup: extra?.reply_markup
           });
           this.rememberRichReplyContext?.(ctx, sent?.message_id, verticalMarkdown);
@@ -10157,12 +10422,14 @@ export class TelegramAIBot {
       await ctx.telegram.editMessageText(ctx.chat.id, messageId, undefined, text, extra);
       return true;
     } catch (error) {
+      if (/message is not modified/i.test(String(error?.message || error?.response?.description || ''))) return true;
       this.logger.warn('Streaming edit failed, retrying once', { chatId: ctx.chat?.id, error: error.message });
       await delay(this.config.streamingEditIntervalMs * 2);
       try {
         await ctx.telegram.editMessageText(ctx.chat.id, messageId, undefined, text, extra);
         return true;
       } catch (retryError) {
+        if (/message is not modified/i.test(String(retryError?.message || retryError?.response?.description || ''))) return true;
         this.logger.warn('Streaming edit fallback failed', { chatId: ctx.chat?.id, error: retryError.message });
         return false;
       }

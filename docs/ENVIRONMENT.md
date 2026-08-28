@@ -153,12 +153,13 @@ Enable Telegram-native rich rendering for long structured private-chat replies w
 ENABLE_RICH_MESSAGES=true
 RICH_MESSAGE_MIN_CHARS=600
 ENABLE_STREAMING_REPLIES=true
+ENABLE_NATIVE_DRAFT_STREAMING=false
 STREAMING_EDIT_INTERVAL_MS=350
 ```
 
 News results in private chat and inline mode use Telegram Rich Messages even when the digest is short. Other short replies, group replies, and unsupported/failed rich-message requests automatically use the existing regular message path.
 
-With streaming replies enabled, Gemini and OpenAI-compatible providers request an SSE response. Private chats stream Markdown fragments through Telegram `sendRichMessageDraft` when rich messages are enabled, preserving headings, lists, emphasis, code, formulas, and tables while the answer is generated. If rich drafts are rejected or unavailable, the same reply automatically falls back to `sendMessageDraft`; groups use regular message edits because Telegram's native draft methods target private chats. Draft updates are rate-limited by `STREAMING_EDIT_INTERVAL_MS`. The completed output then selects the persistent format: ordinary prose stays a regular message, while meaningful Markdown structure can use `sendRichMessage`. Wide tables are converted to vertical Rich Markdown before delivery; compact rejected tables are retried vertically, and the final plain-text fallback also converts them into readable labeled fields. Verified search-result numbers become native Rich Message reference definitions, so Telegram can show a compact chain marker and a source sheet instead of repeating a long link list. Unmapped results remain a visible fallback list rather than being falsely attached to a sentence. Unsupported streaming requests automatically fall back to a regular complete reply.
+With streaming replies enabled, Gemini and OpenAI-compatible providers request an SSE response. Private chats create one persistent Telegram message and edit that same message as fragments arrive; completion edits the same `message_id`, so users do not briefly see both a temporary draft and a second final reply. A per-request stop button aborts only that user's matching model request. Updates are rate-limited by `STREAMING_EDIT_INTERVAL_MS`. Set `ENABLE_NATIVE_DRAFT_STREAMING=true` only if Telegram's temporary `sendRichMessageDraft` / `sendMessageDraft` lifecycle is explicitly preferred; native drafts disappear after completion and the final answer is a separate persistent message. Group replies and providers without streaming support use a regular complete reply. Structured non-streamed output can still use Rich Messages, with safe plain-text fallback when Telegram rejects rich formatting or reply parameters.
 
 请把 AI Hub 控制台提供的完整 API Base URL 填入 `AI_BASE_URL`。固定使用 `openai-compatible` 时，可以保持各 `ROUTER_*_PROVIDER` 为空，只填写该 Hub 实际支持的任务模型 ID；所有这些模型会共用同一个 `AI_API_KEY` 和 `AI_BASE_URL`。如果默认 Provider 为 `auto`，则每组任务配置都应显式写 `ROUTER_*_PROVIDER=openai-compatible`。
 

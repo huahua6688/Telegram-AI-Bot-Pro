@@ -535,6 +535,10 @@ export function loadConfig() {
     groupTriggerKeyword: process.env.GROUP_TRIGGER_KEYWORD || 'ai',
     aiMaxToolSteps: parseInteger(process.env.AI_MAX_TOOL_STEPS, 3),
     enableStreamingReplies: parseBoolean(process.env.ENABLE_STREAMING_REPLIES, true),
+    // Telegram native drafts are temporary previews. Keep them opt-in so the
+    // ordinary chat path can stream by editing one persistent message instead
+    // of briefly showing both a draft and the final reply.
+    enableNativeDraftStreaming: parseBoolean(process.env.ENABLE_NATIVE_DRAFT_STREAMING, false),
     enableRichMessages: parseBoolean(process.env.ENABLE_RICH_MESSAGES, true),
     richMessageMinChars: Math.max(200, parseInteger(process.env.RICH_MESSAGE_MIN_CHARS, 600)),
     streamingEditIntervalMs: parseInteger(process.env.STREAMING_EDIT_INTERVAL_MS, 350),

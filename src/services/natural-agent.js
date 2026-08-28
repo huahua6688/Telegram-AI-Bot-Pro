@@ -1,4 +1,4 @@
-import { splitMessage, truncateText } from '../utils/text.js';
+import { splitMessage, stripHtml, truncateText } from '../utils/text.js';
 import { createTelegramSessionId as createSessionId, getTelegramReplyContext } from '../utils/telegram.js';
 import { personaPresets } from '../config.js';
 
@@ -59,11 +59,18 @@ async function replyHtml(ctx, text, maxLength = 3600, extra = undefined) {
   const chunks = splitMessage(String(text || '').trim(), maxLength);
 
   for (const chunk of chunks) {
-    await ctx.reply(chunk, {
-      ...(extra || {}),
-      parse_mode: 'HTML',
-      link_preview_options: { is_disabled: true }
-    });
+    try {
+      await ctx.reply(chunk, {
+        ...(extra || {}),
+        parse_mode: 'HTML',
+        link_preview_options: { is_disabled: true }
+      });
+    } catch (error) {
+      if (!/parse entities|can't parse|unsupported start tag|entity/i.test(String(error?.message || error?.response?.description || ''))) {
+        throw error;
+      }
+      await ctx.reply(cleanPlainText(stripHtml(chunk)), extra);
+    }
   }
 }
 

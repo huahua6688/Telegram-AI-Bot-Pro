@@ -5,10 +5,13 @@ import { decorateTelegramReplyText, stripTelegramBotMentionsFromMessage } from '
 import { HelpTelegramAIBot, helpTelegramBotInternals } from './help-telegram-bot.js';
 import { naturalAgentInternals } from './natural-agent.js';
 import {
+  buildTelegramReplyParameters,
+  callApiWithReplyFallback,
   cleanBotOutput,
   createSystemPrompt,
   formatNewsRichMarkdown,
-  isIncompleteTranslationPrompt
+  isIncompleteTranslationPrompt,
+  replyWithReplyFallback
 } from './telegram-bot.js';
 
 const PLATFORM_MODE_NAMES = Object.freeze({
@@ -2157,11 +2160,11 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
         accessAlreadyChecked: true,
         quotaAlreadyReserved
       });
-      await this.bot.telegram.callApi('sendMessage', {
+      await callApiWithReplyFallback(this.bot.telegram, 'sendMessage', {
         business_connection_id: connectionId,
         chat_id: message.chat.id,
         text: answer,
-        reply_parameters: message.message_id ? { message_id: message.message_id } : undefined
+        reply_parameters: buildTelegramReplyParameters({ message })
       });
       await this.commitUsageReservation(quotaReservation);
     } catch (error) {
@@ -2208,8 +2211,8 @@ export class PlatformModesTelegramAIBot extends HelpTelegramAIBot {
         role: 'bot collaboration peer; produce one self-contained final response and do not ask the other bot to reply again',
         quotaReservation
       });
-      const sent = await ctx.reply(answer, {
-        reply_parameters: ctx.message?.message_id ? { message_id: ctx.message.message_id } : undefined
+      const sent = await replyWithReplyFallback(ctx, answer, {
+        reply_parameters: buildTelegramReplyParameters(ctx)
       });
       await this.commitUsageReservation(quotaReservation);
       addBounded(this.terminalBotReplyIds, `${ctx.chat?.id || ''}:${sent?.message_id || ''}`);
