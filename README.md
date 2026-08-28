@@ -2,13 +2,25 @@
 
 中文 | [English](#english)
 
+这是一个以 Telegram 为主要控制台的多 Provider AI Bot，包含用户独立模型/状态、流式与 Rich Message、图片/文档/语音、搜索工具、Stars 计费、独立客服 Bot、Mini App、GitHub App 和可选的独立 Agent Worker。
+
+- [项目功能、架构、数据流、安全边界与实现状态](docs/PROJECT_OVERVIEW.md)
+- [全部环境变量、默认值、必填条件与升级说明](docs/ENVIRONMENT.md)
+- [Zeabur 部署指南](docs/ZEABUR.md)
+- [Telegram Stars 与付费模型](docs/STARS_PAYMENTS.md)
+- [Agent Worker 与 GitHub App](docs/PAID_AGENT_GITHUB.md)
+
+当前明确未完整交付的外部验证：Telegram Bot API 10.3 手机实机、真实付费 Provider、真实 GitHub OAuth 与 Docker Worker 生产端到端。视频模型处理链尚未实现，视频额度不会出售。
+
 ## 一键复制 Zeabur 环境变量
 
-先把下面整段复制到 Zeabur 的 Environment Variables。最少只需要改 3 个值：
+新部署优先直接复制 `.env.zeabur.example` 到 Zeabur Environment Variables。至少需要完成以下配置：
 
 - `BOT_TOKEN`: 从 Telegram [BotFather](https://t.me/BotFather) 获取
 - `ADMIN_USER_IDS`: 给机器人发送 `/whoami` 后复制你的数字 ID
-- `GEMINI_API_KEY`: 从 [Google AI Studio](https://aistudio.google.com/app/apikey) 获取
+- 至少一个可用 AI Provider 的 Key、Base URL（需要时）和模型 ID
+- `CHAT_ENCRYPTION_KEY`: 新部署生成一次；已有部署必须保留原值
+- `LOG_PRIVACY_KEY`: 生成一个与聊天密钥不同的新值
 
 `OPENROUTER_API_KEY` 推荐填写。OpenRouter 免费模型通常带 `:free` 后缀，当前可用模型会变化；下面模板先放当前模型 API 里能看到的免费模型。`GROQ_API_KEY` 可选；Groq 官方页面列的是 Developer Plan 限额和价格，不是 `:free` 模型名。没有额度的平台先留空，不要乱填 Key。
 
@@ -18,6 +30,7 @@
 
 ```env
 # Required
+NODE_ENV=production
 BOT_TOKEN=
 ADMIN_USER_IDS=
 
@@ -31,6 +44,8 @@ SUPPORT_BOT_TOKEN=
 SUPPORT_BOT_USERNAME=
 SUPPORT_CONTACT_URL=
 SUPPORT_ADMIN_IDS=
+SUPPORT_SUPER_ADMIN_IDS=
+SUPPORT_TICKET_AUTO_CLOSE_MINUTES=1440
 
 # Default AI behavior
 DEFAULT_AI_PROVIDER=auto
@@ -47,6 +62,12 @@ AI_PROVIDER_MAX_RETRIES=1
 AI_PROVIDER_RETRY_DELAY_MS=800
 AI_PROVIDER_COOLDOWN_MS=60000
 MODEL_LIST_CACHE_TTL_MS=3600000
+MODEL_DISCOVERY_ENABLED=true
+ENABLE_RICH_MESSAGES=true
+RICH_MESSAGE_MIN_CHARS=600
+ENABLE_STREAMING_REPLIES=true
+ENABLE_NATIVE_DRAFT_STREAMING=false
+STREAMING_EDIT_INTERVAL_MS=350
 MODEL_DISCOVERY_ENABLED=true
 ENABLE_RICH_MESSAGES=true
 RICH_MESSAGE_MIN_CHARS=600
@@ -135,7 +156,6 @@ ENABLE_TOOL_CALLS=true
 ENABLE_WEB_SEARCH=true
 ENABLE_GEMINI_GOOGLE_SEARCH=true
 ENABLE_URL_FETCH=true
-ENABLE_STREAMING_REPLIES=true
 TELEGRAM_FILE_MAX_BYTES=10485760
 TELEGRAM_FILE_DOWNLOAD_TIMEOUT_MS=20000
 # 稳定实时搜索建议配置；无 Key 的搜索回退只提供尽力而为的结果
@@ -153,14 +173,14 @@ STARS_FREE_IMAGE_DAILY=1
 STARS_FREE_TTS_DAILY=2
 STARS_FREE_LIVE_VOICE_DAILY=2
 STARS_FREE_VIDEO_DAILY=0
-STARS_PRODUCTS_JSON=[{"id":"starter","title":"入门额度包","titleEn":"Starter credits","description":"适合轻量聊天、图片和语音使用","descriptionEn":"Starter credits for chat, images and voice","price":50,"credits":{"chat":200,"vision":20,"image_generation":5,"tts":20,"live_voice":10,"video":0}},{"id":"standard","title":"标准额度包","titleEn":"Standard credits","description":"适合日常聊天、识图、画图和语音","descriptionEn":"Balanced credits for regular AI use","price":150,"credits":{"chat":800,"vision":80,"image_generation":20,"tts":80,"live_voice":40,"video":0}},{"id":"pro","title":"高级额度包","titleEn":"Pro credits","description":"适合高频使用全部已开放能力","descriptionEn":"Larger credits for frequent AI use","price":500,"credits":{"chat":3000,"vision":300,"image_generation":75,"tts":300,"live_voice":150,"video":0}}]
+STARS_PRODUCTS_JSON=[{"id":"starter","title":"入门额度包","titleEn":"Starter credits","description":"包含约2次高成本AI Hub请求及免费平台扩展额度","descriptionEn":"Includes about 2 high-cost AI Hub requests plus free-provider credits","price":300,"credits":{"chat":30,"vision":20,"image_generation":5,"tts":20,"live_voice":10,"video":0}},{"id":"standard","title":"标准额度包","titleEn":"Standard credits","description":"包含约6次高成本AI Hub请求及日常功能额度","descriptionEn":"Includes about 6 high-cost AI Hub requests plus regular feature credits","price":800,"credits":{"chat":90,"vision":80,"image_generation":20,"tts":80,"live_voice":40,"video":0}},{"id":"pro","title":"高级额度包","titleEn":"Pro credits","description":"包含约16次高成本AI Hub请求及高频功能额度","descriptionEn":"Includes about 16 high-cost AI Hub requests plus high-volume feature credits","price":2000,"credits":{"chat":240,"vision":300,"image_generation":75,"tts":300,"live_voice":150,"video":0}}]
 
 # Storage / Zeabur
 DATABASE_FILE=/data/bot-data.db
 DATA_FILE=/data/bot-data.json
 CHAT_ENCRYPTION_REQUIRED=true
-CHAT_ENCRYPTION_KEY=使用 openssl rand -base64 48 生成
-LOG_PRIVACY_KEY=再生成一个不同的随机值
+CHAT_ENCRYPTION_KEY=
+LOG_PRIVACY_KEY=
 CONVERSATION_RETENTION_DAYS=30
 PRIVACY_SWEEP_INTERVAL_HOURS=24
 MINI_APP_SHOW_USER_MESSAGES=false
@@ -197,12 +217,13 @@ AI_FALLBACK_MODELS=
 | --- | --- | --- |
 | `BOT_TOKEN` | 必填 | 填 BotFather 给你的 Telegram Bot Token |
 | `ADMIN_USER_IDS` | 建议填 | 给机器人发 `/whoami`，复制数字 ID；多个管理员用英文逗号分隔 |
-| `GEMINI_API_KEY` | 必填 | 填 Google AI Studio 的 API Key |
+| `GEMINI_API_KEY` | 按需 | 选择 Gemini 时填写；使用 AI Hub 等其他平台时可留空 |
 | `OPENROUTER_API_KEY` | 强烈建议 | 填 OpenRouter Key，用来走 `openrouter/free` 动态免费路由 |
 | `GROQ_API_KEY` | 可选 | 有 Groq Key 就填，没有就留空 |
 | `GEMINI_LIVE_API_KEY` | 可选 | 暂时不用实时语音就留空 |
-| `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`, `AI_FALLBACK_MODELS` | 留空 | 这是旧配置兼容位，留空可以避免干扰 `DEFAULT_AI_PROVIDER=auto` |
-| `CHAT_ENCRYPTION_KEY`, `LOG_PRIVACY_KEY` | 生产必填 | 分别运行 `openssl rand -base64 48` 生成，两个值不能相同 |
+| `AI_PROVIDER` | 留空 | 旧默认 Provider 兼容位；新部署使用 `DEFAULT_AI_PROVIDER` |
+| `AI_API_KEY`, `AI_BASE_URL`, `AI_MODEL`, `AI_FALLBACK_MODELS` | 按需 | Zeabur AI Hub 或其他 `openai-compatible` 网关的正式配置 |
+| `CHAT_ENCRYPTION_KEY`, `LOG_PRIVACY_KEY` | 生产必填 | 新部署分别生成且不能相同；已有 `CHAT_ENCRYPTION_KEY` 绝对不要更换 |
 | `ADMIN_API_TOKEN` | 通常留空 | 只有 `ADMIN_API_ENABLED=true` 时才需要填；开启时使用至少 32 位随机值 |
 | `IMAGE_MODEL` | 先留空 | 没有图片生成额度就不要填 |
 | Claude / OpenAI / DeepSeek / Qwen / Grok / GLM / Doubao 等 Key | 先不要填 | 没确认账号额度前都留空，否则后台测试会出现一堆失败 |
@@ -354,11 +375,13 @@ Inline Query 会在用户输入变化时不断产生 Telegram 更新。程序默
 
 ## One-Copy Zeabur Environment Variables
 
-Copy this whole block into Zeabur Environment Variables. At minimum, fill:
+For new deployments, copy `.env.zeabur.example` into Zeabur Environment Variables. At minimum, configure:
 
 - `BOT_TOKEN`: from Telegram [BotFather](https://t.me/BotFather)
 - `ADMIN_USER_IDS`: send `/whoami` to the bot and copy your numeric ID
-- `GEMINI_API_KEY`: from [Google AI Studio](https://aistudio.google.com/app/apikey)
+- one usable AI provider key, base URL when required, and model ID
+- `CHAT_ENCRYPTION_KEY`: generate once for a new database; preserve an existing value
+- `LOG_PRIVACY_KEY`: generate a separate value
 
 `OPENROUTER_API_KEY` is recommended. OpenRouter free models usually have a `:free` suffix, and availability changes over time. The template below uses free model IDs currently visible in the OpenRouter models API. `GROQ_API_KEY` is optional. Leave other provider keys blank unless you know your account has quota.
 
@@ -368,6 +391,7 @@ On the GitHub repository homepage, the code block below has a built-in **Copy** 
 
 ```env
 # Required
+NODE_ENV=production
 BOT_TOKEN=
 ADMIN_USER_IDS=
 
@@ -381,6 +405,8 @@ SUPPORT_BOT_TOKEN=
 SUPPORT_BOT_USERNAME=
 SUPPORT_CONTACT_URL=
 SUPPORT_ADMIN_IDS=
+SUPPORT_SUPER_ADMIN_IDS=
+SUPPORT_TICKET_AUTO_CLOSE_MINUTES=1440
 
 # Default AI behavior
 DEFAULT_AI_PROVIDER=auto
@@ -480,7 +506,6 @@ ENABLE_WEB_SEARCH=true
 ENABLE_GEMINI_GOOGLE_SEARCH=true
 ENABLE_URL_FETCH=true
 TOOL_MAX_CONCURRENT_CALLS=8
-ENABLE_STREAMING_REPLIES=true
 # Recommended for stable search; keyless fallback is best-effort only
 BRAVE_SEARCH_API_KEY=
 
@@ -496,14 +521,14 @@ STARS_FREE_IMAGE_DAILY=1
 STARS_FREE_TTS_DAILY=2
 STARS_FREE_LIVE_VOICE_DAILY=2
 STARS_FREE_VIDEO_DAILY=0
-STARS_PRODUCTS_JSON=[{"id":"starter","title":"入门额度包","titleEn":"Starter credits","description":"适合轻量聊天、图片和语音使用","descriptionEn":"Starter credits for chat, images and voice","price":50,"credits":{"chat":200,"vision":20,"image_generation":5,"tts":20,"live_voice":10,"video":0}},{"id":"standard","title":"标准额度包","titleEn":"Standard credits","description":"适合日常聊天、识图、画图和语音","descriptionEn":"Balanced credits for regular AI use","price":150,"credits":{"chat":800,"vision":80,"image_generation":20,"tts":80,"live_voice":40,"video":0}},{"id":"pro","title":"高级额度包","titleEn":"Pro credits","description":"适合高频使用全部已开放能力","descriptionEn":"Larger credits for frequent AI use","price":500,"credits":{"chat":3000,"vision":300,"image_generation":75,"tts":300,"live_voice":150,"video":0}}]
+STARS_PRODUCTS_JSON=[{"id":"starter","title":"入门额度包","titleEn":"Starter credits","description":"包含约2次高成本AI Hub请求及免费平台扩展额度","descriptionEn":"Includes about 2 high-cost AI Hub requests plus free-provider credits","price":300,"credits":{"chat":30,"vision":20,"image_generation":5,"tts":20,"live_voice":10,"video":0}},{"id":"standard","title":"标准额度包","titleEn":"Standard credits","description":"包含约6次高成本AI Hub请求及日常功能额度","descriptionEn":"Includes about 6 high-cost AI Hub requests plus regular feature credits","price":800,"credits":{"chat":90,"vision":80,"image_generation":20,"tts":80,"live_voice":40,"video":0}},{"id":"pro","title":"高级额度包","titleEn":"Pro credits","description":"包含约16次高成本AI Hub请求及高频功能额度","descriptionEn":"Includes about 16 high-cost AI Hub requests plus high-volume feature credits","price":2000,"credits":{"chat":240,"vision":300,"image_generation":75,"tts":300,"live_voice":150,"video":0}}]
 
 # Storage / Zeabur
 DATABASE_FILE=/data/bot-data.db
 DATA_FILE=/data/bot-data.json
 CHAT_ENCRYPTION_REQUIRED=true
-CHAT_ENCRYPTION_KEY=generate with openssl rand -base64 48
-LOG_PRIVACY_KEY=generate a different random value
+CHAT_ENCRYPTION_KEY=
+LOG_PRIVACY_KEY=
 PORT=8080
 HEALTH_PORT=8080
 
@@ -533,12 +558,13 @@ AI_FALLBACK_MODELS=
 | --- | --- | --- |
 | `BOT_TOKEN` | Required | Your Telegram BotFather token |
 | `ADMIN_USER_IDS` | Recommended | Send `/whoami` to the bot and copy the numeric ID; separate multiple IDs with commas |
-| `GEMINI_API_KEY` | Required | Your Google AI Studio API key |
+| `GEMINI_API_KEY` | As needed | Required only when Gemini is configured |
 | `OPENROUTER_API_KEY` | Strongly recommended | Your OpenRouter key for the `openrouter/free` dynamic free router |
 | `GROQ_API_KEY` | Optional | Fill it only if you have a Groq key |
 | `GEMINI_LIVE_API_KEY` | Optional | Leave blank unless you use live audio |
-| `AI_PROVIDER`, `AI_API_KEY`, `AI_MODEL`, `AI_FALLBACK_MODELS` | Leave blank | Legacy compatibility fields; blank avoids overriding `DEFAULT_AI_PROVIDER=auto` |
-| `CHAT_ENCRYPTION_KEY`, `LOG_PRIVACY_KEY` | Required in production | Generate two different values with `openssl rand -base64 48` |
+| `AI_PROVIDER` | Leave blank | Legacy default-provider alias; use `DEFAULT_AI_PROVIDER` |
+| `AI_API_KEY`, `AI_BASE_URL`, `AI_MODEL`, `AI_FALLBACK_MODELS` | As needed | Active settings for Zeabur AI Hub or another OpenAI-compatible gateway |
+| `CHAT_ENCRYPTION_KEY`, `LOG_PRIVACY_KEY` | Required in production | Generate different values for a new deployment; never replace an existing chat-encryption key |
 | `ADMIN_API_TOKEN` | Usually blank | When enabled, use a random value of at least 32 characters |
 | `IMAGE_MODEL` | Leave blank first | Fill only when you have image generation quota |
 | Claude / OpenAI / DeepSeek / Qwen / Grok / GLM / Doubao keys | Leave blank first | Configure only after confirming account quota |
@@ -595,12 +621,19 @@ Gemini Live remains official-only: use Google’s Gemini Live API with a separat
 - Never paste API keys into Telegram chats
 - Keep unused paid providers blank
 - Verify current model IDs in provider dashboards before deployment
+- Keep an existing `CHAT_ENCRYPTION_KEY`; never rotate it without a controlled data migration
+- Use separate values for `CHAT_ENCRYPTION_KEY`, `LOG_PRIVACY_KEY`, and `GITHUB_TOKEN_ENCRYPTION_KEY`
+- Keep `ADMIN_API_ENABLED=false` unless a protected external administration service is required
+- Run the Agent Worker on a dedicated Docker host, never inside the main Bot container
 
 
 ## 客服工单隐私与协作
 
+- 客服 Bot 只接受 private chat；群组、超级群组和频道中的普通消息、媒体、提及和命令全部静默忽略。
 - 新工单先向全部客服发送不含用户身份和正文的摘要。
 - 接单后只有当前负责客服收到完整历史消息和后续消息。
+- 私聊普通消息通过 `copyMessage` 转发，支持文字、图片、语音、文件、视频、圆形视频、音频、GIF、贴纸、位置、地点、联系人、投票和骰子等可安全复制类型。
+- 付款、invoice、paid media、giveaway、Bot 消息和系统事件不进入工单。
 - 支持重复转交、退回待接单和关闭；非负责客服的回复不会发给用户。
 - 工单状态只保存在单实例进程内存中，不保存正文或附件；重新部署后旧工单失效。
 - 客服消息启用 Telegram 内容保护，但无法阻止已获授权客服截图。

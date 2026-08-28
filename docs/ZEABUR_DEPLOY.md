@@ -1,139 +1,133 @@
-# Telegram-AI-Bot-Pro Zeabur 部署说明
+# Telegram-AI-Bot-Pro：Zeabur 操作步骤
 
-## 部署方式
+本页只保留实际部署顺序。配置原因和全部变量见 [Zeabur 部署指南](ZEABUR.md) 与 [环境变量完整说明](ENVIRONMENT.md)。
 
-Zeabur 选择 GitHub 部署：
+## 1. 创建服务
 
-- 仓库：huahua6688/Telegram-AI-Bot-Pro
-- 构建方式：Dockerfile
-- 端口类型：HTTP
-- 端口：8080
+1. Zeabur 新建 Project，选择 GitHub Repository。
+2. 选择 `huahua6688/Telegram-AI-Bot-Pro` 和准备部署的分支。
+3. 构建使用根目录 `Dockerfile`。
+4. 添加 HTTP 端口 `8080`。
 
-## Volume
+PR 分支测试完成前不要覆盖生产 `main`。
 
-如果使用 SQLite，建议创建 Volume：
+## 2. 创建数据卷
 
-- 卷名称：telegram-bot-data
-- 挂载路径：/data
+创建 Volume：
 
-对应环境变量：
+```text
+挂载路径：/data
+```
+
+设置：
+
+```env
+DATABASE_FILE=/data/bot-data.db
+DATA_FILE=/data/bot-data.json
+```
+
+## 3. 导入环境变量
+
+从 `.env.zeabur.example` 复制，然后至少填写：
+
+```env
+NODE_ENV=production
+BOT_TOKEN=
+ADMIN_USER_IDS=
+
+# 选择一个真实可用 Provider；以下只是 Gemini 示例
+DEFAULT_AI_PROVIDER=gemini
+DEFAULT_AI_MODEL=gemini-2.5-flash
+GEMINI_API_KEY=
 
 DATABASE_FILE=/data/bot-data.db
 DATA_FILE=/data/bot-data.json
+CHAT_ENCRYPTION_REQUIRED=true
+CHAT_ENCRYPTION_KEY=
+LOG_PRIVACY_KEY=
 
-## 必填环境变量
-
-BOT_TOKEN=
-DEFAULT_AI_PROVIDER=auto
-DEFAULT_AI_MODEL=gemini-2.5-flash
-ENABLE_PROVIDER_FALLBACK=true
-AI_PROVIDER_FALLBACK_ORDER=gemini,groq,openrouter
-# 首次失败后的额外重试次数；1 表示每个模型最多尝试 2 次
-AI_PROVIDER_MAX_RETRIES=1
-ENABLE_GEMINI_GOOGLE_SEARCH=true
-GEMINI_API_KEY=
-GEMINI_MODEL=gemini-2.5-flash
-GEMINI_FALLBACK_MODELS=gemini-2.5-flash-lite
-DATABASE_FILE=/data/bot-data.db
 PORT=8080
 HEALTH_PORT=8080
-ENABLE_STARTUP_DIAGNOSTICS=true
-SHOW_VERSION_INFO=true
-HEALTH_CHECK_ENABLED=true
-
-真正跨平台回退还必须填写独立的 `GROQ_API_KEY` 或 `OPENROUTER_API_KEY`。若使用 OpenRouter 免费动态路由，设置 `OPENROUTER_MODEL=openrouter/free`。稳定实时搜索建议配置 `BRAVE_SEARCH_API_KEY`；免密搜索只作为尽力而为的回退。
-
-## 启动诊断与客服 Bot
-
-建议保持启动诊断和平台健康检查开启：
-
-```env
-ENABLE_STARTUP_DIAGNOSTICS=true
-SHOW_VERSION_INFO=true
-HEALTH_CHECK_ENABLED=true
+ENABLE_NATIVE_DRAFT_STREAMING=false
+ADMIN_API_ENABLED=false
+AGENT_ENABLED=false
 ```
 
-诊断失败时，Runtime Logs 会显示 `MISSING_TELEGRAM_BOT_TOKEN`、`MISSING_AI_PROVIDER_CONFIG`、`INVALID_PORT`、`DATABASE_PATH_NOT_FOUND` 或 `GEMINI_LIVE_CONFIG_MISSING` 等稳定错误码。日志中的 Token / Key 只显示前 4 位和后 4 位。
+已有 `CHAT_ENCRYPTION_KEY` 时保留原值，只生成新的、不同的 `LOG_PRIVACY_KEY`。新随机值可在任意 VPS 执行：
 
-如需独立客服 Bot，先在 BotFather 新建第二个 Bot，再配置：
+```bash
+openssl rand -base64 48
+```
+
+## 4. 选择 AI Hub 时替换 Provider 配置
+
+```env
+DEFAULT_AI_PROVIDER=openai-compatible
+AI_API_KEY=
+AI_BASE_URL=控制台提供的完整地址
+AI_MODEL=控制台提供的模型ID
+MODEL_DISCOVERY_ENABLED=true
+```
+
+不要同时把旧 `AI_PROVIDER` 设置成另一个平台。新部署让 `AI_PROVIDER` 留空。
+
+## 5. 配置可选模块
+
+### 客服 Bot
 
 ```env
 SUPPORT_ENABLED=true
 SUPPORT_BOT_TOKEN=
 SUPPORT_BOT_USERNAME=
-SUPPORT_CONTACT_URL=
 SUPPORT_ADMIN_IDS=
 ```
 
-`SUPPORT_BOT_TOKEN` 不能复用主 `BOT_TOKEN`。`SUPPORT_ADMIN_IDS` 填可接收并回复工单的 Telegram 数字 ID；`SUPPORT_CONTACT_URL` 优先于用户名链接。只想跳转现有客服页面时，可以留空 `SUPPORT_BOT_TOKEN`。
+主/客服 Token 必须不同。客服 Bot 只允许私聊。
 
-每天的六类免费额度及三档 Stars 套餐请直接从 `.env.zeabur.example` 复制；主 Bot、Mini App 和管理员页会读取同一份 `STARS_FREE_*` / `STARS_PRODUCTS_JSON` 配置。
+### Stars 与付费模型
 
-## Smart AI Router
+复制 `.env.zeabur.example` 中完整的一行 `STARS_PRODUCTS_JSON`，并核对 `BILLING_*`。不要把昂贵模型加入免费模型规则。
 
-Smart 任务路由默认开启；Zeabur 模板中的任务模型值故意留空，部署者应从自己的 Provider 或 AI Hub 控制台复制：
+### Agent
 
-```env
-SMART_ROUTING_ENABLED=true
-SMART_ROUTING_DEBUG=false
-SMART_ROUTING_MIN_CONFIDENCE=0.55
-```
-
-支持 `GENERAL`、`TRANSLATION`、`CODE`、`REASONING`、`LONG_CONTEXT`、`DOCUMENT`、`VISION`、`OCR`、`TOOL`、`CHEAP` 十类 `ROUTER_<TASK>_PROVIDER` / `ROUTER_<TASK>_MODEL` 配置。设置 `SMART_ROUTING_ENABLED=false` 可完全跳过 Smart 任务路由；置信度会安全限制在 `0` 到 `1`。
-
-优先级是：用户明确模型 → 用户明确 Provider → 翻译、视觉/媒体等专用模式 → Smart 任务目标 → 默认 Provider / 模型 → 失败后原有备用链。Smart 路由不修改 `ENABLE_PROVIDER_FALLBACK`、同 Provider 备用模型或 `AI_PROVIDER_FALLBACK_ORDER`；专用模式需要时会绕过 Smart 路由。
-
-`ENABLE_AI_ROUTER`、`ROUTER_PROVIDER` 和 `ROUTER_MODEL` 是原有的 LLM intent router，与 Smart AI Router 不是同一开关或同一组变量，旧行为保持不变。
-
-当 `DEFAULT_AI_PROVIDER=auto` 时，每个非空 `ROUTER_*_MODEL` 都必须与具体的 `ROUTER_*_PROVIDER` 成对配置。当默认 Provider 固定且非 `auto` 时，任务 Provider 可以留空，所有任务模型会归入该固定 Provider。
-
-### Zeabur AI Hub
-
-把 AI Hub 当作标准 OpenAI-compatible Provider 使用，并填写 AI Hub 控制台实际提供的 Base URL；项目不硬编码 Zeabur AI Hub URL：
+没有独立 VPS Worker 时保持：
 
 ```env
-DEFAULT_AI_PROVIDER=openai-compatible
-AI_API_KEY=
-AI_BASE_URL=
-AI_MODEL=
+AGENT_ENABLED=false
 ```
 
-这种固定 Provider 配置允许一个 `AI_API_KEY` / `AI_BASE_URL` 搭配多个 `ROUTER_*_MODEL`。如果继续使用 `DEFAULT_AI_PROVIDER=auto`，每个 Hub 任务模型都要同时写 `ROUTER_*_PROVIDER=openai-compatible`。
+## 6. 部署并检查
 
-## Gemini Live 可选环境变量
+部署成功后依次确认：
 
-GEMINI_LIVE_API_KEY=
-GEMINI_LIVE_BASE_URL=https://generativelanguage.googleapis.com/v1beta
-GEMINI_LIVE_TRANSCRIPTION_MODEL=
-GEMINI_LIVE_TTS_MODEL=
-ENABLE_LIVE_AUDIO=false
-ENABLE_LIVE_TRANSLATE=false
+```text
+GET /ready
+Runtime Logs
+Telegram /whoami
+Telegram 普通私聊
+Telegram 控制台中的模型和额度
+```
 
-只有配置独立的 `GEMINI_LIVE_API_KEY` 和兼容模型后才开启这两个开关；普通 `GEMINI_API_KEY` 不会自动开放 Live 功能。Gemini Live 只走 Google 官方 Gemini Live API，不能把第三方 OpenAI-compatible 或 AI Hub 地址配置成 `gemini-live`；实时语音专用模式会按需绕过 Smart 路由。
+正常私聊流式回复应始终是同一条消息，不应出现第二条重复回复或完成后自动消失。
 
-## 常见错误
+## 7. 常见 BackOff
 
-### BackOff / 容器反复重启
+| 日志 | 处理 |
+| --- | --- |
+| `MISSING_TELEGRAM_BOT_TOKEN` | 填写正确 `BOT_TOKEN` |
+| `MISSING_AI_PROVIDER_CONFIG` | 填写所选 Provider 的 Key 和模型 |
+| `Production requires CHAT_ENCRYPTION_REQUIRED=true` | 设置为 `true` |
+| `CHAT_ENCRYPTION_KEY ...` | 新部署生成强密钥；已有部署恢复原密钥 |
+| `Production requires ... LOG_PRIVACY_KEY` | 生成不同的日志隐私密钥 |
+| `CHAT_ENCRYPTION_KEY_MISMATCH` | 立即恢复数据库原加密密钥 |
+| `INVALID_PORT` | 使用 `PORT=8080`、`HEALTH_PORT=8080` |
+| `DATABASE_PATH_NOT_FOUND` | 检查 `/data` Volume 与数据库路径 |
+| `SUPPORT_BOT_TOKEN_CONFLICT` | 为客服 Bot 创建独立 Token |
 
-先看 Runtime Logs，重点检查：
+更完整的错误说明见 [故障排查](TROUBLESHOOTING.md)。
 
-- BOT_TOKEN 是否填写
-- DEFAULT_AI_PROVIDER 是否正确
-- DEFAULT_AI_MODEL 是否正确
-- API Key 是否填写
-- PORT / HEALTH_PORT 是否为 8080
-- DATABASE_FILE 是否指向 /data
-- 启动日志是否给出稳定诊断错误码
-- `SUPPORT_BOT_TOKEN` 是否错误地复用了 `BOT_TOKEN`
+## 8. 更新生产版本
 
-### pdf-parse 报错
-
-ESM 项目里不要使用错误的 default import。当前使用：
-
-import * as pdfParse from 'pdf-parse';
-
-const { PDFParse } = pdfParse;
-
-### 端口错误
-
-Zeabur 会注入 PORT，代码必须读取 process.env.PORT，不要写死 3000。
+1. 先备份 `/data/bot-data.db`，不要修改现有密钥。
+2. 更新代码和新增普通变量，保留 Token、Key、Stars 套餐和数据库路径。
+3. 重新部署后检查 `/ready`、日志和 Telegram 实机。
