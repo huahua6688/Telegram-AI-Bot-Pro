@@ -9969,6 +9969,7 @@ export class TelegramAIBot {
     let stopped = false;
     let completed = false;
     let disabled = false;
+    let richStreamingEnabled = Boolean(this.config.enableRichMessages);
 
     const stopKeyboard = {
       inline_keyboard: [[{
@@ -10009,16 +10010,39 @@ export class TelegramAIBot {
         cleanBotOutput(fullText),
         Math.min(4096, Math.max(500, Number(this.config.maxOutputChars) || 4096))
       );
+      const richPreview = truncateText(
+        sanitizeRichMarkdown(fullText),
+        Math.min(4096, Math.max(500, Number(this.config.maxOutputChars) || 4096))
+      );
       if (!cleaned || cleaned.length < 12 || cleaned === lastText) return;
       const now = Date.now();
       if (lastUpdateAt && now - lastUpdateAt < intervalMs) return;
 
       if (!messageId) {
         try {
-          const sent = await replyWithReplyFallback(ctx, cleaned, {
-            reply_parameters: buildTelegramReplyParameters(ctx),
-            reply_markup: stopKeyboard
-          });
+          let sent = null;
+          if (richStreamingEnabled && richPreview) {
+            try {
+              sent = await callApiWithReplyFallback(ctx.telegram, 'sendRichMessage', {
+                chat_id: ctx.chat.id,
+                rich_message: { markdown: richPreview },
+                reply_parameters: buildTelegramReplyParameters(ctx),
+                reply_markup: stopKeyboard
+              });
+            } catch (error) {
+              richStreamingEnabled = false;
+              this.logger?.warn?.('Persistent Rich Message streaming unavailable; using regular text edits', {
+                chatId: ctx.chat?.id,
+                error: error.message
+              });
+            }
+          }
+          if (!sent?.message_id) {
+            sent = await replyWithReplyFallback(ctx, cleaned, {
+              reply_parameters: buildTelegramReplyParameters(ctx),
+              reply_markup: stopKeyboard
+            });
+          }
           messageId = sent?.message_id || null;
           if (!messageId) {
             disabled = true;
@@ -10032,9 +10056,16 @@ export class TelegramAIBot {
           });
           return;
         }
-      } else if (!(await edit(cleaned))) {
-        disabled = true;
-        return;
+      } else {
+        let updated = false;
+        if (richStreamingEnabled && richPreview) {
+          updated = await this.tryEditStreamingRichMessage(ctx, messageId, richPreview, stopKeyboard);
+          if (!updated) richStreamingEnabled = false;
+        }
+        if (!updated && !(await edit(cleaned))) {
+          disabled = true;
+          return;
+        }
       }
 
       lastText = cleaned;
@@ -10047,7 +10078,20 @@ export class TelegramAIBot {
       const fallbackText = typeof this.t === 'function' ? this.t(locale, 'noReply') : 'No reply.';
       const chunks = splitMessage(cleanBotOutput(text) || fallbackText, this.config.maxOutputChars);
       const firstChunk = chunks.shift() || fallbackText;
-      const updated = await edit(firstChunk, extra?.reply_markup || null);
+      const markdown = sanitizeRichMarkdown(text);
+      const hasSpecialRichBlock = /```[\s\S]*?```|\$\$[\s\S]+?\$\$|(?:^|\n)\|[^\n]+\|\s*\n\|(?:\s*:?-+:?\s*\|)+/m.test(markdown);
+      const hasStructuredLayout = /(?:^|\n)(?:#{1,6}\s|\d+\.\s|[-*]\s)/m.test(markdown);
+      const shouldPersistRich = Boolean(this.config.enableRichMessages && (
+        hasSpecialRichBlock || (hasStructuredLayout && markdown.length >= this.config.richMessageMinChars)
+      ));
+      const useVerticalTableLayout = shouldPersistRich && shouldUseVerticalRichTables(markdown);
+      const richMarkdown = useVerticalTableLayout
+        ? convertMarkdownTables(markdown, { rich: true })
+        : markdown;
+      const richUpdated = shouldPersistRich
+        ? await this.tryEditStreamingRichMessage(ctx, messageId, richMarkdown, extra?.reply_markup)
+        : false;
+      const updated = richUpdated || await edit(firstChunk, extra?.reply_markup || null);
       if (!updated) {
         // Never add a second full answer beside a stale partial stream. If the
         // partial can be removed safely, a fresh final reply is allowed.
@@ -10077,7 +10121,12 @@ export class TelegramAIBot {
       }
       lastText = firstChunk;
       completed = true;
-      return { lastMessageId };
+      if (richUpdated) this.rememberRichReplyContext?.(ctx, messageId, richMarkdown);
+      return {
+        lastMessageId,
+        ...(richUpdated ? { rich: true } : {}),
+        ...(richUpdated && useVerticalTableLayout ? { layout: 'vertical' } : {})
+      };
     };
 
     const finalize = async () => {
@@ -10433,6 +10482,27 @@ export class TelegramAIBot {
         this.logger.warn('Streaming edit fallback failed', { chatId: ctx.chat?.id, error: retryError.message });
         return false;
       }
+    }
+  }
+
+  async tryEditStreamingRichMessage(ctx, messageId, markdown, replyMarkup = undefined) {
+    if (!this.config.enableRichMessages || !markdown || typeof ctx.telegram?.callApi !== 'function') return false;
+    try {
+      await ctx.telegram.callApi('editMessageText', {
+        chat_id: ctx.chat.id,
+        message_id: messageId,
+        rich_message: { markdown },
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {})
+      });
+      return true;
+    } catch (error) {
+      if (/message is not modified/i.test(String(error?.message || error?.response?.description || ''))) return true;
+      this.logger?.warn?.('Rich streaming finalization failed; keeping regular Telegram text', {
+        chatId: ctx.chat?.id,
+        messageId,
+        error: error.message
+      });
+      return false;
     }
   }
 }

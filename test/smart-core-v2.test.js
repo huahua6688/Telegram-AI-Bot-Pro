@@ -408,7 +408,7 @@ test('private streaming edits one persistent reply and does not send a second fi
     config: {
       enableStreamingReplies: true,
       enableNativeDraftStreaming: false,
-      enableRichMessages: true,
+      enableRichMessages: false,
       streamingEditIntervalMs: 250,
       maxOutputChars: 4096
     },
@@ -457,6 +457,60 @@ test('private streaming edits one persistent reply and does not send a second fi
   assert.deepEqual(edits.at(-1).extra.reply_markup, undefined);
   assert.equal(apiCalls.some((call) => /MessageDraft$/.test(call.method)), false);
   assert.equal(fakeBot.activeDrafts.size, 0);
+});
+
+test('persistent streaming preserves Rich Message output on the same message id', async () => {
+  const calls = [];
+  const fakeBot = {
+    config: {
+      enableStreamingReplies: true,
+      enableNativeDraftStreaming: false,
+      enableRichMessages: true,
+      richMessageMinChars: 200,
+      streamingEditIntervalMs: 250,
+      maxOutputChars: 4096
+    },
+    logger: logger(),
+    activeDrafts: new Map(),
+    richReplyContexts: new Map(),
+    createPersistentAssistantStreamer: TelegramAIBot.prototype.createPersistentAssistantStreamer,
+    tryEditStreamingMessage: TelegramAIBot.prototype.tryEditStreamingMessage,
+    tryEditStreamingRichMessage: TelegramAIBot.prototype.tryEditStreamingRichMessage,
+    rememberRichReplyContext: TelegramAIBot.prototype.rememberRichReplyContext,
+    getLocale() { return 'en'; },
+    t() { return 'No reply.'; }
+  };
+  const ctx = {
+    chat: { id: 77, type: 'private' },
+    from: { id: 88 },
+    message: { message_id: 42 },
+    telegram: {
+      async callApi(method, payload) {
+        calls.push({ method, payload });
+        return method === 'sendRichMessage' ? { message_id: 91 } : true;
+      },
+      async editMessageText() { assert.fail('structured output should stay rich'); },
+      async editMessageReplyMarkup() { return true; }
+    },
+    async reply() { assert.fail('Rich Message streaming should not create a plain duplicate'); }
+  };
+  const markdown = `# Report\n\n${'- useful item\n'.repeat(25)}`;
+  const streamer = TelegramAIBot.prototype.createAssistantDraftStreamer.call(fakeBot, ctx);
+  await streamer.onTextDelta('', '# Report\n\n- partial item');
+  const result = await TelegramAIBot.prototype.sendAssistantReply.call(
+    fakeBot,
+    ctx,
+    markdown,
+    {},
+    { streamer }
+  );
+
+  assert.equal(result.lastMessageId, 91);
+  assert.equal(result.rich, true);
+  assert.deepEqual(calls.map((call) => call.method), ['sendRichMessage', 'editMessageText']);
+  assert.equal(calls[1].payload.message_id, 91);
+  assert.equal(calls[1].payload.rich_message.markdown, markdown.trim());
+  assert.equal(fakeBot.richReplyContexts.has('77:91'), true);
 });
 
 test('persistent stream stop state stays isolated between users', async () => {
