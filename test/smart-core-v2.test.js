@@ -788,6 +788,10 @@ test('localized slash commands stay minimal and refresh per chat', async () => {
   );
   assert.ok(!indonesian.commands.some((item) => item.command === 'language'));
   assert.ok(!indonesian.commands.some((item) => item.command === 'web'));
+  assert.equal(indonesian.commands.find((item) => item.command === 'help').is_ephemeral, true);
+  assert.equal(indonesian.commands.find((item) => item.command === 'whoami').is_ephemeral, true);
+  assert.equal(indonesian.commands.find((item) => item.command === 'start').is_ephemeral, undefined);
+  assert.equal(indonesian.commands.find((item) => item.command === 'menu').is_ephemeral, undefined);
 
   await bot.setChatBotCommands({ chat: { id: 99 } }, 'zh-hant');
   const chatCall = calls.at(-1);
@@ -810,6 +814,7 @@ test('Mini App mode exposes start help and whoami commands', async () => {
 
   await bot.setLocalizedBotCommands();
   assert.deepEqual(calls[0].commands.map((item) => item.command), ['start', 'help', 'whoami']);
+  assert.deepEqual(calls[0].commands.map((item) => item.is_ephemeral), [undefined, true, true]);
 });
 
 test('Telegram command rate limits do not crash startup or repeat localized requests', async () => {
@@ -967,7 +972,7 @@ test('Mini App mode keeps private chat plus the two required billing entries in 
   assert.deepEqual(replies[1].extra.reply_markup.keyboard, keyboard.reply_markup.keyboard);
   assert.doesNotMatch(replies.map((item) => item.message).join('\n'), /工具箱|联网搜索、翻译、图片/);
   assert.match(replies[1].message, /\/whoami/);
-  assert.match(replies[1].message, /局部引用/);
+  assert.match(replies[1].message, /文字、图片、语音、文件或链接/);
 });
 
 test('privacy chat checks the shared account quota before calling AI', async () => {

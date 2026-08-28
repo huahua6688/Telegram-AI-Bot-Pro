@@ -8,6 +8,39 @@ const DEFAULT_RATE_LIMIT_MAX_MESSAGES = 5;
 const TELEGRAM_TEXT_LIMIT = 4096;
 const PRIVACY_NOTICE_ZH = '为保护隐私，请勿发送密码、Telegram 登录验证码、二步验证密码、API Key、钱包助记词或私钥、银行卡完整资料或证件原图。你的问题可能由授权客服人员查看和处理。';
 const PRIVACY_NOTICE_EN = 'For your privacy, do not send passwords, Telegram login codes, two-step verification passwords, API keys, wallet seed phrases or private keys, full bank-card details, or identity-document images. Your request may be viewed and handled by authorized support staff.';
+const NON_COPYABLE_SUPPORT_FIELDS = [
+  'invoice',
+  'paid_media',
+  'giveaway',
+  'giveaway_winners',
+  'giveaway_completed',
+  'successful_payment',
+  'refunded_payment',
+  'passport_data',
+  'subscription',
+  'suggested_post_paid',
+  'suggested_post_refunded'
+];
+const COPYABLE_SUPPORT_FIELDS = [
+  'rich_message',
+  'animation',
+  'audio',
+  'live_photo',
+  'photo',
+  'sticker',
+  'story',
+  'video',
+  'video_note',
+  'voice',
+  'document',
+  'checklist',
+  'contact',
+  'dice',
+  'game',
+  'poll',
+  'venue',
+  'location'
+];
 
 function createConfigurationError(code, message) {
   const error = new Error(message);
@@ -56,11 +89,32 @@ function isEnglishUser(user = {}) {
 }
 
 function supportMessageType(message = {}) {
-  if (message.photo?.length) return 'photo';
-  if (message.voice) return 'voice';
-  if (message.document) return 'document';
+  if (NON_COPYABLE_SUPPORT_FIELDS.some((field) => message[field] != null)) {
+    return 'unsupported';
+  }
+  if (
+    message.poll?.type === 'quiz' &&
+    (!Array.isArray(message.poll.correct_option_ids) || message.poll.correct_option_ids.length === 0)
+  ) {
+    return 'unsupported';
+  }
+  for (const field of COPYABLE_SUPPORT_FIELDS) {
+    if (field === 'photo' && Array.isArray(message.photo) && message.photo.length > 0) return field;
+    if (field !== 'photo' && message[field] != null) return field;
+  }
   if (typeof message.text === 'string') return 'text';
   return 'unsupported';
+}
+
+function isCopyMessageUnsupportedError(error) {
+  const detail = String(
+    error?.response?.description ||
+    error?.description ||
+    error?.message ||
+    error ||
+    ''
+  );
+  return /can(?:not|'t) be copied|can't copy|message to copy not found|message is protected|unsupported message|wrong message type/i.test(detail);
 }
 
 function parseSupportTicketUserId(message = {}) {
@@ -113,8 +167,27 @@ function adminMessageKey(chatId, messageId) {
   return `${String(chatId || '')}:${Number(messageId || 0)}`;
 }
 
-function inlineKeyboard(rows) {
-  return { inline_keyboard: rows };
+function inlineKeyboard(rows, { forceReply = false } = {}) {
+  return {
+    inline_keyboard: rows,
+    ...(forceReply ? { force_reply: true } : {})
+  };
+}
+
+function isPrivateSupportContext(ctx = {}) {
+  const type = String(ctx.chat?.type || '').toLowerCase();
+  if (type) return type === 'private';
+  const chatId = String(ctx.chat?.id || '');
+  const userId = String(ctx.from?.id || '');
+  return Boolean(chatId && userId && chatId === userId);
+}
+
+function isSupportGroupContext(ctx = {}) {
+  return ['group', 'supergroup'].includes(String(ctx.chat?.type || '').toLowerCase());
+}
+
+function isSupportChannelContext(ctx = {}) {
+  return String(ctx.chat?.type || '').toLowerCase() === 'channel';
 }
 
 export class SupportTelegramBot {
@@ -533,6 +606,8 @@ export class SupportTelegramBot {
   }
 
   async handleStart(ctx) {
+    if (isSupportChannelContext(ctx) || isSupportGroupContext(ctx)) return false;
+    if (ctx.chat && !isPrivateSupportContext(ctx)) return false;
     const english = String(ctx.from?.language_code || '')
       .toLowerCase()
       .startsWith('en');
@@ -540,13 +615,26 @@ export class SupportTelegramBot {
     await ctx.reply(
       english
         ? 'Hello, how can we help you?'
-        : '你好，请问有什么可以帮你的？'
+        : '你好，请问有什么可以帮你的？',
+      {
+        reply_markup: {
+          force_reply: true,
+          input_field_placeholder: english
+            ? 'Describe the issue you need help with'
+            : '请描述你需要处理的问题'
+        }
+      }
     );
+    return true;
   }
+
   async handleMessage(ctx) {
     const message = ctx.message || {};
     const userId = String(ctx.from?.id || '');
     if (!userId || ctx.from?.is_bot) return;
+
+    if (isSupportChannelContext(ctx) || isSupportGroupContext(ctx)) return false;
+    if (!isPrivateSupportContext(ctx)) return false;
     if (/^\/start(?:@\w+)?(?:\s|$)/i.test(String(message.text || ''))) return;
 
     if (this.isAdmin(userId)) {
@@ -636,7 +724,7 @@ export class SupportTelegramBot {
           { text: '退回待接单', callback_data: `s:r:${ticket.ticketId}` }
         ],
         [{ text: '关闭工单', callback_data: `s:z:${ticket.ticketId}` }]
-      ]);
+      ], { forceReply: true });
     }
     return inlineKeyboard([]);
   }
@@ -795,12 +883,50 @@ export class SupportTelegramBot {
       };
     }
 
-    const result = await telegram.copyMessage(
-      adminId,
-      ref.chatId,
-      ref.messageId,
-      copyOptions
-    );
+    let result;
+    try {
+      result = await telegram.copyMessage(
+        adminId,
+        ref.chatId,
+        ref.messageId,
+        copyOptions
+      );
+    } catch (error) {
+      if (!isCopyMessageUnsupportedError(error)) throw error;
+
+      ref.copyStatus = 'unsupported';
+      delivered.add(ref.key);
+      const adminNoticeOptions = { protect_content: true };
+      if (labelMessageId) {
+        adminNoticeOptions.reply_parameters = {
+          message_id: labelMessageId,
+          allow_sending_without_reply: true
+        };
+      }
+      const english = String(ticket.userProfile?.languageCode || '')
+        .toLowerCase()
+        .startsWith('en');
+      await Promise.allSettled([
+        telegram.sendMessage(
+          adminId,
+          `⚠️ 用户的 ${ref.type} 消息已记录，但 Telegram 不允许复制这条具体消息。`,
+          adminNoticeOptions
+        ),
+        telegram.sendMessage(
+          ticket.userId,
+          english
+            ? 'This message was added to your ticket, but Telegram could not copy its content to support. Please send the same information as text or a regular attachment.'
+            : '这条消息已记录到工单，但 Telegram 无法把具体内容复制给客服。请改用文字或普通附件重新发送。',
+          { protect_content: true }
+        )
+      ]);
+      this.logger?.warn?.('Support message retained after Telegram copy rejection', {
+        ticketId: ticket.ticketId,
+        adminId: String(adminId),
+        messageType: ref.type
+      });
+      return false;
+    }
 
     delivered.add(ref.key);
 
@@ -834,15 +960,19 @@ export class SupportTelegramBot {
   }
 
   async handleUserRequest(ctx) {
+    // Defense in depth: tickets remain private-only even if a future handler
+    // accidentally calls this backend method for a group or channel update.
+    if (!isPrivateSupportContext(ctx)) return false;
+    if (!ctx.from?.id || ctx.from?.is_bot) return false;
     const userId = String(ctx.from?.id || '');
     const english = isEnglishUser(ctx.from);
     const type = supportMessageType(ctx.message);
 
     if (type === 'unsupported') {
       await ctx.reply(english
-        ? 'Please send text, a photo, a voice message, or a document.'
-        : '请发送文字、图片、语音或文件。');
-      return;
+        ? 'Please send a regular support message such as text, media, a file, a sticker, a location, a contact, or a poll. Payment and system messages can’t be forwarded.'
+        : '请发送普通客服消息，例如文字、媒体、文件、贴纸、位置、联系人或投票。支付和系统消息无法转发。');
+      return false;
     }
 
     if (!this.checkUserRateLimit(userId)) {
@@ -1102,6 +1232,11 @@ export class SupportTelegramBot {
       return;
     }
 
+    if (supportMessageType(ctx.message) === 'unsupported') {
+      await ctx.reply('这类支付或系统消息无法转发，请改用普通文字或附件回复用户。');
+      return;
+    }
+
     try {
       await ctx.telegram.copyMessage(
         ticket.userId,
@@ -1158,5 +1293,9 @@ export const supportBotInternals = {
   telegramErrorCode,
   makeTicketId,
   messageReference,
-  adminMessageKey
+  adminMessageKey,
+  isPrivateSupportContext,
+  isSupportGroupContext,
+  isSupportChannelContext,
+  isCopyMessageUnsupportedError
 };

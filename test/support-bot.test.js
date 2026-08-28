@@ -100,6 +100,38 @@ function userContext(telegram, message = { message_id: 7, text: 'Stars 已扣除
   };
 }
 
+const copyableSupportCases = [
+  ['text', { text: 'plain support message' }],
+  ['photo', { photo: [{ file_id: 'photo-1' }], caption: 'photo caption' }],
+  ['voice', { voice: { file_id: 'voice-1' }, caption: 'voice caption' }],
+  ['document', { document: { file_id: 'document-1', file_name: 'report.pdf' }, caption: 'document caption' }],
+  ['video', { video: { file_id: 'video-1' }, caption: 'video caption' }],
+  ['video_note', { video_note: { file_id: 'video-note-1' } }],
+  ['audio', { audio: { file_id: 'audio-1', title: 'Audio' }, caption: 'audio caption' }],
+  ['animation', { animation: { file_id: 'animation-1' }, document: { file_id: 'animation-document-1' }, caption: 'GIF caption' }],
+  ['sticker', { sticker: { file_id: 'sticker-1', emoji: '👍' } }],
+  ['location', { location: { latitude: 3.139, longitude: 101.6869 } }],
+  ['venue', { venue: { title: 'Help desk', address: 'Kuala Lumpur' }, location: { latitude: 3.139, longitude: 101.6869 } }],
+  ['contact', { contact: { phone_number: '+60123456789', first_name: 'Alice' } }],
+  ['poll', { poll: { id: 'poll-1', type: 'regular', question: 'Which issue?', options: [] } }],
+  ['dice', { dice: { emoji: '🎲', value: 6 } }],
+  ['live_photo', { live_photo: { photo: [], video: {} }, photo: [{ file_id: 'live-photo-preview' }] }],
+  ['rich_message', { rich_message: { html: '<b>Rich support message</b>' } }],
+  ['story', { story: { chat: { id: 42 }, id: 9 } }],
+  ['checklist', { checklist: { title: 'Support checklist', tasks: [] } }],
+  ['game', { game: { title: 'Support game', description: 'Game details', photo: [] } }]
+];
+
+const nonCopyableSupportCases = [
+  ['invoice', { invoice: { title: 'Invoice' } }],
+  ['paid_media', { paid_media: { star_count: 1, paid_media: [] } }],
+  ['giveaway', { giveaway: { winner_count: 1 } }],
+  ['giveaway_winners', { giveaway_winners: { winner_count: 1, winners: [] } }],
+  ['successful_payment', { successful_payment: { currency: 'XTR', total_amount: 1 } }],
+  ['refunded_payment', { refunded_payment: { currency: 'XTR', total_amount: 1 } }],
+  ['service_message', { new_chat_members: [{ id: 77, first_name: 'System user' }] }]
+];
+
 function actionContext(telegram, adminId) {
   const answers = [];
   const markups = [];
@@ -274,6 +306,117 @@ test('level-one admin sees identity while support agents stay anonymous', async 
   );
   assert.equal(ticket.userProfile.userId, '42');
   assert.equal(ticket.userProfile.username, 'alice');
+});
+
+for (const [expectedType, payload] of copyableSupportCases) {
+  test(`private support records and copies ${expectedType} messages`, async () => {
+    const fixture = createFixture({ config: { supportAdminIds: new Set(['100']) } });
+    await fixture.bot.init();
+    const telegram = createTelegram();
+    const message = { message_id: 700, ...payload };
+
+    await fixture.fake.handlers.message({
+      ...userContext(telegram, message).ctx,
+      chat: { id: 42, type: 'private' }
+    });
+
+    const ticket = fixture.bot.getActiveTicket('42');
+    assert.ok(ticket);
+    assert.equal(ticket.messageRefs.length, 1);
+    assert.equal(ticket.messageRefs[0].type, expectedType);
+    assert.equal(ticket.messageRefs[0].messageId, 700);
+
+    await fixture.bot.handleClaim(actionContext(telegram, '100').ctx, ticket.ticketId);
+    assert.equal(telegram.copied.length, 1);
+    assert.equal(telegram.copied[0].chatId, '100');
+    assert.equal(telegram.copied[0].fromChatId, '42');
+    assert.equal(telegram.copied[0].messageId, 700);
+    assert.deepEqual(telegram.copied[0].extra, {
+      protect_content: true,
+      reply_parameters: {
+        message_id: telegram.sent.find((entry) => /新的用户消息/.test(entry.text))?.result.message_id,
+        allow_sending_without_reply: true
+      }
+    });
+  });
+}
+
+test('quiz polls are accepted only when Telegram exposes the correct options', () => {
+  assert.equal(supportBotInternals.supportMessageType({
+    poll: { type: 'quiz', correct_option_ids: [1] }
+  }), 'poll');
+  assert.equal(supportBotInternals.supportMessageType({
+    poll: { type: 'quiz' }
+  }), 'unsupported');
+});
+
+for (const [label, payload] of nonCopyableSupportCases) {
+  test(`private support rejects ${label} without creating a ticket`, async () => {
+    const fixture = createFixture({ config: { supportAdminIds: new Set(['100']) } });
+    await fixture.bot.init();
+    const telegram = createTelegram();
+    const replies = [];
+
+    await fixture.fake.handlers.message({
+      chat: { id: 42, type: 'private' },
+      from: { id: 42, language_code: 'zh-CN' },
+      message: { message_id: 701, ...payload },
+      telegram,
+      reply: async (text) => replies.push(text)
+    });
+
+    assert.equal(fixture.bot.tickets.size, 0);
+    assert.equal(fixture.bot.rateLimitHits.size, 0);
+    assert.equal(telegram.copied.length, 0);
+    assert.match(replies[0], /支付和系统消息无法转发/);
+  });
+}
+
+test('bot messages are ignored before ticket creation and rate limiting', async () => {
+  const fixture = createFixture();
+  await fixture.bot.init();
+  const telegram = createTelegram();
+  const replies = [];
+
+  await fixture.fake.handlers.message({
+    chat: { id: 42, type: 'private' },
+    from: { id: 42, is_bot: true },
+    message: { message_id: 702, video: { file_id: 'bot-video' } },
+    telegram,
+    reply: async (text) => replies.push(text)
+  });
+
+  assert.equal(fixture.bot.tickets.size, 0);
+  assert.equal(fixture.bot.rateLimitHits.size, 0);
+  assert.equal(telegram.copied.length, 0);
+  assert.equal(replies.length, 0);
+});
+
+test('Telegram copy rejection keeps the message in history and replies politely', async () => {
+  const fixture = createFixture({ config: { supportAdminIds: new Set(['100']) } });
+  await fixture.bot.init();
+  const telegram = createTelegram();
+  await fixture.bot.handleUserRequest(userContext(telegram).ctx);
+  const ticket = fixture.bot.getActiveTicket('42');
+  await fixture.bot.handleClaim(actionContext(telegram, '100').ctx, ticket.ticketId);
+
+  telegram.copyMessage = async () => {
+    const error = new Error("Bad Request: message can't be copied");
+    error.response = { description: "Bad Request: message can't be copied" };
+    throw error;
+  };
+  const followUp = userContext(telegram, {
+    message_id: 703,
+    sticker: { file_id: 'protected-sticker' }
+  });
+
+  await assert.doesNotReject(fixture.bot.handleUserRequest(followUp.ctx));
+  assert.equal(ticket.messageRefs.length, 2);
+  assert.equal(ticket.messageRefs[1].type, 'sticker');
+  assert.equal(ticket.messageRefs[1].copyStatus, 'unsupported');
+  assert.equal(fixture.bot.getActiveTicket('42'), ticket);
+  assert.ok(telegram.sent.some((entry) => entry.chatId === '42' && /无法把具体内容复制给客服/.test(entry.text)));
+  assert.ok(telegram.sent.some((entry) => entry.chatId === '100' && /已记录/.test(entry.text)));
 });
 
 test('first admin claims atomically and only claimant receives private history', async () => {
@@ -813,6 +956,151 @@ test('message labels show identity only to level-one administrators', async () =
     levelTwoLabel.text,
     /@alice|Alice|\u7528\u6237 ID/
   );
+});
+
+test('support bot ignores ordinary group messages before rate limiting or ticket creation', async () => {
+  const fixture = createFixture();
+  await fixture.bot.init();
+  const calls = [];
+  const replies = [];
+
+  await fixture.fake.handlers.message({
+    chat: { id: -10001, type: 'supergroup' },
+    from: { id: 41, first_name: 'Group user' },
+    message: { message_id: 1, text: '客服在吗' },
+    telegram: { async callApi(method, payload) { calls.push({ method, payload }); } },
+    reply: async (...args) => replies.push(args)
+  });
+
+  assert.equal(calls.length, 0);
+  assert.equal(replies.length, 0);
+  assert.equal(fixture.bot.tickets.size, 0);
+  assert.equal(fixture.bot.rateLimitHits.size, 0);
+});
+
+test('@support bot and /support stay completely silent in groups', async () => {
+  const fixture = createFixture();
+  await fixture.bot.init();
+  const calls = [];
+  const replies = [];
+  const telegram = {
+    async callApi(method, payload) {
+      calls.push({ method, payload });
+      return { ephemeral_message_id: calls.length };
+    }
+  };
+  const base = {
+    chat: { id: -10002, type: 'supergroup' },
+    telegram,
+    reply: async (...args) => replies.push(args)
+  };
+
+  await fixture.fake.handlers.message({
+    ...base,
+    from: { id: 42, first_name: 'Alice' },
+    message: { message_id: 2, text: '@SupportTestBot' }
+  });
+  await fixture.fake.handlers.message({
+    ...base,
+    from: { id: 43, first_name: 'Bob' },
+    message: { message_id: 3, text: '/support@SupportTestBot' }
+  });
+  await fixture.fake.handlers.message({
+    ...base,
+    from: { id: 44, first_name: 'Other bot user' },
+    message: { message_id: 4, text: '/support@DifferentBot' }
+  });
+
+  assert.equal(replies.length, 0);
+  assert.equal(calls.length, 0);
+  assert.equal(fixture.bot.tickets.size, 0);
+  assert.equal(fixture.bot.rateLimitHits.size, 0);
+});
+
+test('support bot ignores group media and all channel updates', async () => {
+  const fixture = createFixture();
+  await fixture.bot.init();
+  const calls = [];
+  const replies = [];
+  const telegram = { async callApi(method, payload) { calls.push({ method, payload }); } };
+  const mediaMessages = copyableSupportCases
+    .filter(([type]) => type !== 'text')
+    .map(([, payload], index) => ({
+      message_id: 10 + index,
+      ...payload,
+      ...(payload.caption ? { caption: `${payload.caption} @SupportTestBot` } : {})
+    }));
+  for (const message of mediaMessages) {
+    await fixture.fake.handlers.message({
+      chat: { id: -10003, type: 'group' },
+      from: { id: 44 },
+      message,
+      telegram,
+      reply: async (...args) => replies.push(args)
+    });
+  }
+  await fixture.fake.handlers.message({
+    chat: { id: -10004, type: 'channel' },
+    from: { id: 45 },
+    message: { message_id: 13, text: '/support@SupportTestBot' },
+    telegram,
+    reply: async (...args) => replies.push(args)
+  });
+
+  assert.equal(calls.length, 0);
+  assert.equal(replies.length, 0);
+  assert.equal(fixture.bot.tickets.size, 0);
+  assert.equal(fixture.bot.rateLimitHits.size, 0);
+});
+
+test('private support creates isolated tickets while the backend rejects group calls', async () => {
+  const fixture = createFixture();
+  await fixture.bot.init();
+  const telegram = createTelegram();
+
+  const blocked = await fixture.bot.handleUserRequest({
+    chat: { id: -10005, type: 'group' },
+    from: { id: 50 },
+    message: { message_id: 20, text: 'must not create a ticket' },
+    telegram,
+    reply: async () => assert.fail('group backend guard must not reply')
+  });
+  assert.equal(blocked, false);
+  assert.equal(fixture.bot.rateLimitHits.size, 0);
+
+  for (const userId of [51, 52]) {
+    await fixture.fake.handlers.message({
+      chat: { id: userId, type: 'private' },
+      from: { id: userId, first_name: `User ${userId}`, language_code: 'zh-CN' },
+      message: { message_id: userId, text: `private issue ${userId}` },
+      telegram,
+      reply: async () => undefined
+    });
+  }
+
+  const first = fixture.bot.getActiveTicket('51');
+  const second = fixture.bot.getActiveTicket('52');
+  assert.ok(first);
+  assert.ok(second);
+  assert.notEqual(first.ticketId, second.ticketId);
+  assert.equal(first.userId, '51');
+  assert.equal(second.userId, '52');
+  assert.equal(first.messageRefs[0].chatId, '51');
+  assert.equal(second.messageRefs[0].chatId, '52');
+});
+
+test('private support prompts use force_reply without changing the greeting', async () => {
+  const fixture = createFixture();
+  await fixture.bot.init();
+  const replies = [];
+  await fixture.fake.handlers.start({
+    chat: { id: 61, type: 'private' },
+    from: { id: 61, language_code: 'zh-CN' },
+    reply: async (text, extra) => replies.push({ text, extra })
+  });
+  assert.equal(replies[0].text, '你好，请问有什么可以帮你的？');
+  assert.equal(replies[0].extra.reply_markup.force_reply, true);
+  assert.match(replies[0].extra.reply_markup.input_field_placeholder, /描述/);
 });
 
 test('legacy parser helpers remain compatible without being used for authorization', () => {

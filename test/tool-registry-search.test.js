@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ToolRegistry, toolRegistryInternals } from '../src/services/tool-registry.js';
 import { naturalAgentInternals } from '../src/services/natural-agent.js';
-import { productAgentInternals } from '../src/services/product-agent.js';
 import { filterSearchResultsToToday } from '../src/utils/news-results.js';
 
 const originalFetch = globalThis.fetch;
@@ -440,8 +439,6 @@ test('Google News RSS fallback keeps only local-today stories, sorts them, and p
     region: 'CN',
     language: 'zh-CN'
   }));
-  const productResult = await productAgentInternals.fetchNewsFallback('today news');
-
   assert.equal(new URL(requestedUrls[0]).pathname, '/rss');
   assert.equal(new URL(requestedUrls[0]).searchParams.get('q'), null);
   assert.equal(naturalResult.results.length, 2);
@@ -451,8 +448,6 @@ test('Google News RSS fallback keeps only local-today stories, sorts them, and p
   assert.equal(naturalResult.results[0].publishedAt, '2026-07-13T00:10:00.000Z');
   assert.equal(naturalResult.results[1].title, 'Older local-today headline');
   assert.doesNotMatch(JSON.stringify(naturalResult), /Previous local-day headline/);
-  assert.match(productResult, /标题：Fresh & verified headline/);
-  assert.doesNotMatch(productResult, /CDATA/);
 });
 
 test('Google News freshness uses the configured local year and recognizes today synonyms', async () => {

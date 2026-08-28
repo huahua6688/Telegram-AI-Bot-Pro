@@ -184,12 +184,17 @@ const BOT_COMMAND_DESCRIPTIONS = {
 
 function createLocalizedBotCommands(locale = 'en', compact = false) {
   const normalized = normalizeLanguageCode(locale, 'en');
+  const command = (name, description) => ({
+    command: name,
+    description,
+    ...(['help', 'whoami'].includes(name) ? { is_ephemeral: true } : {})
+  });
   if (compact) {
     const descriptions = BOT_COMMAND_DESCRIPTIONS[normalized] || BOT_COMMAND_DESCRIPTIONS.en;
     return [
-      { command: 'start', description: descriptions[0] || BOT_COMMAND_DESCRIPTIONS.en[0] },
-      { command: 'help', description: descriptions[2] || BOT_COMMAND_DESCRIPTIONS.en[2] },
-      { command: 'whoami', description: descriptions[8] || BOT_COMMAND_DESCRIPTIONS.en[8] }
+      command('start', descriptions[0] || BOT_COMMAND_DESCRIPTIONS.en[0]),
+      command('help', descriptions[2] || BOT_COMMAND_DESCRIPTIONS.en[2]),
+      command('whoami', descriptions[8] || BOT_COMMAND_DESCRIPTIONS.en[8])
     ];
   }
   const minimalDescriptions = {
@@ -198,10 +203,9 @@ function createLocalizedBotCommands(locale = 'en', compact = false) {
     en: ['Open assistant', 'Open simple menu', 'Show help', 'Clear current chat', 'Show Telegram ID']
   };
   const descriptions = minimalDescriptions[normalized] || minimalDescriptions.en;
-  return BOT_COMMAND_NAMES.map((command, index) => ({
-    command,
-    description: descriptions[index] || minimalDescriptions.en[index]
-  }));
+  return BOT_COMMAND_NAMES.map((name, index) =>
+    command(name, descriptions[index] || minimalDescriptions.en[index])
+  );
 }
 
 const LANGUAGE_PROMPTS = {
@@ -303,6 +307,31 @@ function escapeRichHtml(value = '') {
     .replaceAll('>', '&gt;')
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&apos;');
+}
+
+export function isCommunityServiceMessage(message = {}) {
+  return Boolean(
+    message?.community_chat_added ||
+    message?.community_chat_removed ||
+    message?.community_chat_joined
+  );
+}
+
+function isTelegramCapabilityUnavailable(error) {
+  const detail = String(error?.description || error?.message || error || '');
+  return /method\s+not\s+found|unknown\s+method|not\s+implemented|unsupported|unexpected\s+parameter|can['’]?t\s+parse/i.test(detail);
+}
+
+function callbackMessage(ctx = {}) {
+  return ctx.callbackQuery?.message || ctx.update?.callback_query?.message || null;
+}
+
+function callbackQueryId(ctx = {}) {
+  return String(ctx.callbackQuery?.id || ctx.update?.callback_query?.id || '');
+}
+
+function callbackEphemeralMessageId(ctx = {}) {
+  return callbackMessage(ctx)?.ephemeral_message_id ?? null;
 }
 
 function looksLikeImplicitNewsFollowUp(text = '') {
@@ -2096,6 +2125,30 @@ export class TelegramAIBot {
     };
   }
 
+  withWelcomeHelpButton(extra, locale = 'zh', enabled = false) {
+    if (!enabled) return extra;
+    const existingRows = extra?.reply_markup?.inline_keyboard || [];
+    return {
+      ...(extra || {}),
+      reply_markup: {
+        ...(extra?.reply_markup || {}),
+        inline_keyboard: [
+          ...existingRows,
+          [Markup.button.callback(
+            localText(locale, '👋 欢迎语设置方法', '👋 Welcome setup'),
+            'help:welcome'
+          )]
+        ]
+      }
+    };
+  }
+
+  async canShowWelcomeHelp(ctx) {
+    if (this.isAdmin(ctx)) return true;
+    if (!['group', 'supergroup'].includes(String(ctx.chat?.type || ''))) return false;
+    return this.canManageGroupSettings(ctx);
+  }
+
   async replyWithSupport(ctx, text, extra, locale = this.getLocale(ctx)) {
     return ctx.reply(text, this.withSupportButton(extra, locale));
   }
@@ -2477,26 +2530,13 @@ export class TelegramAIBot {
       });
   }
 
-  async handleStarsStore(ctx) {
-    const locale = this.getLocale(ctx);
-    if (this.isAdmin(ctx)) {
-      await ctx.reply(
-        localText(locale, '管理员账号免费使用，所有能力均不扣额度。', 'Administrator accounts use all capabilities for free.'),
-        this.createQuotaPurchaseKeyboard(locale)
-      );
-      return;
-    }
+  getBillingPrivateUrl(start = 'buy') {
+    const username = String(this.botUsername || '').trim().replace(/^@/, '');
+    const parameter = String(start || 'buy').trim().replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64) || 'buy';
+    return username ? `https://t.me/${username}?start=${parameter}` : '';
+  }
 
-    const products = buildBillingCatalog(this.config).products;
-    if (!this.config.starsPaymentsEnabled || !products.length) {
-      await this.replyWithSupport(ctx, localText(
-        locale,
-        '购买功能暂未开放。管理员需要先配置 STARS_PRODUCTS_JSON。每日免费额度仍可正常使用。',
-        'Purchases are not available yet. The administrator must configure STARS_PRODUCTS_JSON. Daily free credits remain available.'
-      ));
-      return;
-    }
-
+  buildStarsStoreText(products, locale = 'zh') {
     const lines = [
       localText(locale, '⭐ 购买额度', '⭐ Buy credits'),
       '',
@@ -2506,11 +2546,271 @@ export class TelegramAIBot {
       lines.push('', `${isEnglishLocale(locale) ? product.titleEn : product.title} · ${product.price} ⭐`);
       lines.push(...this.formatStarsProductCredits(product, locale));
     }
-    await ctx.reply(lines.join('\n'), this.createStarsStoreKeyboard(locale));
+    return lines.join('\n');
+  }
+
+  buildStarsStoreRichMessage(products, locale = 'zh') {
+    const header = (text, align = 'left') => ({
+      text,
+      is_header: true,
+      align,
+      valign: 'middle'
+    });
+    const cell = (text, align = 'left') => ({
+      text,
+      align,
+      valign: 'top'
+    });
+    const rows = [[
+      header(localText(locale, '套餐', 'Pack')),
+      header('Stars', 'right'),
+      header(localText(locale, '包含额度', 'Included credits'))
+    ]];
+    for (const product of products) {
+      const creditSummary = BILLING_CREDIT_TYPES
+        .filter((type) => Number(product?.credits?.[type]) > 0)
+        .map((type) => `${this.getBillingCreditLabel(type, locale)} ${Number(product.credits[type])}`)
+        .join(' · ');
+      rows.push([
+        cell(isEnglishLocale(locale) ? product.titleEn : product.title),
+        cell(String(product.price), 'right'),
+        cell(creditSummary || '—')
+      ]);
+    }
+    return {
+      blocks: [
+        {
+          type: 'heading',
+          text: localText(locale, '⭐ 购买额度', '⭐ Buy credits'),
+          size: 3
+        },
+        {
+          type: 'paragraph',
+          text: localText(
+            locale,
+            '请选择额度包。付款只通过 Telegram Stars 完成。',
+            'Choose a credit pack. Payment is completed only with Telegram Stars.'
+          )
+        },
+        {
+          type: 'table',
+          cells: rows,
+          is_bordered: true,
+          is_striped: true,
+          is_compact: true,
+          caption: localText(locale, '仅当前用户可见', 'Visible only to you')
+        }
+      ]
+    };
+  }
+
+  buildStarsBalanceRichMessage(snapshot, recentCosts, locale = 'zh') {
+    const header = (text, align = 'left') => ({ text, is_header: true, align, valign: 'middle' });
+    const cell = (text, align = 'left') => ({ text, align, valign: 'top' });
+    const rows = [[
+      header(localText(locale, '能力', 'Capability')),
+      header(localText(locale, '今日免费', 'Daily free'), 'right'),
+      header(localText(locale, '已购', 'Purchased'), 'right')
+    ]];
+    for (const type of BILLING_CREDIT_TYPES) {
+      const credit = snapshot.credits[type];
+      rows.push([
+        cell(`${this.getBillingCreditLabel(type, locale)}${credit.enabled ? '' : localText(locale, '（未启用）', ' (disabled)')}`),
+        cell(String(credit.unlimited ? localText(locale, '不限', 'unlimited') : credit.freeRemaining), 'right'),
+        cell(String(credit.purchased), 'right')
+      ]);
+    }
+    const blocks = [
+      { type: 'heading', text: localText(locale, '💰 我的余额', '💰 My balance'), size: 3 },
+      {
+        type: 'table',
+        cells: rows,
+        is_bordered: true,
+        is_striped: true,
+        is_compact: true
+      }
+    ];
+    if (recentCosts.length > 0) {
+      const details = recentCosts.map((item) => {
+        const cost = item.costUsd == null
+          ? localText(locale, '平台未回传', 'not reported')
+          : `$${item.costUsd.toFixed(4)}`;
+        return `${item.modelId || item.providerId}: ${item.billedCredits} credits · ${cost}`;
+      }).join('\n');
+      blocks.push({
+        type: 'expandable_blockquote',
+        text: details,
+        credit: localText(locale, '最近高级模型结算', 'Recent premium settlements')
+      });
+    }
+    return { blocks };
+  }
+
+  async sendOrEditEphemeralResponse(ctx, {
+    text = '',
+    richMessage = null,
+    replyMarkup = undefined,
+    replaceCallbackMessage = true,
+    fallbackUrl = '',
+    fallbackText = ''
+  } = {}) {
+    const telegram = ctx.telegram || this.bot.telegram;
+    const chatId = ctx.chat?.id || callbackMessage(ctx)?.chat?.id;
+    const receiverUserId = Number(ctx.from?.id || 0);
+    const queryId = callbackQueryId(ctx);
+    const ephemeralMessageId = callbackEphemeralMessageId(ctx);
+    if (!chatId || !receiverUserId || typeof telegram?.callApi !== 'function') return null;
+
+    const content = richMessage ? { rich_message: richMessage } : { text: String(text || '') };
+    if (ephemeralMessageId != null) {
+      try {
+        const edited = await telegram.callApi('editEphemeralMessageText', {
+          chat_id: chatId,
+          receiver_user_id: receiverUserId,
+          ephemeral_message_id: ephemeralMessageId,
+          ...content,
+          ...(replyMarkup ? { reply_markup: replyMarkup } : {})
+        });
+        try { await ctx.answerCbQuery?.(); } catch {}
+        return edited;
+      } catch (error) {
+        this.logger?.warn?.('Telegram ephemeral edit unavailable; sending a new private response', {
+          chatId,
+          userId: receiverUserId,
+          capabilityUnavailable: isTelegramCapabilityUnavailable(error),
+          error: this.formatLogError(error)
+        });
+      }
+    }
+
+    try {
+      const sent = await telegram.callApi(richMessage ? 'sendRichMessage' : 'sendMessage', {
+        chat_id: chatId,
+        ...content,
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+        ephemeral_message_parameters: {
+          receiver_user_id: receiverUserId,
+          ...(queryId ? { callback_query_id: queryId } : {}),
+          ...(!ephemeralMessageId && queryId && replaceCallbackMessage
+            ? { replace_callback_query_message: true }
+            : {})
+        }
+      });
+      try { await ctx.answerCbQuery?.(); } catch {}
+      return sent;
+    } catch (error) {
+      this.logger?.warn?.('Telegram ephemeral response unavailable', {
+        chatId,
+        userId: receiverUserId,
+        capabilityUnavailable: isTelegramCapabilityUnavailable(error),
+        error: this.formatLogError(error)
+      });
+    }
+
+    if (fallbackUrl && queryId) {
+      try {
+        await ctx.answerCbQuery?.(
+          fallbackText || localText(this.getLocale(ctx), '请在私聊中继续。', 'Continue in private chat.'),
+          { url: fallbackUrl }
+        );
+        return { redirected: true };
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  async redirectBillingToPrivate(ctx, start = 'buy') {
+    const locale = this.getLocale(ctx);
+    const privateUrl = this.getBillingPrivateUrl(start);
+    const text = localText(
+      locale,
+      '为了保护购买和余额隐私，请在 Bot 私聊中继续。',
+      'Continue in a private chat to protect purchase and balance information.'
+    );
+    if (callbackQueryId(ctx) && privateUrl) {
+      try {
+        await ctx.answerCbQuery(text, { url: privateUrl });
+        return { redirected: true };
+      } catch {
+        // Fall through to a safe link-only response.
+      }
+    }
+    const replyMarkup = privateUrl
+      ? Markup.inlineKeyboard([[
+          Markup.button.url(localText(locale, '打开私聊', 'Open private chat'), privateUrl)
+        ]]).reply_markup
+      : undefined;
+    const ephemeral = await this.sendOrEditEphemeralResponse(ctx, {
+      text,
+      replyMarkup,
+      fallbackUrl: privateUrl,
+      fallbackText: text
+    });
+    return ephemeral || null;
+  }
+
+  async handleStarsStore(ctx) {
+    const locale = this.getLocale(ctx);
+    const products = buildBillingCatalog(this.config).products;
+    if (ctx.chat?.type && ctx.chat.type !== 'private') {
+      const privateUrl = this.getBillingPrivateUrl('buy');
+      if (!this.config.starsPaymentsEnabled || !products.length) {
+        return this.redirectBillingToPrivate(ctx, 'buy');
+      }
+      const replyMarkup = this.createStarsStoreKeyboard(locale).reply_markup;
+      const response = await this.sendOrEditEphemeralResponse(ctx, {
+        text: this.buildStarsStoreText(products, locale),
+        richMessage: this.config.enableRichMessages
+          ? this.buildStarsStoreRichMessage(products, locale)
+          : null,
+        replyMarkup,
+        fallbackUrl: privateUrl,
+        fallbackText: localText(locale, '请打开 Bot 私聊购买额度。', 'Open the bot private chat to buy credits.')
+      });
+      return response || this.redirectBillingToPrivate(ctx, 'buy');
+    }
+    if (this.isAdmin(ctx)) {
+      await ctx.reply(
+        localText(locale, '管理员账号免费使用，所有能力均不扣额度。', 'Administrator accounts use all capabilities for free.'),
+        this.createQuotaPurchaseKeyboard(locale)
+      );
+      return;
+    }
+
+    if (!this.config.starsPaymentsEnabled || !products.length) {
+      await this.replyWithSupport(ctx, localText(
+        locale,
+        '购买功能暂未开放。管理员需要先配置 STARS_PRODUCTS_JSON。每日免费额度仍可正常使用。',
+        'Purchases are not available yet. The administrator must configure STARS_PRODUCTS_JSON. Daily free credits remain available.'
+      ));
+      return;
+    }
+
+    if (this.config.enableRichMessages && typeof ctx.telegram?.callApi === 'function') {
+      try {
+        return await ctx.telegram.callApi('sendRichMessage', {
+          chat_id: ctx.chat.id,
+          rich_message: this.buildStarsStoreRichMessage(products, locale),
+          reply_markup: this.createStarsStoreKeyboard(locale).reply_markup
+        });
+      } catch (error) {
+        this.logger?.warn?.('Compact Stars store unavailable; using plain menu', {
+          userId: String(ctx.from?.id || ''),
+          capabilityUnavailable: isTelegramCapabilityUnavailable(error),
+          error: this.formatLogError(error)
+        });
+      }
+    }
+    await ctx.reply(this.buildStarsStoreText(products, locale), this.createStarsStoreKeyboard(locale));
   }
 
   async handleStarsBalance(ctx) {
     const locale = this.getLocale(ctx);
+    if (ctx.chat?.type && ctx.chat.type !== 'private') {
+      return this.redirectBillingToPrivate(ctx, 'balance');
+    }
     const userId = String(ctx.from?.id || '');
     if (this.isAdmin(ctx)) {
       await ctx.reply(localText(
@@ -2546,11 +2846,30 @@ export class TelegramAIBot {
         lines.push(`• ${item.modelId || item.providerId}: ${item.billedCredits} credits · ${cost}`);
       }
     }
+    if (this.config.enableRichMessages && typeof ctx.telegram?.callApi === 'function') {
+      try {
+        return await ctx.telegram.callApi('sendRichMessage', {
+          chat_id: ctx.chat.id,
+          rich_message: this.buildStarsBalanceRichMessage(snapshot, recentCosts, locale),
+          reply_markup: this.createQuotaPurchaseKeyboard(locale).reply_markup
+        });
+      } catch (error) {
+        this.logger?.warn?.('Compact Stars balance unavailable; using plain balance', {
+          userId,
+          capabilityUnavailable: isTelegramCapabilityUnavailable(error),
+          error: this.formatLogError(error)
+        });
+      }
+    }
     await ctx.reply(lines.join('\n'), this.createQuotaPurchaseKeyboard(locale));
   }
 
   async handleBillingCallback(ctx) {
     const action = String(ctx.match?.[1] || '').trim();
+    if (ctx.chat?.type && ctx.chat.type !== 'private') {
+      if (action === 'store') return this.handleStarsStore(ctx);
+      return this.redirectBillingToPrivate(ctx, action === 'balance' ? 'balance' : 'buy');
+    }
     try {
       await ctx.answerCbQuery();
     } catch {
@@ -2566,25 +2885,13 @@ export class TelegramAIBot {
   async handleStarsProductCallback(ctx) {
     const locale = this.getLocale(ctx);
     const productId = String(ctx.match?.[1] || '').trim().toLowerCase();
+    if (ctx.chat?.type && ctx.chat.type !== 'private') {
+      return this.redirectBillingToPrivate(ctx, `buy_${productId}`);
+    }
     try {
       await ctx.answerCbQuery(localText(locale, '正在创建付款单…', 'Creating invoice…'));
     } catch {
       // Continue: creating a fresh invoice is more useful than failing silently.
-    }
-
-    if (ctx.chat?.type && ctx.chat.type !== 'private') {
-      const privateUrl = this.botUsername ? `https://t.me/${this.botUsername}?start=buy` : '';
-      const extra = privateUrl
-        ? Markup.inlineKeyboard([[
-            Markup.button.url(localText(locale, '打开私聊购买', 'Open private chat'), privateUrl)
-          ]])
-        : undefined;
-      await ctx.reply(localText(
-        locale,
-        '为了保护付款隐私，请先打开与机器人的私聊，再从主菜单选择“购买额度”。',
-        'For payment privacy, open a private chat with the bot and choose Buy credits from the main menu.'
-      ), extra);
-      return;
     }
 
     try {
@@ -2606,6 +2913,9 @@ export class TelegramAIBot {
 
   async handleStarsTerms(ctx) {
     const locale = this.getLocale(ctx);
+    if (ctx.chat?.type && ctx.chat.type !== 'private') {
+      return this.redirectBillingToPrivate(ctx, 'buy');
+    }
     const configured = String(this.config.starsTermsText || '').trim();
     const text = configured || localText(
       locale,
@@ -2629,6 +2939,9 @@ export class TelegramAIBot {
 
   async handleStarsPaymentSupport(ctx) {
     const locale = this.getLocale(ctx);
+    if (ctx.chat?.type && ctx.chat.type !== 'private') {
+      return this.redirectBillingToPrivate(ctx, 'buy');
+    }
     const configured = String(this.config.starsSupportText || '').trim();
     const text = configured || localText(
       locale,
@@ -5055,14 +5368,14 @@ export class TelegramAIBot {
     const costLine = costs[0]
       ? `\n结算：${costs[0].billedCredits} credits${costs[0].costUsd == null ? '' : ` · $${costs[0].costUsd.toFixed(4)}`}`
       : '';
-    const text = [
+    const summaryText = [
       statusLabels[task?.status] || `Agent 状态：${task?.status || 'unknown'}`,
       `仓库：${task?.repository || '-'}`,
       `分支：${task?.branch || '-'}`,
-      detail ? `\n${detail}` : '',
       costLine
     ].filter(Boolean).join('\n');
-    return { text, approval };
+    const text = [summaryText, detail ? `\n${detail}` : ''].filter(Boolean).join('\n');
+    return { text, summaryText, detail, approval };
   }
 
   buildAgentRichButtons(task, approval) {
@@ -5084,24 +5397,41 @@ export class TelegramAIBot {
     return '';
   }
 
+  buildAgentTaskRichMessage(task, display) {
+    const detailBlock = display.detail
+      ? `<blockquote expandable>${escapeRichHtml(display.detail).replaceAll('\n', '<br>')}</blockquote>`
+      : '';
+    return {
+      html: `<h3>Agent</h3><p>${escapeRichHtml(display.summaryText).replaceAll('\n', '<br>')}</p>${detailBlock}${this.buildAgentRichButtons(task, display.approval)}`
+    };
+  }
+
   async sendAgentTaskState({ ctx = null, chatId, userId, callbackQueryId = '' }, task) {
     const telegram = ctx?.telegram || this.bot.telegram;
     const resolvedChatId = chatId || ctx?.chat?.id;
     const resolvedUserId = userId || ctx?.from?.id || task?.userId;
     const isPrivate = ctx?.chat?.type === 'private' || String(resolvedChatId) === String(resolvedUserId);
-    const { text, approval } = this.getAgentTaskDisplay(task);
+    const display = this.getAgentTaskDisplay(task);
+    const { text, approval } = display;
     const ephemeral = isPrivate ? undefined : {
       receiver_user_id: Number(resolvedUserId),
       ...(callbackQueryId ? { callback_query_id: callbackQueryId, replace_callback_query_message: true } : {})
     };
-    const richButtons = this.buildAgentRichButtons(task, approval);
     if (this.config.enableRichMessages && typeof telegram?.callApi === 'function') {
       try {
-        return await telegram.callApi('sendRichMessage', {
-          chat_id: resolvedChatId,
-          rich_message: { html: `<h3>Agent</h3><p>${escapeRichHtml(text).replaceAll('\n', '<br>')}</p>${richButtons}` },
-          ...(ephemeral ? { ephemeral_message_parameters: ephemeral } : {})
-        });
+        if (ephemeral && ctx) {
+          const privateState = await this.sendOrEditEphemeralResponse(ctx, {
+            richMessage: this.buildAgentTaskRichMessage(task, display),
+            replaceCallbackMessage: true
+          });
+          if (privateState) return privateState;
+        } else {
+          return await telegram.callApi('sendRichMessage', {
+            chat_id: resolvedChatId,
+            rich_message: this.buildAgentTaskRichMessage(task, display),
+            ...(ephemeral ? { ephemeral_message_parameters: ephemeral } : {})
+          });
+        }
       } catch (error) {
         this.logger?.warn?.('Agent rich state unavailable; using regular buttons', { taskId: task?.id, error: error.message });
       }
@@ -5110,6 +5440,14 @@ export class TelegramAIBot {
       ? this.createAgentApprovalKeyboard(approval)
       : this.createAgentTaskKeyboard(task);
     if (!ephemeral && ctx?.reply) return ctx.reply(text, keyboard);
+    if (ephemeral && ctx) {
+      const privateState = await this.sendOrEditEphemeralResponse(ctx, {
+        text,
+        replyMarkup: keyboard?.reply_markup,
+        replaceCallbackMessage: true
+      });
+      if (privateState) return privateState;
+    }
     return telegram.callApi('sendMessage', {
       chat_id: resolvedChatId,
       text,
@@ -5382,9 +5720,13 @@ export class TelegramAIBot {
     for (const member of members) {
       const text = this.renderWelcomeText(settings.text, member, ctx.chat);
       const privateUrl = this.botUsername ? `https://t.me/${this.botUsername}?start=welcome` : '';
+      const purchaseUrl = typeof this.getBillingPrivateUrl === 'function'
+        ? this.getBillingPrivateUrl('buy')
+        : (this.botUsername ? `https://t.me/${this.botUsername}?start=buy` : '');
       const ephemeral = { receiver_user_id: Number(member.id) };
-      try {
-        if (this.config.enableRichMessages && typeof ctx.telegram?.callApi === 'function') {
+      let delivered = false;
+      if (this.config.enableRichMessages && typeof ctx.telegram?.callApi === 'function') {
+        try {
           const button = privateUrl
             ? `<tg-button-row align="center"><tg-button type="url" style="primary" url="${escapeRichHtml(privateUrl)}">🚀 开始使用</tg-button><tg-button type="callback_data" style="success" data="billing:store">⭐ 购买额度</tg-button></tg-button-row>`
             : '';
@@ -5393,20 +5735,35 @@ export class TelegramAIBot {
             rich_message: { html: `<h3>👋 欢迎</h3><p>${escapeRichHtml(text).replaceAll('\n', '<br>')}</p>${button}` },
             ephemeral_message_parameters: ephemeral
           });
-        } else {
+          delivered = true;
+        } catch (error) {
+          this.logger?.warn?.('Rich private welcome unavailable; using link-only ephemeral welcome', {
+            chatId: ctx.chat?.id,
+            userId: member.id,
+            capabilityUnavailable: isTelegramCapabilityUnavailable(error),
+            error: this.formatLogError(error)
+          });
+        }
+      }
+      if (!delivered) {
+        try {
+          const rows = [];
+          if (privateUrl) rows.push([Markup.button.url('🚀 开始使用', privateUrl)]);
+          if (purchaseUrl) rows.push([Markup.button.url('⭐ 购买额度', purchaseUrl)]);
           await ctx.telegram.callApi('sendMessage', {
             chat_id: ctx.chat.id,
             text: `👋 ${text}`,
-            reply_markup: privateUrl ? Markup.inlineKeyboard([[Markup.button.url('🚀 开始使用', privateUrl)]]).reply_markup : undefined,
+            reply_markup: rows.length ? Markup.inlineKeyboard(rows).reply_markup : undefined,
             ephemeral_message_parameters: ephemeral
           });
+          delivered = true;
+        } catch (error) {
+          this.logger?.warn?.('Failed to send private group welcome message', {
+            chatId: ctx.chat?.id,
+            userId: member.id,
+            error: this.formatLogError(error)
+          });
         }
-      } catch (error) {
-        this.logger?.warn?.('Failed to send private group welcome message', {
-          chatId: ctx.chat?.id,
-          userId: member.id,
-          error: this.formatLogError(error)
-        });
       }
     }
     return members.length > 0;
@@ -5480,6 +5837,55 @@ export class TelegramAIBot {
     await this.agentTaskService?.recoverInterruptedTasks?.();
   }
 
+  async withEphemeralGroupCommandReply(ctx, handler) {
+    const chatType = String(ctx.chat?.type || '').toLowerCase();
+    if (!['group', 'supergroup'].includes(chatType)) return handler();
+
+    const telegram = ctx.telegram || this.bot?.telegram;
+    if (typeof telegram?.callApi !== 'function') {
+      this.logger?.warn?.('Private group command reply unavailable', {
+        chatId: ctx.chat?.id,
+        userId: ctx.from?.id
+      });
+      return false;
+    }
+
+    const originalReply = ctx.reply.bind(ctx);
+    ctx.reply = async (text, extra = {}) => {
+      const payloadExtra = { ...(extra || {}) };
+      delete payloadExtra.reply_parameters;
+      delete payloadExtra.reply_to_message_id;
+      const ephemeralMessageId = ctx.message?.ephemeral_message_id;
+      const content = {
+        text: String(text || ''),
+        ...payloadExtra
+      };
+      return telegram.callApi('sendMessage', {
+        chat_id: ctx.chat.id,
+        ...content,
+        ephemeral_message_parameters: {
+          receiver_user_id: Number(ctx.from.id)
+        },
+        ...(ephemeralMessageId != null
+          ? { reply_parameters: { ephemeral_message_id: ephemeralMessageId } }
+          : {})
+      });
+    };
+
+    try {
+      return await handler();
+    } catch (error) {
+      this.logger?.warn?.('Ephemeral group command reply failed without cross-chat fallback', {
+        chatId: ctx.chat?.id,
+        userId: ctx.from?.id,
+        error: this.formatLogError(error)
+      });
+      return false;
+    } finally {
+      ctx.reply = originalReply;
+    }
+  }
+
   registerCommands() {
     this.bot.command('start', (ctx) => this.handleStart(ctx));
     this.bot.command('menu', (ctx) => this.handleMenu(ctx));
@@ -5489,12 +5895,16 @@ export class TelegramAIBot {
     this.bot.command('clear', (ctx) => this.handleClearPrompt(ctx));
     this.bot.command('topic', (ctx) => this.handleTopicShow(ctx));
     this.bot.command('topics', (ctx) => this.handleTopicsShow(ctx));
-    this.bot.command('help', (ctx) => this.handleHelp(ctx));
+    this.bot.command('help', (ctx) =>
+      this.withEphemeralGroupCommandReply(ctx, () => this.handleHelp(ctx))
+    );
     this.bot.command('web', (ctx) => this.runWebSearch(ctx, extractCommandArgs(ctx.message?.text || '')));
     this.bot.command('persona', (ctx) => this.handlePersona(ctx));
     this.bot.command('language', (ctx) => this.handleLanguage(ctx));
     this.bot.command('status', (ctx) => this.handleStatus(ctx));
-    this.bot.command('whoami', (ctx) => this.handleWhoami(ctx));
+    this.bot.command('whoami', (ctx) =>
+      this.withEphemeralGroupCommandReply(ctx, () => this.handleWhoami(ctx))
+    );
     this.bot.command('translate', (ctx) => this.runTranslation(ctx, extractCommandArgs(ctx.message.text || ''), 'auto'));
     this.bot.command('tr', (ctx) => this.runTranslation(ctx, extractCommandArgs(ctx.message.text || ''), 'auto'));
     this.bot.command('chatmode', (ctx) => this.handleChatMode(ctx));
@@ -5509,6 +5919,7 @@ export class TelegramAIBot {
     this.bot.command('github', (ctx) => this.handleGithubCommand(ctx));
     this.bot.command('agent', (ctx) => this.handleAgentCommand(ctx));
     this.bot.command('welcome', (ctx) => this.handleWelcomeCommand(ctx));
+    this.bot.action('help:welcome', (ctx) => this.handleWelcomeHelp(ctx));
     this.bot.on('pre_checkout_query', (ctx) => this.handleStarsPreCheckout(ctx));
     this.bot.on('successful_payment', (ctx) => this.handleStarsSuccessfulPayment(ctx));
     this.bot.action(/^set_model:(.+)$/, (ctx) => this.withCompactCallbackReply(ctx, () => this.handleModelCallback(ctx)));
@@ -5528,7 +5939,7 @@ export class TelegramAIBot {
     if (this.accessControl) {
       return this.accessControl.isAdmin(userId);
     }
-    return this.config.adminUserIds.has(userId);
+    return Boolean(this.config?.adminUserIds?.has?.(userId));
   }
 
   async canManageGroupSettings(ctx) {
@@ -5603,20 +6014,25 @@ export class TelegramAIBot {
       await this.handleStarsStore(ctx);
       return;
     }
+    if (startParameter === 'help') {
+      await this.handleHelp(ctx);
+      return;
+    }
 
     if (this.config?.miniAppEnabled !== false) {
       const text = locale === 'en'
         ? [
             'Hi, I am your AI assistant.',
             '',
-            'Tell me what you need or send content directly. I will choose the right capability automatically.',
-            'Use the button below only when you want to enable private chat. Open Console beside the message box for settings and history.'
+            'Send text, photos, voice, files, or links and tell me what you need.',
+            'Open Console beside the message box for models, settings, history, and credits.'
           ].join('\n')
         : [
             '你好，我是你的 AI 助手。',
             '',
-            '直接告诉我你要做什么或发送内容，我会自动选择合适的能力。',
-            '只有需要开启隐私聊天时才用下方按钮；设置和聊天记录在输入框旁的「控制台」。'
+            '直接发送文字、图片、语音、文件或链接，并告诉我你想做什么。',
+            '模型、设置、聊天记录和额度都在输入框旁的「控制台」。',
+            '发送 /help 查看帮助。'
           ].join('\n');
       await ctx.reply(text, this.createBottomKeyboard(locale));
       return;
@@ -5650,6 +6066,7 @@ export class TelegramAIBot {
     const chatId = String(ctx.chat?.id || '');
     const username = ctx.from?.username ? `@${ctx.from.username}` : '-';
     const isAdmin = this.isAdmin(ctx) ? 'yes' : 'no';
+    const isGroup = ['group', 'supergroup'].includes(String(ctx.chat?.type || '').toLowerCase());
 
     const text =
       isEnglishLocale(locale)
@@ -5657,23 +6074,17 @@ export class TelegramAIBot {
             '👤 Your Telegram info',
             '',
             `User ID: ${userId}`,
-            `Chat ID: ${chatId}`,
+            ...(isGroup ? [`Group ID: ${chatId}`] : []),
             `Username: ${username}`,
-            `Admin: ${isAdmin}`,
-            '',
-            'For Zeabur ADMIN_USER_IDS, use:',
-            userId
+            `Bot admin: ${isAdmin}`
           ].join('\n')
         : [
             '👤 你的 Telegram 信息',
             '',
             `用户 ID：${userId}`,
-            `聊天 ID：${chatId}`,
+            ...(isGroup ? [`群组 ID：${chatId}`] : []),
             `用户名：${username}`,
-            `管理员：${isAdmin}`,
-            '',
-            'Zeabur 的 ADMIN_USER_IDS 填这个：',
-            userId
+            `Bot 管理员：${isAdmin === 'yes' ? '是' : '否'}`
           ].join('\n');
 
     await sendTextReply(ctx, text, this.config.maxOutputChars, this.createWhoamiKeyboard(ctx, locale));
@@ -5681,34 +6092,33 @@ export class TelegramAIBot {
 
   async handleHelp(ctx) {
     const locale = this.getLocale(ctx);
+    const showWelcomeHelp = await this.canShowWelcomeHelp(ctx);
 
     if (this.config?.miniAppEnabled !== false) {
       const helpText = locale === 'en'
         ? [
             'Help',
             '',
-            'Send requests naturally; no feature buttons are required:',
-            ...this.buildHelpFeatureLines(locale),
-            '',
-            'Private chat: use the button below.',
-            'Your Telegram ID: /whoami',
-            'Provider/model, persona, language, history, and administration: open Console beside the message box.'
+            'Send text, photos, voice, files, or links and describe what you need.',
+            'I can chat, search, translate, summarize, understand media, and help with code or errors.',
+            'Open Console for models, settings, history, and credits. Use /whoami to view your Telegram ID.'
           ].join('\n')
         : [
             '使用帮助',
             '',
-            '直接描述需求即可，不需要功能按钮：',
-            ...this.buildHelpFeatureLines(locale),
-            '',
-            '隐私聊天：使用下方按钮。',
-            '查询 Telegram ID：/whoami',
-            'Provider/模型、人格、语言、聊天记录和管理：打开输入框旁的「控制台」。'
+            '直接发送文字、图片、语音、文件或链接，并说明你想做什么。',
+            '我可以聊天、搜索、翻译、总结、识别媒体，以及协助代码和报错。',
+            '模型、设置、记录和额度请打开「控制台」；查看 Telegram ID 使用 /whoami。'
           ].join('\n');
       await sendTextReply(
         ctx,
         helpText,
         this.config.maxOutputChars,
-        this.createSupportKeyboard(locale) || this.createBottomKeyboard(locale)
+        this.withWelcomeHelpButton(
+          this.createSupportKeyboard(locale) || this.createBottomKeyboard(locale),
+          locale,
+          showWelcomeHelp
+        )
       );
       return;
     }
@@ -5728,7 +6138,61 @@ export class TelegramAIBot {
             '需要更换模型、语言、记忆或人格，点「设置」。'
           ].join('\n');
 
-    await sendTextReply(ctx, helpText, this.config.maxOutputChars, this.createMenuKeyboard(locale));
+    await sendTextReply(
+      ctx,
+      helpText,
+      this.config.maxOutputChars,
+      this.withWelcomeHelpButton(this.createMenuKeyboard(locale), locale, showWelcomeHelp)
+    );
+  }
+
+  async handleWelcomeHelp(ctx) {
+    const locale = this.getLocale(ctx);
+    if (!(await this.canShowWelcomeHelp(ctx))) {
+      await ctx.answerCbQuery?.(
+        localText(locale, '只有 Bot 管理员或群管理员可以查看。', 'Only bot or group administrators can view this.')
+      );
+      return false;
+    }
+
+    const text = localText(
+      locale,
+      [
+        '👋 欢迎语设置方法',
+        '',
+        '请在目标群发送：',
+        '/welcome set 欢迎 {name} 加入 {chat}',
+        '',
+        '关闭欢迎语：/welcome off',
+        '恢复默认：/welcome reset',
+        '可用变量：{name}、{username}、{chat}'
+      ].join('\n'),
+      [
+        '👋 Welcome-message setup',
+        '',
+        'Send this in the target group:',
+        '/welcome set Welcome {name} to {chat}',
+        '',
+        'Disable: /welcome off',
+        'Reset: /welcome reset',
+        'Variables: {name}, {username}, {chat}'
+      ].join('\n')
+    );
+
+    if (['group', 'supergroup'].includes(String(ctx.chat?.type || '').toLowerCase())) {
+      const sent = await this.sendOrEditEphemeralResponse(ctx, { text });
+      if (!sent) {
+        await ctx.answerCbQuery?.(
+          localText(locale, '请私聊 Bot 查看设置方法。', 'Open the bot privately to view the setup steps.'),
+          this.botUsername ? { url: `https://t.me/${this.botUsername}?start=help` } : undefined
+        );
+      }
+      return Boolean(sent);
+    }
+
+    await ctx.answerCbQuery?.();
+    await ctx.reply(text);
+    return true;
   }
 
 
@@ -8848,6 +9312,17 @@ export class TelegramAIBot {
 
   async handleIncomingMessage(ctx) {
     const { forceRespond = false } = arguments[1] || {};
+    if (isCommunityServiceMessage(ctx.message)) {
+      this.logger?.info?.('Telegram Community service event ignored', {
+        chatId: String(ctx.chat?.id || ''),
+        event: ctx.message?.community_chat_added
+          ? 'community_chat_added'
+          : ctx.message?.community_chat_removed
+            ? 'community_chat_removed'
+            : 'community_chat_joined'
+      });
+      return;
+    }
     if (ctx.message?.new_chat_members?.length) {
       await this.handleWelcomeMembers(ctx);
       return;

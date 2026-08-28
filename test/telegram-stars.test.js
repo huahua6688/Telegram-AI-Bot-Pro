@@ -434,6 +434,7 @@ test('a timed-out refund remains pending instead of restoring possibly refunded 
 
 test('Stars package callbacks guide group users to private chat and report invoice failures', async () => {
   const groupReplies = [];
+  const groupCallbackAnswers = [];
   let groupInvoiceCalls = 0;
   const groupBot = createBot();
   groupBot.botUsername = 'billing_bot';
@@ -443,13 +444,15 @@ test('Stars package callbacks guide group users to private chat and report invoi
     match: ['stars_pkg:starter', 'starter'],
     chat: { id: -1001, type: 'group' },
     from: { id: 88 },
-    answerCbQuery: async () => undefined,
+    callbackQuery: { id: 'stars-group-88', message: { chat: { id: -1001 } } },
+    answerCbQuery: async (text, extra) => groupCallbackAnswers.push({ text, extra }),
     reply: async (text, extra) => groupReplies.push({ text, extra })
   });
 
   assert.equal(groupInvoiceCalls, 0);
-  assert.match(groupReplies[0].text, /private chat/i);
-  assert.equal(groupReplies[0].extra.reply_markup.inline_keyboard[0][0].url, 'https://t.me/billing_bot?start=buy');
+  assert.equal(groupReplies.length, 0);
+  assert.match(groupCallbackAnswers[0].text, /private chat/i);
+  assert.equal(groupCallbackAnswers[0].extra.url, 'https://t.me/billing_bot?start=buy_starter');
 
   const privateReplies = [];
   const privateBot = createBot({ config: { starsProducts: [] } });
