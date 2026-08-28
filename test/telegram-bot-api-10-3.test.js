@@ -221,6 +221,28 @@ test('ephemeral purchase fallback redirects to private chat and never posts pack
   assert.doesNotMatch(answers[0].text, /入门包|30|余额/);
 });
 
+test('group purchase without a callback never falls back to a public reply or private fan-out', async () => {
+  const bot = createBillingBot();
+  const calls = [];
+  const replies = [];
+  const result = await bot.handleStarsStore({
+    chat: { id: -10016, type: 'supergroup' },
+    from: { id: 74 },
+    telegram: {
+      async callApi(method, payload) {
+        calls.push({ method, payload });
+        throw new Error('ephemeral unsupported');
+      }
+    },
+    reply: async (...args) => replies.push(args)
+  });
+
+  assert.equal(result, null);
+  assert.equal(replies.length, 0);
+  assert.equal(calls.every((call) => call.payload.chat_id === -10016), true);
+  assert.equal(calls.some((call) => call.payload.chat_id === 74), false);
+});
+
 test('two users ephemeral purchase states keep receiver and message identifiers isolated', async () => {
   const bot = createBillingBot();
   const calls = [];
@@ -356,7 +378,7 @@ test('group /help and /whoami replies are isolated ephemeral messages', async ()
       reply: async () => { publicReplies += 1; }
     };
 
-    await bot.withPrivateGroupCommandReply(ctx, () =>
+    await bot.withEphemeralGroupCommandReply(ctx, () =>
       ctx.reply(`reply for ${userId}`, { reply_parameters: { message_id: userId } })
     );
     assert.equal(publicReplies, 0);
@@ -370,7 +392,7 @@ test('group /help and /whoami replies are isolated ephemeral messages', async ()
   assert.equal(calls.some((call) => call.payload.reply_parameters.message_id), false);
 });
 
-test('private command reply stays normal and group ephemeral failure falls back to direct chat', async () => {
+test('private command reply stays normal and group ephemeral failure never starts a private chat', async () => {
   const bot = Object.create(TelegramAIBot.prototype);
   bot.bot = { telegram: null };
   bot.logger = { warn() {} };
@@ -381,46 +403,57 @@ test('private command reply stays normal and group ephemeral failure falls back 
     from: { id: 201 },
     reply: async () => { privateReplies += 1; }
   };
-  await bot.withPrivateGroupCommandReply(privateCtx, () => privateCtx.reply('private'));
+  await bot.withEphemeralGroupCommandReply(privateCtx, () => privateCtx.reply('private'));
   assert.equal(privateReplies, 1);
 
   let publicReplies = 0;
+  const calls = [];
   const groupCtx = {
     chat: { id: -10021, type: 'group' },
     from: { id: 202 },
     message: { ephemeral_message_id: 2002 },
     telegram: {
-      async callApi(_method, payload) {
-        if (payload.ephemeral_message_parameters) throw new Error('ephemeral unsupported');
-        assert.equal(payload.chat_id, 202);
-        return { message_id: 9 };
+      async callApi(method, payload) {
+        calls.push({ method, payload });
+        throw new Error('ephemeral unsupported');
       }
     },
     reply: async () => { publicReplies += 1; }
   };
-  assert.deepEqual(
-    await bot.withPrivateGroupCommandReply(groupCtx, () => groupCtx.reply('secret')),
-    { message_id: 9 }
-  );
+  assert.equal(await bot.withEphemeralGroupCommandReply(groupCtx, () => groupCtx.reply('secret')), false);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].payload.chat_id, -10021);
+  assert.equal(calls[0].payload.ephemeral_message_parameters.receiver_user_id, 202);
   assert.equal(publicReplies, 0);
 });
 
-test('group command never becomes public when ephemeral and direct-chat delivery both fail', async () => {
+test('one group command can address only its sender and never enumerates other users', async () => {
   const bot = Object.create(TelegramAIBot.prototype);
   bot.bot = { telegram: null };
   bot.logger = { warn() {} };
   bot.formatLogError = (error) => ({ message: String(error?.message || error) });
+  bot.db = {
+    listUsers() { assert.fail('a group command must never enumerate users'); }
+  };
   let publicReplies = 0;
-  let calls = 0;
+  const calls = [];
   const ctx = {
     chat: { id: -10022, type: 'supergroup' },
     from: { id: 203 },
     message: { ephemeral_message_id: 2003 },
-    telegram: { async callApi() { calls += 1; throw new Error('blocked'); } },
+    telegram: {
+      async callApi(method, payload) {
+        calls.push({ method, payload });
+        return { ephemeral_message_id: 2004 };
+      }
+    },
     reply: async () => { publicReplies += 1; }
   };
-  assert.equal(await bot.withPrivateGroupCommandReply(ctx, () => ctx.reply('secret')), false);
-  assert.equal(calls, 2);
+  await bot.withEphemeralGroupCommandReply(ctx, () => ctx.reply('secret'));
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].payload.chat_id, -10022);
+  assert.deepEqual(calls[0].payload.ephemeral_message_parameters, { receiver_user_id: 203 });
+  assert.equal(calls.some((call) => call.payload.chat_id === 203), false);
   assert.equal(publicReplies, 0);
 });
 

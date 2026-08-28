@@ -2748,9 +2748,7 @@ export class TelegramAIBot {
       fallbackUrl: privateUrl,
       fallbackText: text
     });
-    if (ephemeral) return ephemeral;
-    if (ctx.reply) return ctx.reply(text, replyMarkup ? { reply_markup: replyMarkup } : undefined);
-    return null;
+    return ephemeral || null;
   }
 
   async handleStarsStore(ctx) {
@@ -5839,7 +5837,7 @@ export class TelegramAIBot {
     await this.agentTaskService?.recoverInterruptedTasks?.();
   }
 
-  async withPrivateGroupCommandReply(ctx, handler) {
+  async withEphemeralGroupCommandReply(ctx, handler) {
     const chatType = String(ctx.chat?.type || '').toLowerCase();
     if (!['group', 'supergroup'].includes(chatType)) return handler();
 
@@ -5862,34 +5860,22 @@ export class TelegramAIBot {
         text: String(text || ''),
         ...payloadExtra
       };
-      try {
-        return await telegram.callApi('sendMessage', {
-          chat_id: ctx.chat.id,
-          ...content,
-          ephemeral_message_parameters: {
-            receiver_user_id: Number(ctx.from.id)
-          },
-          ...(ephemeralMessageId != null
-            ? { reply_parameters: { ephemeral_message_id: ephemeralMessageId } }
-            : {})
-        });
-      } catch (error) {
-        this.logger?.warn?.('Private group command reply unavailable; trying direct chat', {
-          chatId: ctx.chat?.id,
-          userId: ctx.from?.id,
-          error: this.formatLogError(error)
-        });
-        return telegram.callApi('sendMessage', {
-          chat_id: Number(ctx.from.id),
-          ...content
-        });
-      }
+      return telegram.callApi('sendMessage', {
+        chat_id: ctx.chat.id,
+        ...content,
+        ephemeral_message_parameters: {
+          receiver_user_id: Number(ctx.from.id)
+        },
+        ...(ephemeralMessageId != null
+          ? { reply_parameters: { ephemeral_message_id: ephemeralMessageId } }
+          : {})
+      });
     };
 
     try {
       return await handler();
     } catch (error) {
-      this.logger?.warn?.('Private group command reply failed without public fallback', {
+      this.logger?.warn?.('Ephemeral group command reply failed without cross-chat fallback', {
         chatId: ctx.chat?.id,
         userId: ctx.from?.id,
         error: this.formatLogError(error)
@@ -5910,14 +5896,14 @@ export class TelegramAIBot {
     this.bot.command('topic', (ctx) => this.handleTopicShow(ctx));
     this.bot.command('topics', (ctx) => this.handleTopicsShow(ctx));
     this.bot.command('help', (ctx) =>
-      this.withPrivateGroupCommandReply(ctx, () => this.handleHelp(ctx))
+      this.withEphemeralGroupCommandReply(ctx, () => this.handleHelp(ctx))
     );
     this.bot.command('web', (ctx) => this.runWebSearch(ctx, extractCommandArgs(ctx.message?.text || '')));
     this.bot.command('persona', (ctx) => this.handlePersona(ctx));
     this.bot.command('language', (ctx) => this.handleLanguage(ctx));
     this.bot.command('status', (ctx) => this.handleStatus(ctx));
     this.bot.command('whoami', (ctx) =>
-      this.withPrivateGroupCommandReply(ctx, () => this.handleWhoami(ctx))
+      this.withEphemeralGroupCommandReply(ctx, () => this.handleWhoami(ctx))
     );
     this.bot.command('translate', (ctx) => this.runTranslation(ctx, extractCommandArgs(ctx.message.text || ''), 'auto'));
     this.bot.command('tr', (ctx) => this.runTranslation(ctx, extractCommandArgs(ctx.message.text || ''), 'auto'));

@@ -151,15 +151,6 @@ function isProviderWideFailure(errorType, error) {
   return false;
 }
 
-function isModelScopedQuotaFailure(errorType, error) {
-  if (errorType !== 'quota') return false;
-  const detail = String(error?.message || error || '').toLowerCase();
-  return (
-    /\bmodel\s*[:=]\s*["']?[a-z0-9][a-z0-9._/-]*/i.test(detail) ||
-    /generativelanguage\.googleapis\.com\/[a-z0-9._/-]*(?:model|free_tier|token)/i.test(detail)
-  );
-}
-
 export class AIProviderManager {
   constructor({ config, logger, db = null, clientFactory = createAIClient } = {}) {
     this.config = config;
